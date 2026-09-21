@@ -21,6 +21,7 @@
 //   and only accepts a well-formed session id.
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -87,7 +88,9 @@ export async function writeLastSession(sessionId, home = dshHome(), now = Date.n
   await mkdir(dirname(file), { recursive: true })
   // Write-then-rename: a crash mid-write leaves the previous pointer intact
   // rather than a half-written file the reader would reject.
-  const tmp = `${file}.${process.pid}.tmp`
+  // Temp 名必须唯一：只用 pid 时两个并发 POST 会算同一个名字，先 rename 的那个把它移走，
+  // 后一个要么 ENOENT、要么把别人的字节 rename 上去（静默丢一次更新）。
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(tmp, payload, 'utf8')
   await rename(tmp, file)
   return { ok: true, sessionId, updatedAt: now }
@@ -101,9 +104,11 @@ function readJsonBody(req, limitBytes = 8 * 1024) {
     req.on('data', (chunk) => {
       size += chunk.length
       if (size > limitBytes) {
-        // Stop buffering; the caller gets `null` and answers 400.
+        // Stop buffering; the caller gets `null` and answers 400. Do NOT destroy the
+        // socket here: destroying it first means the client only ever sees
+        // `fetch failed` (ECONNRESET) and never the documented 400.
         chunks.length = 0
-        req.destroy()
+        req.pause()
         resolvePromise(null)
         return
       }
@@ -129,6 +134,36 @@ function sendJson(res, status, body) {
   res.end(text)
 }
 
+/**
+ * The engine's own trust fence for a browser-facing route.
+ *
+ * `ctx.webServer` serves every registered route to ANY caller: the engine's
+ * Host-allowlist + session-cookie gate lives in the RPC channel registrar
+ * (`connection` → `requestRejection`), NOT in `webServer` — the engine's own route
+ * owners therefore consult it first (see @deepseek-ai/dsh-host-open-in-app). Without
+ * this call this route hands the last-session pointer to any local process and to a
+ * page that has rebound a hostname to 127.0.0.1, and it accepts their writes.
+ *
+ * Fails CLOSED: a web route that cannot verify its caller must not answer.
+ * @param ctx - the plugin context (reads the `connection` service).
+ * @param req - the Node request.
+ * @param res - the Node response.
+ * @returns true when the request was rejected (the response is already ended).
+ */
+export function rejectUntrusted(ctx, req, res) {
+  const connection = ctx?.get?.('connection')
+  if (typeof connection?.requestRejection !== 'function') {
+    res.statusCode = 403
+    res.end('forbidden')
+    return true
+  }
+  const rejection = connection.requestRejection(req)
+  if (rejection === undefined) return false
+  res.statusCode = rejection
+  res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+  return true
+}
+
 export function apply(ctx, config = {}) {
   const enabled = config.enabled !== false
   const home = dshHome()
@@ -145,6 +180,9 @@ export function apply(ctx, config = {}) {
       path: '/gui-last-session',
       handler: async (req, res) => {
         try {
+          // Trust fence FIRST — `webServer` routes are not covered by the engine's
+          // Host/cookie gate (see rejectUntrusted).
+          if (rejectUntrusted(ctx, req, res)) return
           if (req.method === 'GET') {
             const last = await readLastSession(home)
             return sendJson(res, 200, last ?? { sessionId: null })

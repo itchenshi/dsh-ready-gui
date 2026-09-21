@@ -141,15 +141,44 @@ function Get-Dependencies($manifestPath) {
   }
 }
 
-# The engine prints "dsh web: http://127.0.0.1:PORT/?token=..." and the GUI logs
-# it as "web UI URL: ...". This is our handle on the market API.
-function Get-EngineOrigin {
+# The engine prints "dsh web: http://127.0.0.1:PORT/?token=..." on stdout, which the
+# shell echoes into our log. The shell's own log line deliberately records only the
+# ORIGIN ("web UI origin: ...") so the per-launch token never lands in a log file, so
+# the token is read from the engine's own announce line here.
+function Get-EngineAnnounce {
   $c = Get-Content $log -Raw -ErrorAction SilentlyContinue
   if (-not $c) { return $null }
-  $m = [regex]::Match($c, "web UI URL: (\S+)")
+  $m = [regex]::Match($c, "dsh web: (\S+)")
+  if (-not $m.Success) { return $null }
+  return $m.Groups[1].Value
+}
+
+function Get-EngineOrigin {
+  $url = Get-EngineAnnounce
+  if ($url) {
+    $u = [System.Uri]$url
+    return "$($u.Scheme)://$($u.Authority)"
+  }
+  # Fallback for logs written before the announce line is captured.
+  $c = Get-Content $log -Raw -ErrorAction SilentlyContinue
+  $m = [regex]::Match($c, "web UI (?:URL|origin): (\S+)")
   if (-not $m.Success) { return $null }
   $u = [System.Uri]$m.Groups[1].Value
   return "$($u.Scheme)://$($u.Authority)"
+}
+
+# Plugin routes are behind the engine's trust fence (Host allowlist + browser session
+# cookie), so a bare curl is answered with 401. Exchange the launch token for the
+# session cookie exactly like the browser does, and hand it back as a header value.
+function Get-EngineCookie($origin) {
+  $url = Get-EngineAnnounce
+  if (-not $url) { throw "no 'dsh web:' announce line in $log; cannot mint a session cookie" }
+  $token = ([System.Uri]$url).Query -replace '^\?token=', ''
+  if (-not $token) { throw "the announce line carries no token: $url" }
+  $headers = & curl.exe -sS -i -o NUL -D - "$origin/?token=$token" 2>&1 | Out-String
+  $m = [regex]::Match($headers, "(?im)^set-cookie:\s*([^;\r\n]+)")
+  if (-not $m.Success) { throw "token exchange returned no Set-Cookie (headers: $headers)" }
+  return $m.Groups[1].Value.Trim()
 }
 
 # Ground truth: the market's own view of the plugin's activation state.
@@ -526,7 +555,34 @@ console.log("seeded pre-rename install:", oldPkg);
   Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue
   [void](Wait-Activation $origin $PLUGIN "live" 90 "the plugin must be live before reading its route")
 
-  $routeRaw = & curl.exe -sS "$origin/model-usage" 2>&1 | Out-String
+  # The route is fenced: an unauthenticated caller must not receive the plugin's data.
+  # Note the route may not be registered yet right after the market flips the state
+  # (the market's view changes first, the engine's hot reload lands a moment later);
+  # while it is unregistered the SPA fallback answers 200 with HTML. So the property
+  # to assert is "no session cookie -> never the plugin's JSON", not a fixed status.
+  $cookie = Get-EngineCookie $origin
+  $violation = $null
+  $saw401 = $false
+  for ($i = 0; $i -lt 40; $i++) {
+    $raw = & curl.exe -sS -w "`nHTTP:%{http_code}" "$origin/model-usage" 2>&1 | Out-String
+    $code = ([regex]::Match($raw, 'HTTP:(\d+)')).Groups[1].Value
+    if ($code -eq '401') { $saw401 = $true; break }
+    if ($code -eq '200' -and $raw -match '"sections"') { $violation = $raw; break }
+    Start-Sleep -Milliseconds 500
+  }
+  if ($violation) {
+    Dump-Log
+    throw "GET /model-usage returned the plugin payload WITHOUT a session cookie: $($violation.Substring(0, [Math]::Min(200, $violation.Length)))"
+  }
+  Write-Host ("  /model-usage without a cookie -> {0}" -f $(if ($saw401) { 'HTTP 401 (fenced)' } else { 'route not registered yet, no payload leaked' }))
+
+  # Positive case (with the browser session cookie): wait for the route to be live.
+  $routeRaw = ''
+  for ($i = 0; $i -lt 60; $i++) {
+    $routeRaw = & curl.exe -sS -H "cookie: $cookie" "$origin/model-usage" 2>&1 | Out-String
+    if ($routeRaw -match '"sections"') { break }
+    Start-Sleep -Milliseconds 500
+  }
   $route = $routeRaw | ConvertFrom-Json
   Write-Host ("  /model-usage -> ok={0}" -f $route.ok)
   # The payload is keyed by SECTION KEY (the same keys the `sections` map uses,

@@ -47,11 +47,25 @@ function indentOf(line) {
   return m ? m[0] : "";
 }
 
-/** 在行数组中定位一段“trim 后逐行相等”的连续块；返回起始行号或 -1。 */
+/**
+ * 单行是否匹配某个锚点模式。
+ *
+ * 以 `*` 结尾表示**前缀**匹配：引擎的函数签名会随版本加参数
+ * （`function apply(ctx) {` → `function apply(ctx, config = Config({})) {`），
+ * 钉死整行会让补丁在每次引擎小版本更新后静默失效 —— 这正是它现在只作兜底、
+ * 主实现改成插件的原因，但兜底本身也不该因为多了个参数就彻底不工作。
+ */
+function patternMatches(line, pattern) {
+  const trimmed = line.trim();
+  if (pattern.endsWith("*")) return trimmed.startsWith(pattern.slice(0, -1));
+  return trimmed === pattern;
+}
+
+/** 在行数组中定位一段“trim 后逐行匹配”的连续块；返回起始行号或 -1。 */
 function findBlock(lines, patterns) {
   outer: for (let i = 0; i <= lines.length - patterns.length; i += 1) {
     for (let k = 0; k < patterns.length; k += 1) {
-      if (lines[i + k].trim() !== patterns[k]) continue outer;
+      if (!patternMatches(lines[i + k], patterns[k])) continue outer;
     }
     return i;
   }
@@ -179,9 +193,10 @@ function applyLastSession(engineDir, log = () => {}) {
     log("last-session patch: package not found, skipped");
     return { ok: false, reason: "client package missing" };
   }
-  // 锚点：ui-conversation apply(ctx) 的开头（sessions 服务已解包）。
+  // 锚点：ui-conversation apply(ctx…) 的开头（sessions 服务已解包）。第一行用前缀匹配，
+  // 免得引擎给 apply 加个 config 参数就让整个兜底补丁失效。
   const anchor = [
-    "function apply(ctx) {",
+    "function apply(ctx*",
     "const sessions = ctx.sessions;",
   ];
 

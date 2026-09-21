@@ -23,6 +23,7 @@ import {
   limitsCachePath,
   readLimitsCache,
   writeLimitsCache,
+  rejectUntrusted,
 } from '../lib/index.js'
 
 // --- load the client bundle exactly the way the engine does -----------------
@@ -510,6 +511,44 @@ await check('usage store notifies subscribers and replaces state', () => {
   unsub()
   store.set({ status: 'error' })
   assert.equal(calls, 1, 'unsubscribed listener must not fire again')
+})
+
+// --- route trust fence -------------------------------------------------------
+// These routes serve usage/balance and settings writes, so the fence is the
+// difference between "only the engine page can reach it" and "any local process, or
+// a page that rebound a hostname to 127.0.0.1, can". The assertions pin the
+// fail-closed default and the status mapping.
+check('rejectUntrusted fails closed when the fence is unavailable', () => {
+  const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
+  for (const ctx of [{ get: () => undefined }, { get: () => ({}) }, { get: () => null }, {}]) {
+    const res = mk()
+    assert.equal(rejectUntrusted(ctx, {}, res), true, 'must reject when connection is missing')
+    assert.equal(res.statusCode, 403)
+    assert.equal(res.ended, 1, 'the response must be ended exactly once')
+  }
+})
+
+check('rejectUntrusted mirrors the engine fence and lets allowed requests through', () => {
+  const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
+  // allowed: the engine fence returns undefined
+  let res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => undefined }) }, {}, res), false)
+  assert.equal(res.ended, 0, 'the fence must not answer an allowed request')
+  // unauthenticated
+  res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => 401 }) }, {}, res), true)
+  assert.equal(res.statusCode, 401)
+  assert.equal(res.body, 'unauthorized')
+  // untrusted host/origin
+  res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => 403 }) }, {}, res), true)
+  assert.equal(res.statusCode, 403)
+  assert.equal(res.body, 'forbidden')
+  // the raw request is handed to the engine fence unchanged
+  const marker = { headers: { host: '127.0.0.1:1' } }
+  let seen = null
+  rejectUntrusted({ get: () => ({ requestRejection: (r) => { seen = r; return undefined } }) }, marker, mk())
+  assert.equal(seen, marker)
 })
 
 console.log(`\n${process.exitCode ? 'FAILED' : `all ${passed} passed`}`)

@@ -37,6 +37,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
+const { fileURLToPath } = require("node:url");
 const semver = require("semver");
 const YAML = require("yaml");
 const {
@@ -46,6 +47,8 @@ const {
   engineThemeForAppearance,
 } = require("./settings-ui");
 const { statusFingerprint } = require("./plugin-state");
+const { acceptableEngineUrl, sameOrigin } = require("./engine-url");
+const { preferredOrder, fetchLatestRelease, likelyMainland } = require("./update-sources");
 const { defaultDshHome, hasHomeData, moveHomeData } = require("./home-migrate");
 const { ensureEnginePatches } = require("./engine-patch");
 const {
@@ -86,9 +89,42 @@ const UPDATE_CHANNELS = {
   npm: "跟随 npm latest 标签",
 };
 
-/** DSH GUI 应用自身的更新来源（GitHub Releases，仅检测+打开下载页）。 */
-const GUI_REPO_API = "https://api.github.com/repos/itchenshi/DeepSeekHarnessGUI/releases/latest";
+/**
+ * DSH GUI 应用自身的更新来源：三个开源平台的 Release（仅检测 + 打开下载页）。
+ *
+ * 国内/国外网络差异很大（GitHub 在国内常超时，Gitee/GitCode 反之），所以不写死单一
+ * 平台：见 src/update-sources.js —— 按「上次成功的源 → 地区默认顺序」逐个尝试，每个源
+ * 单独限时，任何一个先答上来就用它。GUI_RELEASES_URL 只作为兜底下载页。
+ */
 const GUI_RELEASES_URL = "https://github.com/itchenshi/DeepSeekHarnessGUI/releases/latest";
+
+/** 检查来源的取值由 src/update-sources.js 自行择优，不再作为可配置项。 */
+
+/**
+ * 启动时检查的节流：一小时内不重复查（频繁重启 App 时不必每次都打网络）。
+ *
+ * 上限依据实测：GitHub 与 Gitee 的未认证 API 都是 **每 IP 每小时 60 次**，1 小时 1 次只
+ * 用掉 1/60；真被限流会返回 403，被当作该源失败并自动换下一个源，因此不影响可用性。
+ */
+const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * 长会话期间的后台复查间隔。
+ *
+ * GUI 常常一开就是一整天（甚至几天不关），只查启动一次的话，长会话可能整轮都发现不了
+ * 新版本 —— 这才是「12 小时」真正的问题所在。6 小时复查一次，成本可忽略。
+ */
+const APP_UPDATE_RUNNING_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * 生效的检查间隔。测试/CI 可用 `DSH_SHELL_TEST_APP_UPDATE_MS` 同时缩放「启动节流」与
+ * 「后台复查」两个间隔，好在几秒内观测到周期复查真的在跑（该钩子仅未打包构建生效）。
+ */
+function appUpdateIntervals() {
+  const scaled = UNPACKAGED_TEST_HOOKS ? Number(process.env.DSH_SHELL_TEST_APP_UPDATE_MS) : Number.NaN;
+  if (Number.isFinite(scaled) && scaled > 0) return { throttleMs: scaled, runningMs: scaled };
+  return { throttleMs: APP_UPDATE_CHECK_INTERVAL_MS, runningMs: APP_UPDATE_RUNNING_INTERVAL_MS };
+}
 
 /** 引擎检查更新的固定频率：30 分钟（不再可设置）。 */
 const ENGINE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -172,14 +208,15 @@ const UI_STRINGS = {
     "update.failed.willUseCurrent": "将使用当前版本 v{0} 启动。",
     "update.gui.title": "发现新版本",
     "update.gui.msg": "DSH GUI 可更新到 v{0}",
-    "update.gui.detail": "当前版本：v{0}。\n是否打开下载页面（GitHub Releases）？",
+    "update.gui.detail": "当前版本：v{0}。\n是否打开下载页面（{1}）？",
     "update.gui.open": "打开下载页",
     "update.gui.cancel": "取消",
     "update.gui.cant.title": "无法检查更新",
-    "update.gui.cant.msg": "无法连接 GitHub 获取 DSH GUI 版本信息",
-    "update.gui.upToDate": "DSH GUI 已是最新版本 v{0}",
+    "update.gui.cant.msg": "无法连接更新来源（GitHub / Gitee / GitCode 均不可达）",
+    "update.gui.upToDate": "DSH GUI 已是最新版本 v{0}（来源：{1}）",
     "update.notice.found": "发现新版本 v{0}",
     "update.notice.nextLaunch": "将于下次启动时更新",
+    "update.gui.available": "DSH GUI 可更新到 v{0}（来源：{1}）",
     "update.notice.updated": "已更新到 v{0}",
     "update.notice.thisLaunch": "本次启动已使用最新版本",
     "update.notice.detailAuto": "可在设置中改为自动更新",
@@ -230,6 +267,10 @@ const UI_STRINGS = {
     "home.hasDataDetail": "是否将数据移动到目标目录（{0}）？选择“仅切换”则数据保留在原位置。",
     "home.moveAndSwitch": "移动并切换",
     "home.switchOnly": "仅切换，不移动",
+    "home.dstHasData.title": "目标目录已有数据",
+    "home.dstHasData.msg": "目标数据目录（{0}）里已经有数据",
+    "home.dstHasData.detail": "继续迁移会把源目录（{0}）的数据【合并覆盖】到目标目录，同名文件（settings.yaml、profiles、last-session.json 等）将以源目录为准，随后源目录会被删除且无法恢复。若不确定，请先取消并自行备份。",
+    "home.dstHasData.merge": "合并覆盖",
     "home.switching": "正在移动数据目录…",
     "home.switched": "数据目录已切换",
     "home.restarting": "正在重新启动 DeepSeek Harness…",
@@ -307,14 +348,15 @@ const UI_STRINGS = {
     "update.failed.willUseCurrent": "DSH GUI will start with the current version v{0}.",
     "update.gui.title": "Update Available",
     "update.gui.msg": "DSH GUI v{0} is available",
-    "update.gui.detail": "Installed: v{0}.\nOpen the download page (GitHub Releases)?",
+    "update.gui.detail": "Installed: v{0}.\nOpen the download page ({1})?",
     "update.gui.open": "Open Download Page",
     "update.gui.cancel": "Cancel",
     "update.gui.cant.title": "Cannot Check for Updates",
-    "update.gui.cant.msg": "Cannot reach GitHub to check the DSH GUI version",
-    "update.gui.upToDate": "DSH GUI is already up to date (v{0})",
+    "update.gui.cant.msg": "Cannot reach any update source (GitHub / Gitee / GitCode)",
+    "update.gui.upToDate": "DSH GUI is already up to date (v{0}, via {1})",
     "update.notice.found": "New version v{0} available",
     "update.notice.nextLaunch": "Will update on next launch",
+    "update.gui.available": "DSH GUI v{0} is available (via {1})",
     "update.notice.updated": "Updated to v{0}",
     "update.notice.thisLaunch": "This launch already uses the latest version",
     "update.notice.detailAuto": "You can switch to automatic updates in Settings",
@@ -365,6 +407,10 @@ const UI_STRINGS = {
     "home.hasDataDetail": "Move the data to the destination folder ({0})? Choose “Switch only” to keep the data where it is.",
     "home.moveAndSwitch": "Move & Switch",
     "home.switchOnly": "Switch Only",
+    "home.dstHasData.title": "Destination already holds data",
+    "home.dstHasData.msg": "The destination data folder ({0}) already contains data",
+    "home.dstHasData.detail": "Continuing MERGES the source folder ({0}) INTO the destination and overwrites colliding files (settings.yaml, profiles, last-session.json, …) with the source version; the source is then deleted and this cannot be undone. If unsure, cancel and back up first.",
+    "home.dstHasData.merge": "Merge & overwrite",
     "home.switching": "Moving data folder…",
     "home.switched": "Data folder switched",
     "home.restarting": "Restarting DeepSeek Harness…",
@@ -432,6 +478,8 @@ let updateCheckTimer = null;
 let checkingInProgress = false;
 let engineStarted = false;
 let lastEngineUrl = null;
+// 已验证通过的主窗口允许来源（engine URL 的 origin）。导航围栏只放行它。
+let engineOrigin = null;
 // 本次启动刚自动安装的插件 id（用于“引擎启动失败 → 剔除”兜底）。
 let pluginsInstalledThisLaunch = [];
 let pluginFailureRecoveryDone = false;
@@ -473,6 +521,33 @@ function log(...args) {
 function err(...args) {
   console.error("[shell]", ...args);
 }
+
+/** 被围栏拦下的导航/弹窗：进日志（带 [shell] 前缀便于排查），但不当作错误。 */
+function warn(...args) {
+  console.warn("[shell]", ...args);
+}
+
+/**
+ * 抹掉文本里的引擎访问 token。
+ *
+ * 引擎把自己的启动 URL（带 `?token=…`）打到 stdout，而这段尾部输出会被写进
+ * `<userData>/logs/dsh-start-*.log` 并显示在启动失败对话框里 —— 本机任何进程（以及
+ * 会采集日志的同步盘/厂商工具）都能读到并用它访问正在运行的引擎。日志只该记录
+ * origin/端口，token 一律替换掉。
+ */
+function redactToken(text) {
+  return String(text ?? "").replace(/([?&]token=)[^&\s"'`]+/giu, "$1<redacted>");
+}
+
+/**
+ * 测试钩子只在未打包（开发 / CI）时生效。
+ *
+ * 打包后的应用若仍听从这些环境变量，任何能影响它启动环境的进程（快捷方式、包装脚本、
+ * 父进程）就能让它删掉 DSH_HOME 下的插件补丁文件、或自动确认「禁用插件」这类危险对话框。
+ * 只读/纯 UI 的钩子（打开设置窗口、伪造版本号）不受影响；定时器缩放钩子也一并只在未打包
+ * 构建里生效，免得用户被环境变量意外改成高频轮询。
+ */
+const UNPACKAGED_TEST_HOOKS = !app.isPackaged;
 
 // ---------------------------------------------------------------------------
 // paths
@@ -599,7 +674,13 @@ async function applySettingsPatch(patch) {
   }
   // Data-directory switches go through the guarded flow (data check + move).
   if (typeof patch.dshHomeMode === "string" && DSH_HOME_MODES[patch.dshHomeMode]) {
-    await switchHomeMode(patch.dshHomeMode).catch((error) => err("switchHomeMode failed:", error));
+    // 用户在「目标目录已有数据」确认框里取消时，本次切换**没有发生** —— 要把这件事
+    // 告诉设置窗口，否则它会闪一个「已保存」，而单选框还停在新值上。
+    const switched = await switchHomeMode(patch.dshHomeMode).catch((error) => {
+      err("switchHomeMode failed:", error);
+      return true; // 真出错时按「已处理」返回；错误另有上报路径
+    });
+    if (switched === false) return { ...settings, applied: false, reason: "home-switch-cancelled" };
   }
   return settings;
 }
@@ -620,6 +701,7 @@ async function killEngineForSwitch() {
   dshChild = null;
   engineStarted = false;
   lastEngineUrl = null;
+  engineOrigin = null;
   log("engine stopped for home switch");
   return true;
 }
@@ -639,14 +721,39 @@ async function restartEngineAfterSwitch(nodeExec) {
  * moved, then the engine is restarted against the new home.
  */
 async function switchHomeMode(mode) {
-  if (mode === settings.dshHomeMode) return;
+  if (mode === settings.dshHomeMode) return true;
   const srcPath = effectiveHomePath();
+  // 「引擎原本在跑吗」必须在任何 killEngineForSwitch() 之前取：迁移分支会先停引擎
+  // （那会清空 dshChild/engineStarted），事后再判断就永远是 false —— 结果迁移完引擎
+  // 不会重启，窗口一直停在状态页。
+  const engineWasRunning = Boolean(dshChild) || engineStarted;
   const dstPath = mode === "system" ? defaultDshHome() : path.join(userDataDir(), "dsh-home");
   const parent = win ?? settingsWin;
   let doMove = false;
 
   const hasData = await hasHomeData(srcPath);
-  if (hasData && path.resolve(srcPath) !== path.resolve(dstPath)) {
+  const dstHasData = await hasHomeData(dstPath);
+  if (hasData && path.resolve(srcPath) !== path.resolve(dstPath) && dstHasData) {
+    // 目标目录已有数据：迁移是「合并 + 覆盖」语义（fs.cp force），绝不能默认执行——
+    // 否则 settings.yaml / profiles / last-session.json 会被静默覆盖后源目录被删除。
+    const { response } = await dialog
+      .showMessageBox(parent, {
+        type: "warning",
+        title: L("home.dstHasData.title"),
+        message: L("home.dstHasData.msg", dstPath),
+        detail: L("home.dstHasData.detail", srcPath),
+        buttons: [L("home.dstHasData.merge"), L("common.cancel")],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      })
+      .catch(() => ({ response: 1 }));
+    if (response !== 0) {
+      log("home switch cancelled: destination already holds data");
+      return false; // 切换未发生：调用方据此不要闪「已保存」
+    }
+    doMove = true;
+  } else if (hasData && path.resolve(srcPath) !== path.resolve(dstPath)) {
     const { response } = await dialog
       .showMessageBox(parent, {
         type: "question",
@@ -714,12 +821,20 @@ async function switchHomeMode(mode) {
   stopProfileWatcher();
   startProfileWatcher();
 
-  // If the engine was running against the old home (moved or not), restart it
-  // so this session keeps working on the new home.
-  if (doMove) {
-    const nodeExec = resolveNodeExecutable();
-    await restartEngineAfterSwitch(nodeExec);
+  // 数据目录变了就必须让引擎用新目录重启：否则旧引擎仍带着旧 DSH_HOME 在跑，而 GUI
+  // 的状态/插件读写已经指向新目录 —— 两边说的不是同一份 profile（先前只有「迁移过」
+  // 才重启，选「仅切换」时会留下这种不一致）。
+  const homeChanged = path.resolve(srcPath) !== path.resolve(dstPath);
+  if (homeChanged || doMove) {
+    await killEngineForSwitch();
+    if (engineWasRunning) {
+      const nodeExec = resolveNodeExecutable();
+      await restartEngineAfterSwitch(nodeExec);
+    } else {
+      log("home switched before the engine started; boot will use the new home");
+    }
   }
+  return true; // 切换确实发生了（调用方据此才闪「已保存」）
 }
 
 function broadcastSettings() {
@@ -844,6 +959,13 @@ function nodeVersionOf(nodeExec) {
  */
 function shortPathIfSpaced(p) {
   if (!/\s/u.test(p)) return p;
+  // 路径来自 <os.homedir()>（即 USERPROFILE）。被插进下面这条 cmd 命令里：含 `"` 会闭合
+  // 引号，`&`/`|`/`^`/`%` 会被 cmd 解释 —— 与其尝试转义，不如直接拒绝这类路径，回退到
+  // 「不短化」的保守分支（上层只过滤空白，同样会拒绝它）。
+  if (/["&|^%!<>]/u.test(p)) {
+    err("refusing to shorten a path with cmd metacharacters");
+    return p;
+  }
   try {
     const probe = spawnSync(
       "cmd",
@@ -999,11 +1121,31 @@ function npmInstall(version, onProgress) {
         /* best effort */
       }
     };
+    // 超时兜底：卡住的 registry/TLS 连接以前会让安装（以及启动流程）无限等下去，界面
+    // 永远停在状态页，既没有取消也没有诊断（90s 看门狗此时还没武装）。10 分钟后杀掉并
+    // 用已捕获的 stderr 尾部报错。
+    const NPM_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+    let timedOut = false;
+    const installTimer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill();
+      } catch {
+        /* 已在退出 */
+      }
+    }, NPM_INSTALL_TIMEOUT_MS);
     child.on("error", (error) => {
+      clearTimeout(installTimer);
       cleanupStage();
       reject(error);
     });
     child.on("close", (code) => {
+      clearTimeout(installTimer);
+      if (timedOut) {
+        cleanupStage();
+        reject(new Error(`npm install timed out after ${NPM_INSTALL_TIMEOUT_MS / 60000} minutes\n${tail}`));
+        return;
+      }
       if (code !== 0) {
         cleanupStage();
         reject(new Error(`npm install exited with ${code}\n${tail}`));
@@ -1076,7 +1218,8 @@ function spawnDsh(nodeExec, { onUrl, onExit, onError }) {
   const pushTail = (text) => {
     for (const line of String(text).split(/\r?\n/u)) {
       if (line.trim() === "") continue;
-      tail.push(line);
+      // 尾部输出会落盘（启动失败日志）并进对话框 —— 先抹掉访问 token。
+      tail.push(redactToken(line));
       if (tail.length > 400) tail.shift();
     }
   };
@@ -1086,7 +1229,10 @@ function spawnDsh(nodeExec, { onUrl, onExit, onError }) {
     pushTail(chunk);
     buffer += chunk;
     if (buffer.length > 64 * 1024) buffer = buffer.slice(-64 * 1024);
-    const match = buffer.match(/^dsh web: (\S+)\s*$/m);
+    // `(\S+)` 后不能再锚 `$`：引擎绑定非回环地址时会在同一行追加
+    // " (LAN: http://192.168.x.x:PORT/?token=…)"，锚尾会让整行失配 → 拿不到 URL →
+    // 90s 看门狗把健康引擎误判为启动失败（甚至自动卸载本次新装插件）。
+    const match = buffer.match(/^dsh web: (\S+)/m);
     if (match) onUrl(match[1]);
   });
   child.stderr.setEncoding("utf8");
@@ -1147,6 +1293,7 @@ function restartEngineNow(reason) {
   killProcessTree(child, () => {
     engineStarted = false;
     lastEngineUrl = null;
+    engineOrigin = null;
     const nodeExec = resolveNodeExecutable();
     startEngine(nodeExec)
       .catch((error) => {
@@ -1286,7 +1433,7 @@ async function diagnoseStartFailure({ code, signal, error, tail }) {
   const logHint = logFile ? `\n\n${L("diag.savedLog", logFile)}` : "";
   if (suspects.length > 0) {
     // 测试钩子：自动选择“禁用并重启”（用于无人工冒烟）。
-    const autoDisable = process.env.DSH_SHELL_TEST_AUTODISABLE === "1";
+    const autoDisable = UNPACKAGED_TEST_HOOKS && process.env.DSH_SHELL_TEST_AUTODISABLE === "1";
     const { response } = autoDisable
       ? { response: 0 }
       : await dialog
@@ -1377,6 +1524,10 @@ async function diagnoseStartFailure({ code, signal, error, tail }) {
  * 若仍失败，仍应弹窗让用户决定（手动禁用 or 查看原因）。
  */
 async function handleStartupFailure({ code, signal, error, tail }) {
+  // 启动失败必须清掉「正在重启」标志：它只在成功（onUrl）与 startEngine 抛错时复位，
+  // 而 spawn 失败走的是这里 —— 漏掉就会永久卡住，之后手动与自动重启都返回
+  // "already restarting"，用户只能退出重开。
+  engineRestartInFlight = false;
   if (startupDiagnosisDone) return;
   startupDiagnosisDone = true;
   clearTimeout(pluginReadyWatchdog);
@@ -1799,7 +1950,19 @@ function showUpdateNotice(title, sub) {
     },
   });
   noticeWin.setAlwaysOnTop(true, "screen-saver");
-  noticeWin.loadFile(path.join(__dirname, "notice.html"), { query: { theme: themeQuery(), lang: resolveUiLang() } });
+  // 通知窗口没有 preload（无特权），但它显示的是网络/版本信息 —— 一样装上围栏：
+  // 只允许停留在自身文件，弹窗交系统浏览器。这样即使将来它有了链接或被注入内容，
+  // 也不会变成 App 内的任意页面容器。同样用精确路径比较（见设置窗口那处）。
+  const noticeFile = path.join(__dirname, "notice.html");
+  installNavigationFence(noticeWin, (url) => {
+    try {
+      return fileURLToPath(new URL(url)) === noticeFile;
+    } catch {
+      return false;
+    }
+  });
+  noticeWin.loadFile(path.join(__dirname, "notice.html"), { query: { theme: themeQuery(), lang: resolveUiLang() } })
+    .catch((error) => err("notice.html failed to load:", error.message));
   noticeWin.webContents.once("did-finish-load", () => {
     noticeWin.webContents
       .executeJavaScript(
@@ -1820,6 +1983,88 @@ function showUpdateNotice(title, sub) {
   noticeWin.on("closed", () => {
     noticeWin = null;
   });
+}
+
+// ---------------------------------------------------------------------------
+// 导航围栏 / 引擎 URL 校验
+// ---------------------------------------------------------------------------
+
+// 引擎 URL 的可信判定与同源比较放在 src/engine-url.js（纯函数，可单测）。
+// 引擎进程里跑着第三方插件（host 半边），它们能在服务真正监听前打印
+// `dsh web: <任意内容>`；主窗口又挂着 workspace-preload 窄桥（重启引擎、读写
+// last-session），所以**绝不能**把任意来源加载进主窗口。
+
+/**
+ * 给窗口装上导航/弹窗围栏。
+ *
+ * 没有它时：页面里任何脚本（引擎 UI 或插件页面半边）都能 `location.href = 远端`
+ * 把 App 窗口导航走，而 preload 桥会**跟着一起过去**——远端页面就拿到了
+ * `dsh-gui:restart-engine` / 读写 last-session 的能力；`window.open` 也会开出
+ * 一个继承同样 webPreferences 的未受管窗口。
+ *
+ * 注：`webContents.loadURL`（我们自己的加载）不触发 will-navigate，因此这里只放行
+ * `isAllowedNavigation` 不会挡住自身加载。
+ */
+function installNavigationFence(target, isAllowedNavigation) {
+  target.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedNavigation(url)) return;
+    event.preventDefault();
+    warnBlockedNavigation("navigation", url);
+  });
+  target.webContents.on("will-redirect", (event, url) => {
+    if (isAllowedNavigation(url)) return;
+    event.preventDefault();
+    warnBlockedNavigation("redirect", url);
+  });
+  target.webContents.setWindowOpenHandler(({ url }) => {
+    // 弹窗一律不交给 App 托管（否则新窗口会继承 preload）；http(s) 交给系统浏览器。
+    let protocol = "";
+    try {
+      protocol = new URL(String(url)).protocol;
+    } catch {
+      protocol = "";
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      shell.openExternal(url).catch((error) => err("openExternal failed:", error.message));
+    } else {
+      warnBlockedNavigation("popup", url);
+    }
+    return { action: "deny" };
+  });
+}
+
+/**
+ * 权限围栏：Electron 默认**批准所有**权限请求，所以引擎页面（含第三方插件的页面半边）
+ * 可以静默打开麦克风/摄像头、读取定位、刷通知。这里默认拒绝，只白名单少数与界面本身
+ * 相关、不涉及隐私采集的权限（复制到剪贴板、全屏、指针锁定）。
+ */
+const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen", "pointerLock", "background-sync"]);
+function permissionAllowed(permission) {
+  return ALLOWED_PERMISSIONS.has(String(permission));
+}
+function installPermissionFence(target) {
+  try {
+    const session = target.webContents.session;
+    session.setPermissionRequestHandler((_wc, permission, callback) => {
+      const allowed = permissionAllowed(permission);
+      if (!allowed) warn("denied permission request:", permission);
+      callback(allowed);
+    });
+    session.setPermissionCheckHandler((_wc, permission) => permissionAllowed(permission));
+  } catch (error) {
+    err("permission fence failed:", error.message);
+  }
+}
+
+function warnBlockedNavigation(kind, url) {  const text = String(url ?? "");
+  // 只记 origin，避免把 URL 里的 token 写进日志。
+  let shown = text;
+  try {
+    shown = new URL(text).origin;
+  } catch {
+    /* keep the raw value when it is not a URL */
+  }
+  warn(`blocked ${kind}:`, shown);
 }
 
 // ---------------------------------------------------------------------------
@@ -1845,11 +2090,15 @@ function createWindow() {
       preload: path.join(__dirname, "workspace-preload.js"),
     },
   });
+  // 主窗口只允许停留在已验证的引擎来源；弹窗一律不托管（见 installNavigationFence）。
+  installNavigationFence(win, (url) => engineOrigin !== null && sameOrigin(url, engineOrigin));
+  installPermissionFence(win);
   // 主窗口启动最大化显示.
   win.maximize();
   win.show();
   applyEngineVersionChrome(); // 标题带上当前引擎版本（若有）
-  win.loadFile(path.join(__dirname, "status.html"), { query: { theme: themeQuery(), lang: resolveUiLang() } });
+  win.loadFile(path.join(__dirname, "status.html"), { query: { theme: themeQuery(), lang: resolveUiLang() } })
+    .catch((error) => err("status.html failed to load:", error.message));
   win.webContents.once("did-finish-load", () => {
     if (engineStarted && lastEngineUrl) {
       // Engine already running (window reopened from tray): reuse its URL.
@@ -1865,7 +2114,8 @@ function createWindow() {
   });
   win.webContents.on("did-finish-load", () => {
     if (!win.isDestroyed() && win.webContents.getURL().startsWith("http")) {
-      log("embedded web contents loaded:", win.webContents.getURL());
+      // 只记 origin：这个 URL 带 ?token=…，正是 redactToken 要防的东西。
+      log("embedded web contents loaded:", redactToken(win.webContents.getURL()));
       // 引擎页加载完成后标题可能被页面短暂覆盖，再次固定。
       setTimeout(() => applyEngineVersionChrome(), 0);
       // 页面就绪后：设置开启时，请网页端插件尽早尝试自动打开“最近一次对话”
@@ -2008,8 +2258,22 @@ function openSettingsWindow() {
       preload: path.join(__dirname, "preload.js"),
     },
   });
+  // 设置窗口持有插件安装/引擎更新等特权 IPC，更不该被导航到别处：
+  // 只放行**这一个文件**（精确路径比较）。只比后缀是不行的——拖进来的
+  // `…\Downloads\settings.html`、UNC 路径都会满足 `endsWith`，而 preload 是绑在
+  // webContents 上的，那个文档会直接继承 window.dshSettings 的全部特权。
+  const settingsFile = path.join(__dirname, "settings.html");
+  installNavigationFence(settingsWin, (url) => {
+    try {
+      return fileURLToPath(new URL(url)) === settingsFile;
+    } catch {
+      return false;
+    }
+  });
   settingsWin.loadFile(path.join(__dirname, "settings.html"), {
     query: { theme: themeQuery(), lang: resolveUiLang() },
+  }).catch((error) => {
+    err("settings.html failed to load:", error.message);
   });
   settingsWin.on("close", () => {
     // Guide the window back after the modal is gone (test/CI evidence).
@@ -2143,27 +2407,149 @@ async function runPeriodicUpdateCheck() {
 }
 
 let guiCheckBusy = false;
+/** 后台应用更新检查的并发闸（启动检查 / 6 小时定时器 / 手动检查共用）。 */
+let appUpdateInFlight = false;
 
-/** 托盘“检查 DSH GUI 更新…”：查 GitHub Releases，有新版则询问并打开下载页。 */
+// --- 应用自身更新检查（三个开源平台，按地区/历史择优） -------------------------
+
+/** 检查结果缓存：记住「上次可用的源」与检查时间（自动检查按 12h 节流）。 */
+function appUpdateCacheFile() {
+  return path.join(userDataDir(), "app-update-check.json");
+}
+
+async function readAppUpdateCache() {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(appUpdateCacheFile(), "utf8"));
+    return parsed !== null && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeAppUpdateCache(next) {
+  try {
+    await fsp.mkdir(path.dirname(appUpdateCacheFile()), { recursive: true });
+    // 原子写（tmp + rename）：并发读到的可能是写了一半的 JSON，那样 readAppUpdateCache
+    // 会静默退回 {}，节流随之失效、下一次又要打网络。
+    const target = appUpdateCacheFile();
+    const tmp = `${target}.${process.pid}.tmp`;
+    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), "utf8");
+    await fsp.rename(tmp, target);
+  } catch (error) {
+    log("app update cache write failed:", error.message);
+  }
+}
+
+/**
+ * 查询应用最新版本：按「上次可用的源 → 地区默认顺序」逐个尝试，任何一个先答上来即返回。
+ * 国内机器默认先试 Gitee/GitCode，避免在 GitHub 上白等一次超时。来源不需要用户选择。
+ * @returns {Promise<{id,label,version,releases,tried:string[]}|null>} null = 三个源都没答上来。
+ */
+async function lookupAppRelease({ timeoutMs = 6000 } = {}) {
+  const cache = await readAppUpdateCache();
+  let timeZone = "";
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  } catch {
+    timeZone = "";
+  }
+  const mainland = likelyMainland({ locale: app.getLocale(), timeZone });
+  const order = preferredOrder({
+    lastGood: typeof cache.source === "string" ? cache.source : null,
+    mainland,
+  });
+  const hit = await fetchLatestRelease({ order, timeoutMs });
+  await writeAppUpdateCache({
+    source: hit !== null ? hit.id : (cache.source ?? null),
+    version: hit !== null ? hit.version : (cache.version ?? null),
+    checkedAt: new Date().toISOString(),
+    tried: hit !== null ? hit.tried : order,
+    mainland,
+  });
+  return hit;
+}
+
+let appUpdateChecksStarted = false;
+let appUpdateTimer = null;
+
+/**
+ * 后台检查 DSH GUI 自身是否有新版本：有新版才用通知窗口提醒（不打断用户）。
+ * 完全离线 / 三个源都不通时静默跳过 —— 自动检查不该弹出错误。
+ *
+ * 同一个新版本**只提醒一次**：启动时会查、长会话期间还会每 6 小时复查，不做去重就会反复弹。
+ */
+async function checkAppUpdateInBackground({ force = false } = {}) {
+  // 并发闸：手动检查（guiCheckBusy）与启动检查、6 小时定时器会互不相让 —— 同时打两次
+  // 网络，并且两边的「读—改—写」缓存会互相覆盖（source/checkedAt 丢失 → 节流失效）。
+  if (appUpdateInFlight) {
+    log("app update: a check is already in flight");
+    return;
+  }
+  appUpdateInFlight = true;
+  try {
+    const cache = await readAppUpdateCache();
+    const last = typeof cache.checkedAt === "string" ? Date.parse(cache.checkedAt) : Number.NaN;
+    // 未来时间戳要当成「刚查过」处理而不是「很新鲜」：时钟回拨、或有人手工写了
+    // `9999-…`，单侧比较会让自动检查**永远**不再执行（再也收不到更新提醒）。
+    const clamped = Number.isFinite(last) ? Math.min(last, Date.now()) : Number.NaN;
+    if (!force && Number.isFinite(clamped) && Date.now() - clamped < appUpdateIntervals().throttleMs) {
+      log("app update: skipped (checked within the interval)");
+      return;
+    }
+    const hit = await lookupAppRelease({ timeoutMs: 5000 });
+    if (hit === null) {
+      log("app update: no release source reachable");
+      return;
+    }
+    const current = app.getVersion();
+    if (!semver.valid(hit.version) || !semver.lt(current, hit.version)) return;
+    if (cache.notifiedVersion === hit.version) {
+      log("app update: %s already notified", hit.version);
+      return;
+    }
+    log("app update: %s -> %s (via %s)", current, hit.version, hit.id);
+    showUpdateNotice(L("update.gui.available", hit.version, hit.label), L("update.notice.nextLaunch"));
+    // lookupAppRelease 已写过 checkedAt/source；这里补记「已提醒过哪个版本」。
+    await writeAppUpdateCache({ ...(await readAppUpdateCache()), notifiedVersion: hit.version });
+  } catch (error) {
+    err("app update check failed:", error.message);
+  } finally {
+    appUpdateInFlight = false;
+  }
+}
+
+/**
+ * 启动时查一次，并在长会话期间每 6 小时复查（GUI 常开着不关，只查启动一次会一直
+ * 发现不了新版本）。定时器 unref，不阻止进程退出。
+ */
+function startAppUpdateChecks() {
+  if (appUpdateChecksStarted) return;
+  appUpdateChecksStarted = true;
+  void checkAppUpdateInBackground();
+  appUpdateTimer = setInterval(() => {
+    void checkAppUpdateInBackground();
+  }, appUpdateIntervals().runningMs);
+  if (typeof appUpdateTimer.unref === "function") appUpdateTimer.unref();
+}
+
+/** 退出时清掉后台复查定时器。 */
+function stopAppUpdateChecks() {
+  if (appUpdateTimer !== null) {
+    clearInterval(appUpdateTimer);
+    appUpdateTimer = null;
+  }
+}
+
+/** 托盘/设置“检查 DSH GUI 更新…”：查三个开源平台，有新版则询问并打开下载页。 */
 async function runGuiUpdate() {
   if (guiCheckBusy) return;
   guiCheckBusy = true;
   const parent = win && !win.isDestroyed() ? win : undefined;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
-    let res;
-    try {
-      res = await fetch(GUI_REPO_API, {
-        signal: controller.signal,
-        headers: { accept: "application/vnd.github+json" },
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) throw new Error(`GitHub responded ${res.status}`);
-    const release = await res.json();
-    const tag = String(release.tag_name || "").replace(/^v/i, "");
+    // 逐源尝试（地区择优 + 记住上次可用的源），比写死 GitHub 更适合国内网络。
+    const hit = await lookupAppRelease({ timeoutMs: 6000 });
+    if (hit === null) throw new Error("no update source reachable (github/gitee/gitcode)");
+    const tag = hit.version;
     const current = app.getVersion();
     if (!semver.valid(tag)) throw new Error("invalid release tag");
     if (!semver.lt(current, tag)) {
@@ -2171,7 +2557,7 @@ async function runGuiUpdate() {
         .showMessageBox(parent, {
           type: "info",
           title: L("update.upToDate.title"),
-          message: L("update.gui.upToDate", current),
+          message: L("update.gui.upToDate", current, hit.label),
           buttons: [L("common.ok")],
         })
         .catch(() => {});
@@ -2182,7 +2568,7 @@ async function runGuiUpdate() {
         type: "question",
         title: L("update.gui.title"),
         message: L("update.gui.msg", tag),
-        detail: L("update.gui.detail", current),
+        detail: L("update.gui.detail", current, hit.label),
         buttons: [L("update.gui.open"), L("update.gui.cancel")],
         defaultId: 0,
         cancelId: 1,
@@ -2190,8 +2576,13 @@ async function runGuiUpdate() {
       })
       .catch(() => ({ response: 1 }));
     if (response === 0) {
-      shell.openExternal(GUI_RELEASES_URL).catch((error) => err("openExternal failed:", error.message));
+      // 打开「哪个平台答上来的」那个下载页：国内用户点开 Gitee/GitCode 才有用。
+      shell
+        .openExternal(hit.releases || GUI_RELEASES_URL)
+        .catch((error) => err("openExternal failed:", error.message));
     }
+    // 手动查过并已弹出对话框 → 记下已提醒的版本，避免后台复查再弹一次同样的通知。
+    await writeAppUpdateCache({ ...(await readAppUpdateCache()), notifiedVersion: tag }).catch(() => {});
   } catch (error) {
     err("gui update check failed:", error);
     dialog
@@ -2256,7 +2647,22 @@ async function runManualEngineUpdate() {
     if (response !== 0) return { ok: true, status: "deferred" };
 
     log("manual engine update: installing", DSH_PACKAGE, "@" + latest);
-    await npmInstall(latest, () => {});
+    // 先把正在运行的引擎停掉：npmInstall 结束时会把 <ENGINE_DIR> rename 成 .old 再换上新目录，
+    // 而 Windows 上被运行中进程占用/映射的文件无法 rename（EPERM → 更新失败），即便成功，
+    // 仍在跑的那个进程执行的是已被改名、随后被删除的旧目录。
+    const engineWasUp = Boolean(dshChild) || engineStarted;
+    await killEngineForSwitch();
+    try {
+      await npmInstall(latest, () => {});
+    } catch (error) {
+      // 更新失败也别把用户留在「没有引擎」的状态里。
+      if (engineWasUp) {
+        await restartEngineAfterSwitch(resolveNodeExecutable()).catch((e2) =>
+          err("restart after failed update failed:", e2.message),
+        );
+      }
+      throw error;
+    }
     const nowV = await readInstalledVersion();
     log("manual engine update: installed", nowV ?? latest);
     engineVersion = nowV;
@@ -2543,6 +2949,9 @@ async function startEngine(nodeExec) {
   // 没有已装的目录插件时跳过整个对账（省掉一次 pnpm 自举）。
   pluginsInstalledThisLaunch = [];
   startupDiagnosisDone = false;
+  // 「本次刚装的插件已剔除过」也要复位：它原先只被置 true、从不复位，于是**一次**剔除
+  // 之后，之后所有启动的看门狗路径都再也不会走诊断重试（看门狗判断里会用到它）。
+  pluginFailureRecoveryDone = false;
   // 自愈：修剪 profile 里不可解析 / 失效的 bundle 登记。引擎 reconcile 单靠
   // 自己清不掉这类条目（`dsh plugin remove` 会因依赖缺失报错、reconcile 又只
   // 管“依赖里成功解析且声明 dsh.bundle”的包），坏掉的安装/卸载留下的 stale
@@ -2615,7 +3024,8 @@ async function startEngine(nodeExec) {
         pluginsInstalledThisLaunch = syncResult.installed;
         log("updated bundled plugins:", syncResult.installed.join(", "));
         // 测试钩子：破坏刚装的插件 bundle（模拟“坏插件导致引擎启动失败”）。
-        if (process.env.DSH_SHELL_TEST_BREAK_PLUGIN) {
+        // 会真删文件 → 只在未打包构建里生效（见 UNPACKAGED_TEST_HOOKS）。
+        if (UNPACKAGED_TEST_HOOKS && process.env.DSH_SHELL_TEST_BREAK_PLUGIN) {
           const fsx = require("node:fs");
           for (const id of syncResult.installed) {
             const entry = PLUGIN_CATALOG.find((c) => c.id === id);
@@ -2722,6 +3132,13 @@ async function startEngine(nodeExec) {
   dshChild = spawnDsh(nodeExec, {
     onUrl: (url) => {
       if (settled) return;
+      // 引擎进程里的第三方插件也能打印 `dsh web: …`（在真正监听之前），主窗口又带着
+      // preload 窄桥 —— 所以只接受本机/局域网的 http 来源，否则不予加载。
+      const safe = acceptableEngineUrl(url);
+      if (safe === null) {
+        err("ignoring engine URL that is not a local http origin:", String(url).slice(0, 80));
+        return;
+      }
       settled = true;
       clearWatchdog();
       uiSettled = true;
@@ -2730,10 +3147,18 @@ async function startEngine(nodeExec) {
       engineRestartInFlight = false;
       intentionalEngineStop = false;
       unexpectedEngineExits = 0;
-      lastEngineUrl = url;
-      log("web UI URL:", url);
+      engineOrigin = safe.origin;
+      lastEngineUrl = safe.toString();
+      // 只记来源，不把 ?token=… 打进控制台/日志。
+      log("web UI origin:", safe.origin);
       setStatus(L("update.loadingUi"), "");
-      win.loadURL(url).catch((error) => err("loadURL failed:", error));
+      // 窗口可能在引擎就绪前就被关掉（closeAction=quit 时）：此时 win 已经是 null/已销毁，
+      // 直接 loadURL 会在 stdout 回调里抛出**未捕获异常**（Electron 错误框 / 退出被中断）。
+      if (win && !win.isDestroyed()) {
+        win.loadURL(lastEngineUrl).catch((error) => err("loadURL failed:", error));
+      } else {
+        log("engine is ready but the main window is gone; skipping loadURL");
+      }
       // 引擎页就绪后其 document.title 可能覆盖窗口标题，稍后把“标题+版本号”固定回去。
       setTimeout(() => applyEngineVersionChrome(), 1500);
       scheduleAutoQuit();
@@ -2743,6 +3168,7 @@ async function startEngine(nodeExec) {
       engineStarted = false;
       engineReady = false;
       lastEngineUrl = null;
+      engineOrigin = null;
       if (!settled) {
         // 尚未就绪就退出：本次刚自动装过插件 → 先自动剔除并重试（保留既有兜底）；
         // 已剔除过或本就没有本次新装插件 → 进入诊断（保存日志、判定插件/原因）。
@@ -2776,6 +3202,8 @@ async function startEngine(nodeExec) {
       }, 600);
     },
     onError: (error) => {
+      // 同 handleStartupFailure：别再让「正在重启」标志卡住。
+      engineRestartInFlight = false;
       if (settled) return;
       settled = true;
       clearWatchdog();
@@ -2792,9 +3220,16 @@ async function startEngine(nodeExec) {
   });
   // 看门狗：引擎装好但 90 秒未就绪（坏插件卡死或其它原因）→ 走剔除/诊断重试。
   pluginReadyWatchdog = setTimeout(() => {
-    if (!settled && !pluginFailureRecoveryDone) {
+    if (settled) return;
+    // 只有「本次确实自动装过插件」才走剔除重试：recoverFromPluginFailure 在没有可剔除
+    // 插件时会**先清掉看门狗再直接返回** —— 既不诊断也不重试，窗口无限转圈且无任何提示。
+    // 其它三处调用点都带了 `pluginsInstalledThisLaunch.length > 0` 前置条件，只有这里漏了；
+    // URL 被校验拒绝时 settled 保持 false，这条路径比想象中容易走到。
+    if (!pluginFailureRecoveryDone && pluginsInstalledThisLaunch.length > 0) {
       recoverFromPluginFailure("watchdog timeout").catch((error) => err("plugin recovery failed:", error.message));
-    } else if (!settled && !startupDiagnosisDone) {
+      return;
+    }
+    if (!startupDiagnosisDone) {
       // 无本次新装插件时引擎仍挂起 → 终止后诊断。
       intentionalEngineStop = true;
       if (dshChild) {
@@ -3038,9 +3473,35 @@ async function runPluginSetEnabled(entry, enabled) {
   }
 }
 
+/**
+ * 特权 IPC 的发送方门禁。
+ *
+ * preload 是绑在 webContents 上的，所以任何最终落进这些窗口的文档都会继承它的 API；
+ * 原先只有 `settings:autosize` 校验发送方，其余通道（插件安装/卸载、引擎更新与重启、
+ * 设置写入、last-session 写入）对**任何**渲染进程都开放。这里统一收口：
+ *  - 设置窗口的特权通道：只接受设置窗口；
+ *  - `dsh-gui:*`（引擎页面用的窄桥）：只接受主窗口。
+ */
+function isFromSettingsWindow(event) {
+  return Boolean(settingsWin && !settingsWin.isDestroyed() && event.sender === settingsWin.webContents);
+}
+function isFromMainWindow(event) {
+  return Boolean(win && !win.isDestroyed() && event.sender === win.webContents);
+}
+/** 返回真表示应当拒绝（并已记日志）。 */
+function rejectForeignSender(event, allow, channel) {
+  if (allow(event)) return false;
+  warn("blocked privileged IPC from an unexpected sender:", channel);
+  return true;
+}
+
 function registerIpc() {
-  ipcMain.handle("settings:get", () => settingsPayload());
-  ipcMain.handle("settings:set", async (_event, patch) => {
+  ipcMain.handle("settings:get", (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:get")) return null;
+    return settingsPayload();
+  });
+  ipcMain.handle("settings:set", async (event, patch) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:set")) return { ok: false, error: "unauthorized" };
     try {
       return await applySettingsPatch(patch ?? {});
     } catch (error) {
@@ -3050,29 +3511,47 @@ function registerIpc() {
   });
 
   // GUI 托管的引擎重启（页面/设置窗口用）：杀掉 dsh 子进程并按既有流程重拉。
-  ipcMain.handle("dsh-gui:restart-engine", () => restartEngineNow("requested from page"));
-  ipcMain.handle("settings:restart-engine", () => restartEngineNow("requested from settings"));
+  ipcMain.handle("dsh-gui:restart-engine", (event) => {
+    if (rejectForeignSender(event, isFromMainWindow, "dsh-gui:restart-engine")) {
+      return { ok: false, reason: "unauthorized" };
+    }
+    return restartEngineNow("requested from page");
+  });
+  ipcMain.handle("settings:restart-engine", (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:restart-engine")) {
+      return { ok: false, reason: "unauthorized" };
+    }
+    return restartEngineNow("requested from settings");
+  });
 
   // 设置窗口「立即检查引擎更新」：查新版 → 按选择下载安装（弹窗在主进程完成）。
-  ipcMain.handle("settings:update-check", () => runManualEngineUpdate());
+  ipcMain.handle("settings:update-check", (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:update-check")) {
+      return { ok: false, error: "unauthorized" };
+    }
+    return runManualEngineUpdate();
+  });
 
   // 勾选框 = 安装状态实时镜像（不持久化期望集合）。勾选/取消勾选立即对 profile
   // 生效：装一个 / 卸一个，随后广播新状态让设置窗口重新渲染。返回
   // { ok, skipped, error, changed, status } —— ok=false 且 skipped=true 表示
   // 引擎不兼容未装；error 为安装/卸载失败信息。
-  ipcMain.handle("plugins:install", async (_event, id) => {
+  ipcMain.handle("plugins:install", async (event, id) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "plugins:install")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
     return runPluginInstallUninstall(entry, "install");
   });
-  ipcMain.handle("plugins:remove", async (_event, id) => {
+  ipcMain.handle("plugins:remove", async (event, id) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "plugins:remove")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
     return runPluginInstallUninstall(entry, "remove");
   });
 
   // 启用/禁用（第二个勾选框）：状态镜像 + 走市场的开关接口（见 callMarketToggle）。
-  ipcMain.handle("plugins:set-enabled", async (_event, id, enabled) => {
+  ipcMain.handle("plugins:set-enabled", async (event, id, enabled) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "plugins:set-enabled")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
     return runPluginSetEnabled(entry, enabled !== false);
@@ -3082,7 +3561,8 @@ function registerIpc() {
   // 不会自己消失/出现，需要重新加载页面才与引擎的实际组合一致。市场的开关也是
   // 这个语义（它返回 refresh 并显示「刷新后生效」），这里给设置窗口一个等价的
   // 动作按钮。重新加载只重取引擎 URL，会话数据都在 $DSH_HOME 里，不会丢。
-  ipcMain.handle("dsh-gui:reload-engine-window", () => {
+  ipcMain.handle("dsh-gui:reload-engine-window", (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "dsh-gui:reload-engine-window")) return { ok: false, error: "unauthorized" };
     if (!win || win.isDestroyed()) return { ok: false, error: "main window is gone" };
     if (!lastEngineUrl) return { ok: false, error: "engine is not running" };
     win.loadURL(lastEngineUrl).catch((error) => err("engine reload failed:", error.message));
@@ -3093,7 +3573,8 @@ function registerIpc() {
   // 语义——这里以“当前已安装集合”为目标再对账一遍：补拉捆绑插件的随包更新、
   // 清理不一致，且**绝不卸载**用户手动装的东西（install 模式只增不删）。返回
   // changed 供页面提示“需重启引擎”。期间逐阶段发送进度。
-  ipcMain.handle("settings:plugin-sync", async () => {
+  ipcMain.handle("settings:plugin-sync", async (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:plugin-sync")) return { ok: false, error: "unauthorized" };
     const progressLog = progressLogFor("repairing plugins");
     try {
       // 先自愈：清掉不可解析/失效的 bundle 登记（坏安装留下的 stale 条目会让
@@ -3190,12 +3671,14 @@ function registerIpc() {
   function lastSessionFile() {
     return path.join(userDataDir(), "last-session.json");
   }
-  ipcMain.handle("dsh-gui:set-last-session", async (_event, sessionId) => {
+  ipcMain.handle("dsh-gui:set-last-session", async (event, sessionId) => {
+    if (rejectForeignSender(event, isFromMainWindow, "dsh-gui:set-last-session")) return { ok: false, error: "unauthorized" };
     if (typeof sessionId !== "string" || !sessionId.startsWith("session-")) throw new Error("invalid session id");
     await fsp.writeFile(lastSessionFile(), JSON.stringify({ sessionId, updatedAt: Date.now() }), "utf8");
     return { ok: true };
   });
-  ipcMain.handle("dsh-gui:get-last-session", async () => {
+  ipcMain.handle("dsh-gui:get-last-session", async (event) => {
+    if (rejectForeignSender(event, isFromMainWindow, "dsh-gui:get-last-session")) return { ok: false, error: "unauthorized" };
     try {
       const data = JSON.parse(await fsp.readFile(lastSessionFile(), "utf8"));
       if (typeof data.sessionId === "string" && data.sessionId.startsWith("session-")) return data;
@@ -3275,9 +3758,23 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DSH_SHELL_TEST_OPEN_SETTINGS) {
       setImmediate(() => openSettingsWindow());
     }
+    // 启动后检查 DSH GUI 自身更新：不阻塞启动；长会话期间每 6 小时复查一次。
+    setImmediate(() => {
+      startAppUpdateChecks();
+    });
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0 || !win || win.isDestroyed()) showMainWindow();
     });
+  }).catch((error) => {
+    // 顶层兜底：这条链里任何同步/异步抛出（窗口、菜单、托盘、主题构建）以前只会留下
+    // 一条 unhandled rejection —— 进程活着、没有窗口、也没有任何提示。这里必须让用户看见。
+    err("startup failed:", error);
+    try {
+      dialog.showErrorBox(L("common.startFailed"), String((error && error.stack) || error));
+    } catch {
+      /* dialog itself may be unavailable; the console log above still happened */
+    }
+    app.quit();
   });
 
   app.on("window-all-closed", () => {
@@ -3289,6 +3786,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on("before-quit", () => {
     quitting = true;
+    stopAppUpdateChecks();
     stopProfileWatcher();
     if (tray) {
       tray.destroy();

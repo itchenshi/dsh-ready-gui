@@ -26,6 +26,14 @@ function statusFingerprint(status) {
       version: s.version ?? null,
       enabled: s.enabled === undefined ? true : Boolean(s.enabled),
       disabledBy: s.disabledBy ?? null,
+      // 这两项也会改变界面、却不体现在上面任何一个字段里：
+      //   - rowIds：补丁层里的 row id 被改写（禁用写的行号变了）；
+      //   - client：插件是否带页面半边 → 决定那一行要不要显示「含页面部分 · 需刷新页面」。
+      // 漏掉它们，指纹会被判为「没变」，设置窗口就停在旧数据上不重绘。
+      rowIds: Array.isArray(s.rowIds) ? [...s.rowIds].sort() : null,
+      client: s.client === undefined ? null : Boolean(s.client),
+      marketDisabled: s.marketDisabled === undefined ? null : Boolean(s.marketDisabled),
+      patchDisabled: s.patchDisabled === undefined ? null : Boolean(s.patchDisabled),
     };
   }
   return JSON.stringify(out);

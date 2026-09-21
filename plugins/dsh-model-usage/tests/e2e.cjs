@@ -99,5 +99,30 @@ async function cdp(ws, method, params = {}) {
 
   try { ws.close(); } catch {}
   browser.kill(); eng.kill();
-  process.exit(exceptions.length === 0 && payload.ok === true ? 0 : 1);
+
+  // The pass criterion must be able to FAIL. `payload.ok` alone is useless: the route
+  // hardcodes it, so this e2e used to exit 0 even when both halves reported
+  // no-key/unauthorized/network — exactly the state a broken (or unauthenticated)
+  // route leaves behind. The cookie above is no longer decorative either: the route
+  // is behind the engine's trust fence, so an unauthenticated request is a 401.
+  const problems = [];
+  if (usageRes.status !== 200) problems.push(`route answered ${usageRes.status}`);
+  if (payload.ok !== true) problems.push('payload.ok is not true');
+  const sections = payload.sections ?? {};
+  if (!sections['opencode-go'] || !sections.deepseek) problems.push('payload is missing a section');
+  // The built-in limit table must always be served, even when the network half fails.
+  if (Object.keys(payload.limits ?? {}).length === 0) problems.push('empty limits map (built-in table missing)');
+  if (typeof payload.limitsMeta?.source !== 'string') problems.push('missing limitsMeta.source');
+  for (const [key, value] of Object.entries(sections)) {
+    if (value?.ok === true) continue; // real upstream data
+    if (value?.reason === 'no-key') continue; // expected when no credential is configured
+    problems.push(`section ${key} failed: ${value?.reason ?? 'no reason given'}`);
+  }
+
+  console.log('\nproblems:', problems.length);
+  for (const p of problems) console.log('  ✗ ' + p);
+  if (exceptions.length > 0) console.log('  ✗ ' + exceptions.length + ' browser exception(s)');
+  const failures = problems.length + exceptions.length;
+  console.log(failures === 0 ? '\nE2E PASS' : '\nE2E FAILED');
+  process.exit(failures === 0 ? 0 : 1);
 })();

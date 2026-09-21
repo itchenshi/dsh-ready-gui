@@ -34,12 +34,13 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 const { createRequire } = require("node:module");
 const semver = require("semver");
 
 /** 候选目录：id 用于设置持久化；pkg 是 npm 安装名（需与目录核实一致）。
  *  顺序 = 设置窗口里的展示顺序（插件市场 → 最近会话恢复 → OpenCode Go 用量
- *  → OpenCode Go 增强），改这里即可调整界面次序。 */
+ *  → OpenCode Go 增强 → 输入框快捷键），改这里即可调整界面次序。 */
 const CATALOG = [
   {
     id: "dsh-market",
@@ -160,6 +161,33 @@ const CATALOG = [
     en: "OpenCode Go toolkit (dsh-opencode-go)",
     zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头，修复 400 MissingSessionID。",
     enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID.",
+    url: "",
+  },
+  {
+    id: "dsh-composer-keys",
+    // Local source install, same mechanism as the other bundled plugins.
+    //
+    // 输入框快捷键：Enter / Shift+Enter / Ctrl+Enter 各自可设为「发送」或「换行」，
+    // 设置行注册在 DSH 设置窗口的**通用**页（settings.general.item，紧挨引擎自带的
+    // composer-enter 行）。
+    //
+    // 两侧配合：
+    //   - 宿主 lib/index.js：用引擎设置服务注册 `composer-keys` 命名空间（值落在
+    //     settings.yaml）并开放 GET/POST /composer-keys 给页面半边（页面拿不到
+    //     插件自有命名空间——设置 RPC 域只服务固定命名空间）。
+    //   - 页面 client/client.js：捕获阶段监听 composer 的 keydown，**仅当用户选择
+    //     与引擎原生行为不同**时拦截，并重新派发引擎自己的另一种手势。识别 composer
+    //     用引擎的语义属性 data-composer-input="true"，不碰哈希类名，也不会误伤
+    //     侧边栏插件自己的编辑器；输入法（isComposing / keyCode 229）全程放行。
+    //
+    // 与其它捆绑插件一样**不设 engineRange**：依赖的是 settings 服务与
+    // settings.general.item 槽位的公开契约，不是引擎版本号。
+    pkg: "dsh-composer-keys",
+    localSource: "dsh-composer-keys",
+    zh: "输入框快捷键（dsh-composer-keys）",
+    en: "Composer shortcuts (dsh-composer-keys)",
+    zhDesc: "在设置窗口的通用页配置 Enter / Shift+Enter / Ctrl+Enter 是发送消息还是换行。",
+    enDesc: "Configure in Settings → General whether Enter / Shift+Enter / Ctrl+Enter sends the message or inserts a line break.",
     url: "",
   },
 ];
@@ -375,6 +403,23 @@ function installedBundles(dshHome) {
 /** 允许写入补丁层的 row id 字符集（与市场 ROW_ID_RE 一致）。 */
 const ROW_ID_RE = /^[A-Za-z0-9_.-]+$/;
 
+/**
+ * 引擎 / 宿主自己的 row id：任何插件都不得经设置窗口的开关禁用它们。
+ *
+ * 为什么必须有这份名单：补丁层是按 **row id** 合并的，写一行 `- id: llm-pi-ai`
+ * + `disabled: true` 命中的是引擎那一行，而不是「谁的行」。本仓库自己的插件
+ * （dsh-opencode-go）就只是给 `llm-pi-ai` 补一个 provider 的 `api` 字段，一旦
+ * 这个 id 被当成插件自己的行禁掉，所有目录外模型立刻报 `needs an api`，等于把
+ * 整个 LLM 路由关掉。`session-persistence-jsonl` 同理：关掉它 = 会话历史不再
+ * 落盘。名单只增不减，追加时把「关掉它的后果」写在旁边。
+ */
+const PROTECTED_ROW_IDS = new Set([
+  // 引擎的 LLM 路由行：插件只是给它补 config，绝不能被它反过来关掉。
+  "llm-pi-ai",
+  // 会话 JSONL 落盘行：关掉它等于会话不再写入磁盘。
+  "session-persistence-jsonl",
+]);
+
 /** 市场自己的持久状态文件（禁用列表按**包名**记录）。 */
 function marketStatePath(dshHome) {
   return path.join(profileDir(dshHome), ".dsh-market", "state.json");
@@ -417,56 +462,214 @@ function readPatchText(file) {
   }
 }
 
-/** 逐行扫补丁层，取出 `- id: X` + `disabled: true|false` 两类行。 */
-function readUserPatchState(dshHome) {
+/**
+ * 逐行扫补丁层文本，取出顶层 `- id: X` + `disabled: true|false` 两类行。
+ *
+ * 缩进**不敏感**：引擎把补丁层当 YAML 解析，`- id:` 与 `disabled:` 的缩进都不是固定的
+ * （市场的解析器同样不敏感）。钉死列 0 / 两空格会让「市场只禁用（state.json）→ GUI 启用」
+ * 这种两行同 id 的状态读不出来，于是下一次禁用再追加一行，最终同一 id 出现两行，
+ * 生效结果取决于引擎的合并顺序。
+ */
+function patchTextState(text) {
   const disables = new Set();
   const forced = new Set();
-  const text = readPatchText(userPatchPath(dshHome));
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const m = /^- id: (['"]?)([A-Za-z0-9_.-]+)\1\s*$/.exec(lines[i]);
+    const m = /^([ \t]*)- id: (['"]?)([A-Za-z0-9_.-]+)\2[ \t]*(?:#.*)?$/.exec(lines[i]);
     if (!m) continue;
+    // `disabled:` 必须缩进更深（属于该条目），且允许行尾空白/注释。
     const next = lines[i + 1] ?? "";
-    if (/^ {2}disabled: true\s*$/.test(next)) disables.add(m[2]);
-    else if (/^ {2}disabled: false\s*$/.test(next)) forced.add(m[2]);
+    const indent = m[1].length;
+    const d = /^([ \t]*)disabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/.exec(next);
+    if (!d || d[1].length <= indent) continue;
+    if (d[2] === "true") disables.add(m[3]);
+    else forced.add(m[3]);
   }
   return { disables, forced };
+}
+
+/** 用户补丁层的 disables/forced 集合（读 <profile>/cordis.patch.yml）。 */
+function readUserPatchState(dshHome) {
+  return patchTextState(readPatchText(userPatchPath(dshHome)));
+}
+
+/** `insert:` 键所在行（缩进任意；行尾可有空白/注释）。 */
+const INSERT_KEY_RE = /^([ \t]*)- insert:[ \t]*(?:#.*)?$/;
+/** `insert:` 块里的条目行（缩进任意；id 的引号可选；行尾可有空白/注释）。 */
+const INSERT_ROW_ID_RE = /^([ \t]*)- id:[ \t]*(['"]?)([A-Za-z0-9_.-]+)\2[ \t]*(?:#.*)?$/;
+
+/**
+ * 一段补丁文本里 `insert:` 块声明的 row id（**缩进无关**）。
+ *
+ * 为什么不能钉死 4 空格缩进：引擎把补丁层当 YAML 解析（任何缩进都合法），市场
+ * 自己的解析器也与缩进无关。旧实现只认 `^ {4}- id:`，于是 2 / 6 空格缩进的插件
+ * 一个 row id 都取不到——setPluginEnabled 只写了市场 state.json 就返回成功，
+ * 设置窗口显示「已禁用」，引擎却照常加载这个插件（正是「显示禁用但还在跑」的
+ * 根因）。
+ *
+ * 只取 `insert:` 块里的行：补丁里还有「重配邻居」的行（如顶层 `- id: llm-pi-ai`），
+ * 把 `disabled: true` 写到那类行上会连带打掉邻居功能（市场 #147 的教训）。
+ */
+function insertRowIdsInText(text) {
+  const ids = new Set();
+  let insertIndent = null;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    // 注释 / 空行不改变 YAML 结构，也不结束 insert 块。
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const open = INSERT_KEY_RE.exec(line);
+    if (open) {
+      insertIndent = open[1].length;
+      continue;
+    }
+    if (insertIndent === null) continue;
+    const indent = /^[ \t]*/.exec(line)[0].length;
+    // 缩进回到 `- insert:` 同一层（或更浅）= 下一个条目，insert 块到此结束。
+    if (indent <= insertIndent) {
+      insertIndent = null;
+      continue;
+    }
+    const m = INSERT_ROW_ID_RE.exec(line);
+    if (m) ids.add(m[3]);
+  }
+  return ids;
 }
 
 /**
  * 某个已装包在补丁层里占用的 row id：它自己 `insert:` 的行。
  * 只取该包插入的行——补丁里还可能包含「重配邻居」的行（如某个 bundle 调
  * attachment-local 的 config），把 `disabled: true` 写到那类行上会连带打掉
- * 邻居功能（市场 #147 的教训）。声明位置（dsh.bundle.patch）与约定位置
- * （包根 cordis.patch.yml）都读。
+ * 邻居功能（市场 #147 的教训）。
+ *
+ * 只读**引擎真正会加载的那一个**补丁文件，且必须落在包目录内：
+ *   - `dsh.bundle.patch` 来自第三方 package.json，可以写 `../../..` 指到别的文件
+ *     （实测可用它把 `webserver`/`modules` 之类引擎行的 id 认领成自己的，随后被 GUI
+ *     名正言顺地 disable）；越界一律忽略。
+ *   - 引擎只加载 `join(packageDir, declared)`。包根再放一个**未被声明**的
+ *     `cordis.patch.yml` 对引擎是不可见的；GUI 若也去读它，等于任何包都能凭一个没人
+ *     加载的文件认领任意 row id（实测能拿到引擎的 `session`）。所以声明了什么就读什么，
+ *     只有在**没有声明**时才退回约定文件名 —— 那正是引擎自己的规则。
  */
 function packageRowIds(dshHome, pkg) {
   const ids = new Set();
   const pkgDir = path.join(profileDir(dshHome), "node_modules", pkg);
   const collect = (patchFile) => {
-    const text = readPatchText(patchFile);
-    if (text === "") return;
-    let inInsert = false;
-    for (const line of text.split(/\r?\n/)) {
-      if (/^- insert:\s*$/.test(line)) {
-        inInsert = true;
-        continue;
-      }
-      if (/^- /.test(line)) inInsert = false;
-      if (!inInsert) continue;
-      const m = /^ {4}- id: (['"]?)([A-Za-z0-9_.-]+)\1\s*$/.exec(line);
-      if (m) ids.add(m[2]);
-    }
+    if (patchFile === null) return;
+    for (const id of insertRowIdsInText(readPatchText(patchFile))) ids.add(id);
   };
+  /** 解析后的路径必须仍在包目录内（相对、非空、不以 .. 开头）。 */
+  const contained = (target) => {
+    const rel = path.relative(pkgDir, target);
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  let declared = null;
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
-    const declared = manifest?.dsh?.bundle?.patch;
-    if (typeof declared === "string" && declared !== "") collect(path.join(pkgDir, declared));
+    const value = manifest?.dsh?.bundle?.patch;
+    if (typeof value === "string" && value !== "") declared = value;
   } catch {
     /* 包未安装：没有可归属的行 */
   }
+  if (declared !== null) {
+    const resolved = path.resolve(pkgDir, declared);
+    // 越界：不读、不认领任何 row id（调用方只会看到「这个包没有可归属的行」）。
+    if (contained(resolved)) collect(resolved);
+    return [...ids];
+  }
   collect(path.join(pkgDir, "cordis.patch.yml"));
   return [...ids];
+}
+
+/**
+ * profile node_modules 下声明了 `dsh.bundle.patch` 的包名（直接子目录 + @scope/name）。
+ * 市场手装的插件不在 CATALOG 里，只能从目录里扫出来——归属校验必须看得见它们。
+ */
+function declaredPatchPackages(dshHome) {
+  const names = [];
+  const modulesRoot = path.join(profileDir(dshHome), "node_modules");
+  let entries;
+  try {
+    entries = fs.readdirSync(modulesRoot, { withFileTypes: true });
+  } catch {
+    return names; // 还没有 node_modules：没有别的包
+  }
+  const consider = (dir, name) => {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+      if (typeof manifest?.dsh?.bundle?.patch === "string" && manifest.dsh.bundle.patch !== "") {
+        names.push(name);
+      }
+    } catch {
+      /* 没有可读 package.json 的目录不是包 */
+    }
+  };
+  for (const entry of entries) {
+    // `isDirectory()` 对 symlink/junction 是 false —— 而 pnpm 的非 hoisted 布局、`link:`/`file:`
+    // 依赖、开发期软链都属于这种。归属校验若看不见它们，一个共享同一 row id 的软链包就会被
+    // 静默一并禁用。这里改成跟随链接的 statSync 判断。
+    const isDirOrLink = entry.isDirectory() || entry.isSymbolicLink();
+    if (!isDirOrLink || entry.name.startsWith(".")) continue;
+    if (entry.isSymbolicLink()) {
+      try {
+        if (!fs.statSync(path.join(modulesRoot, entry.name)).isDirectory()) continue;
+      } catch {
+        continue; // 断链
+      }
+    }
+    const dir = path.join(modulesRoot, entry.name);
+    if (!entry.name.startsWith("@")) {
+      consider(dir, entry.name);
+      continue;
+    }
+    let scoped = [];
+    try {
+      scoped = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      scoped = [];
+    }
+    for (const sub of scoped) {
+      if (sub.isDirectory()) consider(path.join(dir, sub.name), `${entry.name}/${sub.name}`);
+    }
+  }
+  return names;
+}
+
+/**
+ * 该 row id 是否被**别的**已装 bundle 的 `insert:` 也声明了。
+ *
+ * 为什么必须拦：cordis 按 row id 合并补丁层，禁用写的是 `- id: X`，命中的是 id
+ * 本身而不是「谁的哪一行」。两个 bundle 都 insert 同一个 id 时，写下去会顺手关掉
+ * 另一个插件的功能，而设置窗口还以为只关了自己那个（市场 #147 是同一类事故）。
+ * 宁可拒绝并让界面报失败，也不能静默改写别人的行。
+ *
+ * 候选来源两个都要看：CATALOG 里已装的条目，以及 profile node_modules 下所有
+ * 声明了 `dsh.bundle.patch` 的包（市场手装的插件不在目录里）。
+ * @returns {string|null} 冲突方的包名（没有冲突返回 null）
+ */
+function foreignRowIdOwner(dshHome, pkg, rowId) {
+  const bundles = new Set(installedBundles(dshHome));
+  const candidates = new Set(declaredPatchPackages(dshHome));
+  for (const entry of CATALOG) if (bundles.has(entry.pkg)) candidates.add(entry.pkg);
+  for (const name of candidates) {
+    if (name === pkg) continue;
+    if (packageRowIds(dshHome, name).includes(rowId)) return name;
+  }
+  return null;
+}
+
+/**
+ * 禁用某个 row id 前必须拒绝的情形；可以写时返回 null。
+ * 拒绝原因原样交给设置窗口（main.js 把它放进 error 字段，界面显示「失败：…」）。
+ */
+function disableRefusalReason(dshHome, pkg, rowId) {
+  if (PROTECTED_ROW_IDS.has(rowId)) {
+    return `row "${rowId}" belongs to the engine and cannot be disabled`;
+  }
+  const owner = foreignRowIdOwner(dshHome, pkg, rowId);
+  if (owner) {
+    return `row "${rowId}" is also inserted by "${owner}"; disabling it would turn that plugin off`;
+  }
+  return null;
 }
 
 function rowBlock(rowId, disabled) {
@@ -487,28 +690,224 @@ function withPlaceholderRestored(text) {
 }
 
 /**
- * 追加一条顶层补丁项；文件不是合法条目列表时**拒绝写入**（拒绝本身就是保护：
- * 已经写坏的补丁层绝不能被弄得更坏）。
+ * 补丁层写入队列（按文件路径）：每次改动都是一次「读全文 → 改 → 写回」，两次改动
+ * 交错时后写的一方会拿自己读到的旧快照覆盖前一方刚写下的行（禁用行被抹掉，引擎照
+ * 常加载）。同步入口（setPluginEnabled / removePatchRows）在一次调用里读完改完写
+ * 完、不向事件循环让出，天然互斥；**异步**入口（启动维护、旧插件迁移这类 await
+ * 之间会回到事件循环的路径）必须经这里排队，才彼此不交错。
  */
-function appendPatchEntry(patchPath, block) {
-  const text = readPatchText(patchPath);
-  const core = text.trim();
-  if (core === "") {
-    fs.writeFileSync(patchPath, block);
-    return { ok: true, reason: null };
+const patchWriteQueues = new Map();
+
+/** 同步睡眠（Atomics.wait 阻塞线程、不空转 CPU）。 */
+function sleepSync(ms) {
+  if (typeof SharedArrayBuffer !== "function") return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * 跨进程互斥：`<patch>.lock` 用 `wx` 独占创建。
+ *
+ * 进程内的 promise 队列挡不住**另一个 GUI 进程**（更挡不住插件市场在引擎进程里的写入）：
+ * 两边各自「读—改—写」，后写的一方用自己那份**陈旧快照**覆盖，先写的行就没了 —— 实测
+ * 3 进程 × 40 行会丢 17–28 行，而调用还返回 ok:true。所以整段读改写必须在锁里完成。
+ * 锁是同步的（调用方按同步契约使用 setPluginEnabled），因此用 Atomics.wait 等待。
+ * 锁文件超过 10 秒视为持有者已崩溃，强删重试。
+ */
+function withPatchLock(patchPath, task) {
+  const lockPath = `${patchPath}.lock`;
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        return task();
+      } finally {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* 已关闭 */
+        }
+        try {
+          fs.rmSync(lockPath, { force: true });
+        } catch {
+          /* 释放尽力而为 */
+        }
+      }
+    } catch (error) {
+      if ((error && error.code) !== "EEXIST") {
+        return { ok: false, reason: `patch layer lock failed: ${(error && error.message) || error}` };
+      }
+      try {
+        const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+        if (age > 10_000) {
+          fs.rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch {
+        continue; // 锁刚好被释放
+      }
+      if (Date.now() > deadline) return { ok: false, reason: "patch layer is locked by another writer" };
+      sleepSync(25);
+    }
   }
+}
+
+/** 排队执行一次补丁层改动；前一个任务失败不挡住后一个（失败由它自己的返回值报告）。 */
+function queuePatchMutation(patchPath, task) {
+  const previous = patchWriteQueues.get(patchPath) ?? Promise.resolve();
+  const result = previous.then(task, task);
+  const tail = result.then(() => {}, () => {});
+  patchWriteQueues.set(patchPath, tail);
+  tail.then(() => {
+    if (patchWriteQueues.get(patchPath) === tail) patchWriteQueues.delete(patchPath);
+  });
+  return result;
+}
+
+/**
+ * 廉价结构检查：文本还是不是一份「顶层条目列表」——补丁层的合法形状。
+ *
+ * 不是这个形状（空文件、纯注释、被截断成半行、顶层流式 `{...}`）时 dsh 会直接
+ * 拒绝启动该 profile，所以每次写回后都要再读一遍确认形状没坏。规则：顶层只能是
+ * `- ...` 条目（模板的空占位 `[]` 也算），缩进行必须落在某个条目内部，注释 / 空行
+ * 不改变结构。
+ */
+function isTopLevelEntryList(text) {
+  let started = false;
+  let inEntry = false;
+  let sawPlaceholder = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    if (/^[ \t]/.test(line)) {
+      if (!inEntry) return false; // 缩进行必须属于前面那个顶层条目
+      // 缩进行必须是 YAML 的映射项（`key:`）或序列项（`- `）。这能挡住「顶层条目 +
+      // 一段垃圾缩进」（如 `  <<< not yaml`）被判为合法 —— 那种层引擎解析会直接失败。
+      if (!/^[ \t]*(?:-[ \t]|-[ \t]*$|[^\s#][^:]*:)/.test(line)) return false;
+      continue;
+    }
+    if (sawPlaceholder) return false; // 空占位 `[]` 只能单独出现，其后再有内容就是两个顶层节点
+    if (!started && !inEntry && (trimmed === "---" || trimmed.startsWith("%"))) continue; // 文档起始标记 / YAML 指令
+    if (trimmed === "[]" || trimmed === "[ ]") {
+      if (started || inEntry) return false;
+      started = true;
+      sawPlaceholder = true;
+      continue;
+    }
+    if (trimmed === "-" || trimmed.startsWith("- ")) {
+      started = true;
+      inEntry = true;
+      continue;
+    }
+    return false; // 顶层出现了非条目内容
+  }
+  return started;
+}
+
+/**
+ * 补丁层的「读—改—写」事务：先写临时文件再 rename（与 writeProfileManifest 同一
+ * 套路），中途崩溃只会留下临时文件，绝不会留下被截断的 cordis.patch.yml。
+ *
+ * 写完后再读一遍做结构检查；形状不对（磁盘写坏、外部程序同时改写）就把改动前的
+ * 字节还原回去再报失败——宁可这次改动没生效，也不能把一份能启动的补丁层换成不能
+ * 启动的（写坏的补丁层会让整个 profile 起不来，比这次改动失败严重得多）。
+ *
+ * @param {string} patchPath
+ * @param {(text: string) => {ok: boolean, text?: string, reason?: (string|null)}} transform
+ *   纯函数：拿当前文本算出新文本（与原文相同则不落盘），或返回拒绝原因。
+ * @returns {{ok:boolean, reason:(string|null)}}
+ */
+function mutatePatchFile(patchPath, transform) {
+  // 整段读改写都在跨进程锁里（见 withPatchLock）：只有「写后校验」是不够的 —— 别的进程
+  // 可以在我们校验通过之后用它的旧快照覆盖掉我们写的那一行。
+  return withPatchLock(patchPath, () => mutatePatchFileLocked(patchPath, transform));
+}
+
+function mutatePatchFileLocked(patchPath, transform, attempt = 0) {
+  let previous = null;
+  let existed = false;
+  try {
+    previous = fs.readFileSync(patchPath);
+    existed = true;
+  } catch (error) {
+    // 只有 ENOENT 才是「文件还不存在」。EACCES/EBUSY/EISDIR 之类若也当成不存在，变换就会
+    // 在空文本上跑、写回时把**整层补丁**（别的插件的行、引擎行的覆盖）替换掉，而且形状
+    // 检查还会通过（新内容本身是合法列表）→ 返回 ok:true。
+    if ((error && error.code) === "ENOENT") {
+      previous = null;
+    } else {
+      return { ok: false, reason: `patch layer unreadable: ${(error && error.message) || error}` };
+    }
+  }
+  const text = previous === null ? "" : previous.toString("utf8").replace(/^\uFEFF/, "");
+  let plan;
+  try {
+    plan = transform(text);
+  } catch (error) {
+    return { ok: false, reason: `patch layer transform failed: ${(error && error.message) || error}` };
+  }
+  if (!plan || !plan.ok) return { ok: false, reason: (plan && plan.reason) || "patch layer write refused" };
+  if (plan.text === undefined || plan.text === text) return { ok: true, reason: null };
+  // 唯一临时名：固定 `<file>.tmp` 会被同机另一个写者（插件市场在引擎进程里写同一个文件）
+  // 抢用——一方 rename 之后发布的是**另一方的字节**，而那份文本同样是合法条目列表，形状
+  // 检查根本发现不了，于是「丢了行」还会报 ok:true。
+  const tmp = `${patchPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(tmp, plan.text);
+    fs.renameSync(tmp, patchPath);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* 临时文件清理尽力而为 */
+    }
+    return { ok: false, reason: `patch layer write failed: ${(error && error.message) || error}` };
+  }
+  const after = readPatchText(patchPath);
+  // 内容必须**正是我们写的那份**：插件市场在引擎进程里也写这个文件（它不走我们的锁），
+  // 它的快照同样是合法条目列表、但少了我们这行。这种情况重来一次（读它的新文本再改），
+  // 连续失手才如实报失败 —— 绝不让界面显示成「已禁用」而磁盘上没有那一行。
+  if (after !== plan.text) {
+    if (attempt < 2) return mutatePatchFileLocked(patchPath, transform, attempt + 1);
+    return { ok: false, reason: "patch layer was rewritten concurrently; the change did not stick" };
+  }
+  // 形状不对：回滚并报失败。这里**不能**重试 —— 重试会在「已写进去的坏文本」上重算，
+  // 看到目标行已存在而返回 ok:true，把形状损坏掩盖掉。
+  if (isTopLevelEntryList(after)) return { ok: true, reason: null };
+  try {
+    if (!existed) fs.rmSync(patchPath, { force: true });
+    else {
+      fs.writeFileSync(tmp, previous);
+      fs.renameSync(tmp, patchPath);
+    }
+  } catch {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* 还原失败：仍按失败上报，界面不会显示成「已禁用」 */
+    }
+  }
+  return { ok: false, reason: "patch layer is not a top-level entry list after the write; reverted" };
+}
+
+/**
+ * 追加一条顶层补丁项后的文本；文件不是合法条目列表时**拒绝写入**（拒绝本身就是
+ * 保护：已经写坏的补丁层绝不能被弄得更坏）。纯函数，供 disable/enable 在同一个
+ * 读—改—写里复用。
+ */
+function appendPatchEntryText(text, block) {
+  const core = text.trim();
+  if (core === "") return { ok: true, text: block };
   const withoutComments = text.replace(/^[ \t]*#.*$/gmu, "").trim();
   if (withoutComments === "") {
     const next = text.endsWith("\n") ? text : `${text}\n`;
-    fs.writeFileSync(patchPath, `${next}${block}`);
-    return { ok: true, reason: null };
+    return { ok: true, text: `${next}${block}` };
   }
   if (withoutComments === "[]" || withoutComments === "[ ]") {
     // dsh 模板自带一个空的 `[]` 占位；直接往后追加会得到两个顶层元素。
     const commented = text.replace(/^[ \t]*\[[ \t]*\][ \t]*(?:#.*)?(?:\r?\n|$)/mu, "# []\n");
     const next = commented.endsWith("\n") ? commented : `${commented}\n`;
-    fs.writeFileSync(patchPath, `${next}${block}`);
-    return { ok: true, reason: null };
+    return { ok: true, text: `${next}${block}` };
   }
   const lastContentLine =
     text
@@ -520,44 +919,50 @@ function appendPatchEntry(patchPath, block) {
     return { ok: false, reason: "patch layer ends in a top-level flow structure" };
   }
   const next = text.endsWith("\n") ? text : `${text}\n`;
-  fs.writeFileSync(patchPath, `${next}${block}`);
-  return { ok: true, reason: null };
+  return { ok: true, text: `${next}${block}` };
 }
 
-/** 禁用一行：追加 `- id: X` + `disabled: true`（幂等）。 */
+/** 禁用一行：追加 `- id: X` + `disabled: true`（幂等：同一份读—改—写里判重）。 */
 function disablePatchRow(patchPath, rowId) {
   if (!ROW_ID_RE.test(rowId)) return { ok: false, reason: `row id cannot be written: ${rowId}` };
-  if (readPatchFileState(patchPath).disables.has(rowId)) return { ok: true, reason: null };
-  return appendPatchEntry(patchPath, rowBlock(rowId, true));
+  return mutatePatchFile(patchPath, (text) => {
+    const state = patchTextState(text);
+    if (state.disables.has(rowId)) return { ok: true, text };
+    // 已经有一行 `disabled: false`（市场只禁用、GUI 启用过）→ 就地翻转那一行。
+    // 旧写法会再 append 一行 `disabled: true`，同一 id 两行，生效结果取决于引擎的合并顺序。
+    if (state.forced.has(rowId)) {
+      const forcedRe = new RegExp(
+        `^([ \\t]*)- id: ['"]?${escapeRegExp(rowId)}['"]?[ \\t]*(?:#.*)?\\r?\\n([ \\t]*)disabled:[ \\t]*false[ \\t]*(?:#.*)?$`,
+        "mu",
+      );
+      if (forcedRe.test(text)) {
+        return {
+          ok: true,
+          text: text.replace(forcedRe, (_m, idIndent, disabledIndent) => `${idIndent}- id: ${rowId}\n${disabledIndent}disabled: true`),
+        };
+      }
+    }
+    return appendPatchEntryText(text, rowBlock(rowId, true));
+  });
 }
 
 /** 启用一行：删掉 `disabled: true` 块；被下层按住时写 `disabled: false` 强制启用。 */
 function enablePatchRow(patchPath, rowId) {
   if (!ROW_ID_RE.test(rowId)) return { ok: false, reason: `row id cannot be written: ${rowId}` };
-  const text = readPatchText(patchPath);
-  const blockRe = new RegExp(`^- id: ['"]?${escapeRegExp(rowId)}['"]?\\r?\\n  disabled: true\\r?\\n`, "mu");
-  if (blockRe.test(text)) {
-    fs.writeFileSync(patchPath, withPlaceholderRestored(text.replace(blockRe, "")));
-    return { ok: true, reason: null };
-  }
-  if (readPatchFileState(patchPath).forced.has(rowId)) return { ok: true, reason: null };
-  return appendPatchEntry(patchPath, rowBlock(rowId, false));
-}
-
-/** 补丁层某文件的 disables/forced 集合（按路径，供写入函数内部用）。 */
-function readPatchFileState(patchPath) {
-  const disables = new Set();
-  const forced = new Set();
-  const text = readPatchText(patchPath);
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^- id: (['"]?)([A-Za-z0-9_.-]+)\1\s*$/.exec(lines[i]);
-    if (!m) continue;
-    const next = lines[i + 1] ?? "";
-    if (/^ {2}disabled: true\s*$/.test(next)) disables.add(m[2]);
-    else if (/^ {2}disabled: false\s*$/.test(next)) forced.add(m[2]);
-  }
-  return { disables, forced };
+  return mutatePatchFile(patchPath, (text) => {
+    // 缩进不敏感 + 全局替换：旧写法要求恰好 `- id: x\n  disabled: true\n`（列 0、两空格、
+    // 结尾换行），任何一处不同都会走到下面的 append，于是同一 id 留下两行；`replace`
+    // 不带 g 时，重复块也只删掉一半。
+    const blockRe = new RegExp(
+      `^([ \\t]*)- id: ['"]?${escapeRegExp(rowId)}['"]?[ \\t]*(?:#.*)?\\r?\\n[ \\t]*disabled:[ \\t]*true[ \\t]*(?:#.*)?\\r?\\n`,
+      "gmu",
+    );
+    if (blockRe.test(text)) {
+      return { ok: true, text: withPlaceholderRestored(text.replace(blockRe, "")) };
+    }
+    if (patchTextState(text).forced.has(rowId)) return { ok: true, text };
+    return appendPatchEntryText(text, rowBlock(rowId, false));
+  });
 }
 
 function escapeRegExp(value) {
@@ -590,16 +995,28 @@ function writeMarketDisabled(dshHome, nextDisabled) {
 /**
  * 设置某个插件的启用/禁用（写补丁层 + 同步市场 state.json）。
  *
+ * 禁用前先做归属校验（见 disableRefusalReason）：row id 属于引擎或别的插件时
+ * **拒绝**并且什么都不写（连市场 state.json 也不动），返回 `ok:false` + 原因，
+ * 让设置窗口报失败——写下去只会造成「界面说已禁用、引擎照常加载」或「顺手关掉
+ * 别人的功能」。
+ *
  * @param {object} o
  * @param {string} o.dshHome
  * @param {string} o.pkg     包名（市场 state.json 的键）
  * @param {string[]} o.rowIds 该包在补丁层占用的 row id（packageRowIds 的结果）
  * @param {boolean} o.enabled
  * @returns {{ok:boolean, changed:boolean, patchOk:boolean, reason:(string|null)}}
+ *   ok:false 表示被拒绝 / 写入失败，reason 是人类可读的原因。
  */
 function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
   const patchPath = userPatchPath(dshHome);
   const ids = Array.isArray(rowIds) && rowIds.length ? rowIds : [];
+  if (!enabled) {
+    for (const rowId of ids) {
+      const refusal = disableRefusalReason(dshHome, pkg, rowId);
+      if (refusal) return { ok: false, changed: false, patchOk: false, reason: refusal };
+    }
+  }
   let patchOk = true;
   let reason = null;
   for (const rowId of ids) {
@@ -611,12 +1028,46 @@ function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
   }
   // 市场 state.json 只对**已装且有 row id** 的包有意义；client-only 包没有 row
   // id，市场本身就靠 state.json 覆盖，这时也照写。
+  //
+  // 但补丁层写失败时**不能**去翻这个状态：那样磁盘上是「补丁层没改、state.json 说已禁用」，
+  // 界面与市场都会显示「已禁用（插件市场）」而引擎照旧加载 —— 正是本模块要消除的那个漂移。
+  // 写失败就只报失败，durable state 保持原样（用户重试即可）。
+  if (!patchOk) return { ok: false, changed: false, patchOk: false, reason };
   const marketDisabled = readMarketDisabled(dshHome);
   const next = new Set(marketDisabled);
   if (enabled) next.delete(pkg);
   else next.add(pkg);
-  const marketChanged = writeMarketDisabled(dshHome, [...next]);
-  return { ok: patchOk, changed: patchOk || marketChanged, patchOk, reason };
+  writeMarketDisabled(dshHome, [...next]);
+  return { ok: true, changed: true, patchOk: true, reason: null };
+}
+
+/**
+ * 某个目录条目是否带**页面半边**（package.json 的 `dsh.client`）。
+ *
+ * 这个事实决定了「启用 / 禁用」之后还需不需要刷新 Harness 页面：
+ *   - 引擎的 live 补丁重载只重放启动时捕获的 bundle 补丁 + 实时补丁文件，
+ *     所以宿主半边随补丁层即时挂载/卸载；
+ *   - 但页面里**已经加载**的客户端 bundle 不会自己出现或消失，启用/禁用后
+ *     那一半要刷新页面才同步（GUI 会在市场返回 refresh 时给出「刷新页面」按钮）。
+ *
+ * 已装 → 读 profile node_modules 里的真实 package.json；未装但带 localSource
+ * → 读仓库内的源；npm 条目未安装时无从判断，返回 null（界面只陈述引擎侧规则）。
+ * @returns {boolean|null}
+ */
+function pluginHasClientHalf(dshHome, entry) {
+  const candidates = [
+    path.join(profileDir(dshHome), "node_modules", entry.pkg, "package.json"),
+    entry.localSource ? path.join(bundledPluginsRoot(), entry.localSource, "package.json") : null,
+  ].filter((file) => typeof file === "string");
+  for (const file of candidates) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      return manifest?.dsh?.client !== undefined && manifest?.dsh?.client !== null;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
 }
 
 /** 每个候选目录项的已装 / 启用状态：bundles 登记 + 实存 + 补丁层/市场禁用。 */
@@ -659,6 +1110,8 @@ function catalogStatus(dshHome) {
       marketDisabled: byMarket,
       patchDisabled: byPatch,
       rowIds,
+      // 是否含页面半边 → 决定「启用/禁用后是否还需刷新页面」（见该函数注释）。
+      client: pluginHasClientHalf(dshHome, entry),
     };
   }
   return out;
@@ -691,7 +1144,10 @@ async function copyDirRecursive(src, dst) {
   for (const name of names) {
     const from = path.join(src, name);
     const to = path.join(dst, name);
-    const st = await fsp.stat(from);
+    // lstat（不跟随链接）：`stat` 会把捆绑插件源码树里的 junction/软链指向的外部内容
+    // 一起拷进将要安装的包里（实测能把仓库外的文件复制进来）。链接一律跳过。
+    const st = await fsp.lstat(from);
+    if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) await copyDirRecursive(from, to);
     else await fsp.writeFile(to, await fsp.readFile(from));
   }
@@ -742,10 +1198,10 @@ async function stageBundledPlugin(entry, { stagingRoot, log = () => {} }) {
     throw new Error(`bundled plugin name mismatch: ${sourceDir} is "${sourceName}", expected "${name}"`);
   }
   const stagingDir = path.join(stagingRoot, name);
-  if (/\s/u.test(stagingDir)) {
+  if (/[\s"&|^%!<>]/u.test(stagingDir)) {
     throw new Error(
-      `bundled plugin staging path contains a space (${stagingDir}); pnpm cannot install ` +
-        "file: specs with spaces through the engine — use a space-free stagingRoot",
+      `bundled plugin staging path contains characters the engine's shell cannot carry (${stagingDir}); ` +
+        "use a stagingRoot without spaces or cmd metacharacters",
     );
   }
   await fsp.rm(stagingDir, { recursive: true, force: true });
@@ -790,11 +1246,19 @@ function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = ()
   });
 }
 
-/** 安装单个包（幂等：已在 bundles 则跳过）。`pkg` 是给 pnpm 的安装 spec。 */
+/** 安装单个包（幂等：已在 bundles **且确实落地**则跳过）。`pkg` 是给 pnpm 的安装 spec。 */
 async function installPlugin({ engineDir, dshHome, pnpmBinDir, pkg, name, nodeExec, log = () => {} }) {
-  if (installedBundles(dshHome).includes(name ?? pkg)) {
-    log("plugin already installed:", name ?? pkg);
-    return { ok: true, already: true };
+  const target = name ?? pkg;
+  if (installedBundles(dshHome).includes(target)) {
+    // 「登记在 bundles 里」不等于「装好了」：登记还在、node_modules 的拷贝却被删掉时，早退
+    // 会让调用方拿到「什么都没装、也没有错误」→ 界面显示 `失败：?`，点多少次都不修复（只有
+    // 下次引擎启动的 heal 才会补）。这里要求落地文件确实存在，否则继续走安装。
+    const materialised = fs.existsSync(path.join(profileDir(dshHome), "node_modules", target, "package.json"));
+    if (materialised) {
+      log("plugin already installed:", target);
+      return { ok: true, already: true };
+    }
+    log("plugin is registered but missing on disk; reinstalling:", target);
   }
   const res = await runDshPlugin({ engineDir, dshHome, pnpmBinDir, args: ["add", pkg], nodeExec, log });
   if (!res.ok) log("plugin install failed:", pkg, res.output);
@@ -889,21 +1353,23 @@ const LEGACY_PLUGIN_PKGS = [
 function removePatchRows(dshHome, rowIds) {
   if (!Array.isArray(rowIds) || rowIds.length === 0) return [];
   const patchPath = userPatchPath(dshHome);
-  let text = readPatchText(patchPath);
-  if (text.trim() === "") return [];
   const removed = [];
-  for (const rowId of rowIds) {
-    if (!ROW_ID_RE.test(rowId)) continue;
-    const blockRe = new RegExp(
-      `^- id: ['"]?${escapeRegExp(rowId)}['"]?\\r?\\n  disabled: (?:true|false)\\r?\\n`,
-      "mu",
-    );
-    if (!blockRe.test(text)) continue;
-    text = text.replace(blockRe, "");
-    removed.push(rowId);
-  }
-  if (removed.length > 0) fs.writeFileSync(patchPath, withPlaceholderRestored(text));
-  return removed;
+  const res = mutatePatchFile(patchPath, (text) => {
+    let next = text;
+    for (const rowId of rowIds) {
+      if (!ROW_ID_RE.test(rowId)) continue;
+      const blockRe = new RegExp(
+        `^- id: ['"]?${escapeRegExp(rowId)}['"]?\\r?\\n  disabled: (?:true|false)\\r?\\n`,
+        "mu",
+      );
+      if (!blockRe.test(next)) continue;
+      next = next.replace(blockRe, "");
+      removed.push(rowId);
+    }
+    return removed.length > 0 ? { ok: true, text: withPlaceholderRestored(next) } : { ok: true, text };
+  });
+  // 被拒 / 写后校验失败 = 什么都没落地：报「没摘掉」，不能假成功。
+  return res.ok ? removed : [];
 }
 
 /**
@@ -939,7 +1405,11 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
 
     // 补丁层与市场状态即使包已不在 bundles 里也可能残留，因此独立清理。
     try {
-      const removedRows = removePatchRows(dshHome, legacy.rowIds);
+      // 经补丁层写入队列：启动维护是异步路径（await 之间会回到事件循环），与
+      // 其它异步改动排队后才不会互相覆盖。
+      const removedRows = await queuePatchMutation(userPatchPath(dshHome), () =>
+        removePatchRows(dshHome, legacy.rowIds),
+      );
       if (removedRows.length > 0) {
         result.removedRows.push(...removedRows);
         result.changed = true;
@@ -1176,7 +1646,19 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
 
   if (changed) {
     try {
-      writeProfileManifest(dshHome, manifest);
+      // 写之前**重读**：这份 manifest 是在若干次 `await`（pnpm 自举、`dsh plugin install`）
+      // 之前读的，而启动维护与「修复 / 重试」是两条独立的异步路径，各自都持有旧快照 ——
+      // 直接写回会把对方刚写进去的 bundles/dependencies 覆盖掉（刚装/刚卸的插件被悄悄还原）。
+      // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖）应用到**最新**的清单上。
+      const fresh = readProfileManifest(dshHome);
+      const target = fresh ?? manifest;
+      if (fresh) {
+        const currentBundles = Array.isArray(fresh.dsh?.profile?.bundles) ? fresh.dsh.profile.bundles : [];
+        fresh.dsh = fresh.dsh ?? {};
+        fresh.dsh.profile = fresh.dsh.profile ?? {};
+        fresh.dsh.profile.bundles = currentBundles.filter((name) => !pruneList.includes(name));
+      }
+      writeProfileManifest(dshHome, target);
       result.changed = true;
     } catch (error) {
       result.errors.push(`write profile manifest: ${(error && error.message) || error}`);
@@ -1307,8 +1789,18 @@ async function syncEnabledPlugins({
     if (has && entry.localSource) {
       const sourceVersion = readPackageVersion(bundledSourceDir(entry));
       const installedVersion = installedBundleVersion(dshHome, name);
-      wantsUpdate = Boolean(sourceVersion && installedVersion && sourceVersion !== installedVersion);
-      if (wantsUpdate) log("bundled plugin version changed:", name, installedVersion, "->", sourceVersion);
+      // 只在**随包版本更新**时重装。`!==` 会让「已装版本比随包新」也触发 remove+add ——
+      // 那是一次无人值守的**降级**（应用回滚过、市场侧更新过、或手工换过更新的副本时都会
+      // 发生）。版本号不可解析时才退回不等式。
+      if (sourceVersion && installedVersion) {
+        const bothValid = semver.valid(sourceVersion) !== null && semver.valid(installedVersion) !== null;
+        wantsUpdate = bothValid ? semver.gt(sourceVersion, installedVersion) : sourceVersion !== installedVersion;
+        if (wantsUpdate) {
+          log("bundled plugin is newer:", name, installedVersion, "->", sourceVersion);
+        } else if (installedVersion !== sourceVersion) {
+          log("keeping the newer installed plugin:", name, installedVersion, "(bundled " + sourceVersion + ")");
+        }
+      }
     }
     if (has && !wantsUpdate) continue;
     try {
@@ -1350,12 +1842,16 @@ async function syncEnabledPlugins({
  * 不动它——那说明 state.json 才是过时的一方。没有 row id 的 client-only 包也
  * 跳过（补丁层无处可写，市场自身靠 state.json 覆盖）。
  *
- * @returns {{healed:string[], changed:boolean}}
+ * 被拒绝的行（引擎行 / 别的插件也 insert 的行）记入 `refused`，绝不当作「已同步」；
+ * 调用方与日志都能看见这次对账没写实。
+ *
+ * @returns {{healed:string[], refused:string[], changed:boolean}}
  */
 function reconcilePluginEnabled({ dshHome, log = () => {} }) {
   const status = catalogStatus(dshHome);
   const patch = readUserPatchState(dshHome);
   const healed = [];
+  const refused = [];
   for (const entry of CATALOG) {
     const st = status[entry.id];
     if (!st || !st.installed) continue;
@@ -1368,10 +1864,12 @@ function reconcilePluginEnabled({ dshHome, log = () => {} }) {
       healed.push(entry.id);
       log("plugin disabled to match marketplace state:", entry.pkg);
     } else if (!res.ok) {
+      // 拒绝（引擎行 / 别人的行 id / 写入失败）：照原样报出来，界面据此显示失败。
+      refused.push(entry.id);
       log("cannot sync disabled state for:", entry.pkg, res.reason ?? "");
     }
   }
-  return { healed, changed: healed.length > 0 };
+  return { healed, refused, changed: healed.length > 0 };
 }
 
 module.exports = {
@@ -1388,6 +1886,7 @@ module.exports = {
   writeProfileManifest,
   installedBundles,
   catalogStatus,
+  pluginHasClientHalf,
   setPluginEnabled,
   reconcilePluginEnabled,
   removeLegacyPlugins,

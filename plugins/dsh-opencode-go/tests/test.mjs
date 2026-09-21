@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { V4_1_MODELS, appendV41Models, headerValueFor, isV41, patchFetch, redactSessionId, withStore } from '../lib/index.js'
+import { V4_1_MODELS, appendV41Models, headerValueFor, isV41, nextV41Models, patchFetch, redactSessionId, withStore } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -153,6 +153,25 @@ check('appendV41Models is a no-op when a v4.1 model is already listed', () => {
     appendV41Models([{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4.1-flash' }]),
     null,
   )
+})
+
+check('nextV41Models only extends a models list the USER configured', () => {
+  // The engine treats a non-empty configured list as the provider's COMPLETE model
+  // set, so writing one where the user had none would replace the whole built-in
+  // catalog with a single model. The decision must therefore read the user layer.
+  assert.equal(nextV41Models(undefined), null, 'route not configured by the user')
+  assert.equal(nextV41Models(null), null)
+  assert.equal(nextV41Models({}), null, 'no models key -> catalog stays authoritative')
+  assert.equal(nextV41Models({ models: [] }), null, 'empty list -> nothing to extend')
+  assert.equal(nextV41Models({ models: 'nope' }), null, 'non-array -> refuse')
+  // a user list is extended, and an existing v4.1 still makes it a no-op
+  const extended = nextV41Models({ models: [{ id: 'deepseek-v4-flash' }] })
+  assert.equal(extended.length, 1 + V4_1_MODELS.length)
+  assert.equal(extended[0].id, 'deepseek-v4-flash')
+  assert.equal(nextV41Models({ models: [{ id: 'deepseek-v4.1-flash' }] }), null)
+  // apiKey/baseUrl siblings are irrelevant to the decision
+  assert.equal(nextV41Models({ apiKeyRef: 'X', models: [{ id: 'deepseek-v4.1-pro' }] }), null)
+  assert.ok(Array.isArray(nextV41Models({ apiKeyRef: 'X', models: [{ id: 'a' }] })))
 })
 
 await Promise.resolve()

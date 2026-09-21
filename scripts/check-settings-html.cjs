@@ -52,13 +52,46 @@ check("启用开关不在安装 <label> 内部（否则点击会连带切换安�
   if (start < 0) throw new Error("renderPlugins not found");
   const end = html.indexOf("\n    }", start);
   const body = html.slice(start, end > 0 ? end : start + 6000);
-  const labelClose = body.indexOf("</span></label>");
-  const enableUse = body.indexOf("enableRow +");
-  if (labelClose < 0) throw new Error("install </label> not found in renderPlugins");
-  if (enableUse < 0) throw new Error("enableRow not interpolated in renderPlugins");
+
+  // Scope the check to the returned markup expression. Comparing raw indices over the
+  // whole function is useless: `enableRow` is a template string built EARLIER in the
+  // body that contains its own literal "</span></label>" (for its own label), so a
+  // naive "index of </label> vs index of enableRow +" comparison holds even when the
+  // enable row is moved inside the install label. Inside `return ( … )` the pieces are
+  // concatenated linearly, so source order really is render order.
+  const returnAt = body.indexOf("return (");
+  if (returnAt < 0) throw new Error("renderPlugins has no `return (` expression");
+  const open = body.indexOf("(", returnAt);
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close < 0) throw new Error("unbalanced parentheses in the render expression");
+  const markup = body.slice(open, close + 1);
+
+  const labelOpen = markup.indexOf("'<label");
+  const labelClose = markup.indexOf("</label>", labelOpen + 1);
+  const enableUse = markup.indexOf("enableRow");
+  if (labelOpen < 0) throw new Error("install <label> not found in the returned markup");
+  if (labelClose < 0) throw new Error("install </label> not found in the returned markup");
+  if (enableUse < 0) throw new Error("enableRow not interpolated in the returned markup");
   if (enableUse < labelClose) {
     throw new Error("enableRow is rendered INSIDE the install label (nested labels toggle the wrong box)");
   }
+  // the toggle itself must exist in the row template (not just be referenced)
+  const templateAt = body.indexOf("const enableRow");
+  if (templateAt < 0) throw new Error("enableRow template not found");
+  const template = body.slice(templateAt, templateAt + 1200);
+  if (!/class="plg-enable"/.test(template)) throw new Error("enableRow template must render the .plg-enable switch");
 });
 
 check("i18n 中英文都有启用/禁用文案", () => {
@@ -86,6 +119,24 @@ check("刷新页面按钮存在、默认隐藏，且由 refresh 信号驱动", (
   // button must call the IPC that reloads the engine window.
   if (!/res\.refresh/.test(html)) throw new Error("the toggle handler must react to res.refresh");
   if (!/reloadEngineWindow/.test(html)) throw new Error("the reload button must call api.reloadEngineWindow");
+});
+
+check("「待重启引擎」标注存在、默认隐藏，且安装与卸载都会标注", () => {
+  const tag = /<span id="restartBadge"[^>]*>/.exec(html);
+  if (!tag) throw new Error("restartBadge span not found in the markup");
+  if (!/\bhidden\b/.test(tag[0])) throw new Error("restartBadge must start hidden");
+  // The label must exist in both language tables.
+  const key = '"settings.plugins.needRestartBadge"';
+  if (html.split(key).length - 1 < 2) throw new Error("needRestartBadge needs a zh and an en string");
+  // One helper owns the badge + button highlight, and BOTH install and uninstall
+  // mark it (both change the bundle list, which the engine composes only at boot).
+  if (!/function markRestartNeeded\(/.test(html)) throw new Error("markRestartNeeded helper missing");
+  if (!/function settleRestartBadge\(/.test(html)) throw new Error("settleRestartBadge helper missing");
+  const marks = html.match(/markRestartNeeded\(true\)/g) || [];
+  if (marks.length < 2) throw new Error("install AND uninstall must both mark the restart badge");
+  if (!/markRestartNeeded\(changed\)/.test(html)) throw new Error("the repair path must follow its own result");
+  if (!/settleRestartBadge\(s\)/.test(html)) throw new Error("paint() must settle the badge when the engine restarted");
+  if (!/\.plg-need-restart/.test(html)) throw new Error("the badge needs its stylesheet rule");
 });
 
 if (failures > 0) {

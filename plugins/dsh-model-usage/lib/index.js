@@ -96,6 +96,63 @@ const LIMITS_FETCH_TIMEOUT_MS = 15000
 /** Cache file name under $DSH_HOME/logs. */
 const LIMITS_CACHE_FILE = 'model-usage-limits.json'
 
+/** 限制表最多解析这么多字符（结束标记存在时也限长，防被塞入超大表格）。 */
+const MAX_LIMITS_TABLE_CHARS = 512 * 1024
+
+/**
+ * 上游响应体上限。不设上限时，被篡改/中间人代理的上游可以让引擎缓冲任意大的响应
+ * （文档页还会进上面的表格解析器），既是 OOM 也是那条回溯路径的放大器。
+ */
+const MAX_UPSTREAM_BYTES = 2 * 1024 * 1024
+
+/**
+ * 读取响应体，超过上限即中止并返回 null（调用方按“拿不到数据”处理）。
+ * @param {Response} res - 上游响应。
+ * @param {number} [maxBytes] - 允许的最大字节数。
+ * @returns {Promise<string|null>} 文本，或 null（超限/读取失败）。
+ */
+async function readBodyCapped(res, maxBytes = MAX_UPSTREAM_BYTES) {
+  const declared = Number(res.headers?.get?.('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) return null
+  const stream = res.body
+  if (stream === null || stream === undefined || typeof stream.getReader !== 'function') {
+    // 简化响应对象（测试替身 / 老运行时）：按可用的读取器退回，但仍检查长度。
+    if (typeof res.text === 'function') {
+      const text = await res.text()
+      return text.length > maxBytes ? null : text
+    }
+    if (typeof res.json === 'function') {
+      const value = await res.json().catch(() => null)
+      return value === null ? null : JSON.stringify(value)
+    }
+    return null
+  }
+  const reader = stream.getReader()
+  const chunks = []
+  let size = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done === true) break
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+  const merged = new Uint8Array(size)
+  let at = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return new TextDecoder().decode(merged)
+}
+
 /**
  * Built-in model id -> monthly limit (USD). Values are the docs' "每月限制"
  * column. The derived 5-hour / weekly caps are 20% / 50% of monthly (docs rule).
@@ -157,13 +214,43 @@ export function parseLimitsTable(html) {
   const out = new Map()
   const head = html.indexOf('每月限制</th></tr>')
   if (head < 0) return out
-  const body = html.slice(head, html.indexOf('</tbody></table>', head))
-  const rowRe = /<tr><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><td>(.*?)<\/td><\/tr>/g
-  for (const m of body.matchAll(rowRe)) {
-    const rawName = m[1].replace(/<[^>]+>/g, '').trim()
+  // 必须先确认结束标记存在：`slice(head, -1)` 在 indexOf 返回 -1 时会把**整篇文档**喂给
+  // 下面的扫描（HTML 里只要表头对上、`</tbody></table>` 的相邻形态一变就会发生）。
+  const end = html.indexOf('</tbody></table>', head)
+  if (end < 0 || end <= head) return out
+  // 再限长：即使结束标记存在，恶意/异常表格也能塞进大量单元格。
+  const body = html.slice(head, Math.min(end, head + MAX_LIMITS_TABLE_CHARS))
+
+  // 手工线性扫描，不用正则：旧的 `/<tr><td>(.*?)<\/td>…×6<\/tr>/g` 在缺少 `</tr>` 的
+  // 表格上会指数级回溯 —— 实测 385 字节即可占用数百毫秒、745 字节可让事件循环卡死
+  // （解析是同步的，且发生在引擎启动时）。这里每个 `<tr>` 只向后找最近的 `</tr>`、
+  // 每个单元格只找最近的 `</td>`，复杂度线性，且单元格里仍可含 `<s>`/`<span>` 等标签
+  // （下面的 `replace(/<[^>]+>/g, '')` 就是为它们准备的）。
+  let at = 0
+  for (;;) {
+    const tr = body.indexOf('<tr>', at)
+    if (tr < 0) break
+    const trClose = body.indexOf('</tr>', tr)
+    if (trClose < 0) break
+    const row = body.slice(tr + 4, trClose)
+    at = trClose + 5
+
+    const cells = []
+    let cellAt = 0
+    while (cells.length < 6) {
+      const td = row.indexOf('<td>', cellAt)
+      if (td < 0) break
+      const tdClose = row.indexOf('</td>', td + 4)
+      if (tdClose < 0) break
+      cells.push(row.slice(td + 4, tdClose))
+      cellAt = tdClose + 5
+    }
+    if (cells.length < 6) continue
+
+    const rawName = cells[0].replace(/<[^>]+>/g, '').trim()
     const base = rawName.replace(/\s*\(.*\)\s*$/u, '').trim()
     if (base === '') continue
-    const cell = m[6].replace(/<[^>]+>/g, ' ').trim()
+    const cell = cells[5].replace(/<[^>]+>/g, ' ').trim()
     const dollars = [...cell.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((x) => Number(x[1]))
     const effective = dollars.length > 0 ? dollars[dollars.length - 1] : null
     if (effective === null || !Number.isFinite(effective) || effective <= 0) continue
@@ -221,6 +308,9 @@ export function deriveLimitTiers(monthly) {
 export function deriveLimits(limits) {
   const out = {}
   for (const [id, monthly] of Object.entries(limits ?? {})) {
+    // 键来自缓存文件，`out['__proto__'] = …` 会走原型 setter（值已过滤为有限正数，
+    // 键没有）—— 这类键直接丢弃，既不产生副作用也不影响任何真实模型 id。
+    if (id === '__proto__' || id === 'constructor' || id === 'prototype') continue
     if (Number.isFinite(monthly) && monthly > 0) out[id] = deriveLimitTiers(monthly)
   }
   return out
@@ -362,7 +452,15 @@ async function upstreamJson({ url, apiKey, fetchImpl, timeoutMs, log, label }) {
         status: res.status,
       }
     }
-    const body = await res.json().catch(() => null)
+    // 限长读取：上游被篡改/代理注入时不能让引擎无上限缓冲。
+    const text = await readBodyCapped(res)
+    if (text === null) return { ok: false, reason: 'bad-payload' }
+    let body = null
+    try {
+      body = JSON.parse(text)
+    } catch {
+      body = null
+    }
     return { ok: true, body }
   } catch (error) {
     const aborted = error?.name === 'AbortError'
@@ -428,7 +526,8 @@ export async function fetchDocsLimits({ url = DOCS_URL, fetchImpl = fetch, timeo
       log('model-usage/limits: docs responded', res.status)
       return { ok: false, reason: res.status === 401 || res.status === 403 ? 'unauthorized' : 'upstream', status: res.status }
     }
-    const html = await res.text()
+    const html = await readBodyCapped(res)
+    if (html === null) return { ok: false, reason: 'bad-payload' }
     const parsed = parseDocsLimits(html)
     if (parsed === null) return { ok: false, reason: 'bad-payload' }
     return { ok: true, ...parsed }
@@ -475,6 +574,36 @@ export function resolveSections(config = {}) {
     }
   }
   return out
+}
+
+/**
+ * The engine's own trust fence for a browser-facing route.
+ *
+ * `ctx.webServer` serves every registered route to ANY caller: the engine's
+ * Host-allowlist + session-cookie gate lives in the RPC channel registrar
+ * (`connection` → `requestRejection`), NOT in `webServer` — the engine's own route
+ * owners therefore consult it first (see @deepseek-ai/dsh-host-open-in-app). Without
+ * this call the route answers a plain local process AND a page that has rebound a
+ * hostname to 127.0.0.1, which is how usage/balance data would leak.
+ *
+ * Fails CLOSED: a web route that cannot verify its caller must not answer.
+ * @param ctx - the plugin context (reads the `connection` service).
+ * @param req - the Node request.
+ * @param res - the Node response.
+ * @returns true when the request was rejected (the response is already ended).
+ */
+export function rejectUntrusted(ctx, req, res) {
+  const connection = ctx?.get?.('connection')
+  if (typeof connection?.requestRejection !== 'function') {
+    res.statusCode = 403
+    res.end('forbidden')
+    return true
+  }
+  const rejection = connection.requestRejection(req)
+  if (rejection === undefined) return false
+  res.statusCode = rejection
+  res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+  return true
 }
 
 export function apply(ctx, config = {}) {
@@ -563,7 +692,9 @@ export function apply(ctx, config = {}) {
     if (cached !== null && typeof cached.fetchedAt === 'string') {
       applyLimits(cached.limits, 'cache', cached.fetchedAt)
       const ageMs = Date.now() - new Date(cached.fetchedAt).getTime()
-      if (Number.isFinite(ageMs) && ageMs < LIMITS_REFRESH_MS) return // fresh enough
+      // 必须要求 ageMs >= 0：时间戳在未来（时钟回拨、或有人手工改了缓存）时年龄是负数，
+      // 单侧比较会把它当成「很新鲜」，于是文档表永远不再刷新。
+      if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < LIMITS_REFRESH_MS) return // fresh enough
     }
     // Stale/no cache: show what we have now, refresh in the background.
     await refreshLimits()
@@ -575,6 +706,13 @@ export function apply(ctx, config = {}) {
       path: ROUTE_PATH,
       handler: async (req, res) => {
         try {
+          // Trust fence FIRST: `ctx.webServer` serves every registered route to any
+          // caller — the engine's Host-allowlist + session-cookie gate lives in the
+          // RPC channel registrar, so a route owner must consult it itself (this is
+          // what @deepseek-ai/dsh-host-open-in-app does). Without it this route
+          // answers a page that has rebound a hostname to 127.0.0.1, handing out
+          // the account's usage and balance.
+          if (rejectUntrusted(ctx, req, res)) return
           if (req.method !== 'GET') {
             res.setHeader('allow', 'GET')
             return sendJson(res, 405, { ok: false, error: 'method not allowed' })

@@ -73,16 +73,29 @@
       margin: 0 0 5px;
     }
     [data-theme="light"] .hint { color: #9aa0a6; }
-    /* 第三方插件行：标题成行、描述最多两行省略、状态更紧凑。 */
+    /* 第三方插件行：标题成行、描述只占一行（全文在悬停提示里）、状态更紧凑。 */
     #pluginList .plg-title { font-weight: 600; }
     #pluginList .plg-desc {
       margin: 0 0 1px;
       display: -webkit-box;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: 1;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
     #pluginList .plg-row { margin: 6px 0 2px; padding-bottom: 4px; }
+    /* 只在该插件确实带页面半边时出现的小标签：通用规则写在段落说明里，避免每行重复一句。 */
+    #pluginList .plg-tag {
+      display: inline-block;
+      margin-left: 5px;
+      padding: 0 5px;
+      border-radius: 6px;
+      border: 1px solid rgba(77, 159, 255, 0.45);
+      color: #4d9fff;
+      font-size: 10px;
+      line-height: 14px;
+      white-space: nowrap;
+      vertical-align: 1px;
+    }
     #checkRow { display: flex; align-items: center; gap: 10px; margin-top: 3px; flex-wrap: wrap; }
     button.dsh-btn {
       font: inherit;
@@ -97,11 +110,12 @@
     }
     [data-theme="light"] button.dsh-btn { border-color: #d0d7de; }
     button.dsh-btn:disabled { opacity: 0.6; cursor: default; }
-    /* 插件有实际变动时的「需重启引擎」提示：高亮重启按钮（不改布局尺寸）。 */
+    /* 插件有实际变动时的「需重启引擎」提示：高亮重启按钮（不改布局尺寸）。
+       持续脉冲（而不是只播两次）——标注要一直醒目到用户真的重启为止。 */
     button.dsh-btn.attn {
       border-color: #4d9fff;
       color: #4d9fff;
-      animation: attnPulse 1.2s ease-in-out 2;
+      animation: attnPulse 1.2s ease-in-out infinite;
     }
     [data-theme="light"] button.dsh-btn.attn { border-color: #2b6fd6; color: #2b6fd6; }
     @keyframes attnPulse {
@@ -110,6 +124,36 @@
     }
     @media (prefers-reduced-motion: reduce) {
       button.dsh-btn.attn { animation: none; }
+    }
+    /* 「待重启引擎」标注：常驻，直到引擎真的重启过。 */
+    .plg-need-restart {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(232, 185, 107, 0.55);
+      background: rgba(232, 185, 107, 0.12);
+      color: #e8b96b;
+      font-size: 11px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+    .plg-need-restart[hidden] { display: none; }
+    .plg-need-restart::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #e8b96b;
+      animation: needRestartDot 1.6s ease-in-out infinite;
+    }
+    @keyframes needRestartDot {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .plg-need-restart::before { animation: none; opacity: 1; }
     }
     #curEngine { font-size: 12px; opacity: 0.8; }
     #saved { color: #4d9fff; font-size: 12px; min-height: 14px; margin-top: 2px; text-align: right; }
@@ -231,6 +275,9 @@
         <button id="btnRestartEngine" type="button" class="dsh-btn">
           <span data-i18n="settings.plugins.restart"></span>
         </button>
+        <!-- 安装/卸载（改 bundle 列表）后必须重启引擎才生效：按钮旁给一个持续可见的
+             「待重启」标注，引擎真的重启过之后自动消失（见 markRestartNeeded）。 -->
+        <span id="restartBadge" class="plg-need-restart" hidden data-i18n="settings.plugins.needRestartBadge"></span>
         <button id="btnReloadPage" type="button" class="dsh-btn attn" hidden>
           <span data-i18n="settings.plugins.reloadPage"></span>
         </button>
@@ -271,7 +318,7 @@
         "settings.update.autoCheck.hint": "启动时与运行中每 30 分钟检查一次；关闭后不查询 registry，直接用本地引擎",
         "settings.update.checkNow": "立即检查引擎更新",
         "settings.plugins": "第三方插件（勾选即安装，取消即卸载）",
-        "settings.plugins.sub": "两个独立状态，都会与 Harness 页面的插件市场实时互相同步：①「安装」勾选框镜像安装/卸载（装了即勾、没装即不勾）；②「启用」开关镜像加载/禁用（关掉不卸载，只是引擎不加载它）。市场里禁用/启用/卸载会立刻反映到这里，这里改动也会写回同一份 profile（补丁层 + 市场状态），两侧显示与设置始终一致。安装需重启引擎后挂载；启用/禁用由引擎热重载，通常无需重启。第三方插件等于以你的权限运行第三方代码——默认关闭，勾选前请自行审阅源码。",
+        "settings.plugins.sub": "两个独立状态，与 Harness 页面的插件市场实时双向同步：①「安装」勾选框镜像安装/卸载；②「启用」开关镜像加载/禁用（关掉不卸载）。生效方式：安装/卸载需重启引擎（bundle 列表只在启动时组装），启用/禁用即时生效（引擎热重载补丁层），带页面半边的插件另需刷新页面——该差异标注在对应行上。第三方插件以你的权限运行第三方代码，默认关闭，勾选前请自行审阅源码。",
         "settings.plugins.installLabel": "安装",
         "settings.plugins.enableLabel": "启用",
         "settings.plugins.enabled": "已启用",
@@ -293,7 +340,8 @@
         "settings.plugins.failed": "失败：{0}",
         "settings.plugins.restart": "重启引擎使生效",
         "settings.plugins.restarting": "正在重启引擎…",
-        "settings.plugins.restartHint": "插件需引擎重启后才会挂载。DSH GUI 里的 dsh 由本程序托管——请用上面按钮（或重启 DSH GUI）重启，不要用 dsh 页面里的重启（那只对页面自身生效）。",
+        "settings.plugins.restartHint": "安装/卸载后用上面的按钮重启引擎（不要用 dsh 页面里的重启，那只对页面自身生效）。",
+        "settings.plugins.needRestartBadge": "待重启引擎",
         "settings.saved": "已保存",
       },
       en: {
@@ -320,7 +368,7 @@
         "settings.update.autoCheck.hint": "Check at launch and every 30 minutes while running; when off, the registry is not queried and the local engine is used",
         "settings.update.checkNow": "Check Engine Update Now",
         "settings.plugins": "Third-party plugins (check = install, uncheck = uninstall)",
-        "settings.plugins.sub": "Two independent states, both kept in sync with the Harness plugin market in real time: (1) the “install” checkbox mirrors install/uninstall (installed → checked); (2) the “enable” toggle mirrors loaded/disabled (turning it off does not uninstall — the engine simply does not load it). Disabling/enabling/uninstalling in the market shows up here immediately, and changes made here are written back to the same profile (patch layer + market state), so both surfaces always agree. Installing needs an engine restart to mount; enabling/disabling hot-reloads and usually needs no restart. Third-party plugins run third-party code with your permissions — off by default; review their source before enabling.",
+        "settings.plugins.sub": "Two independent states, in two-way live sync with the Harness plugin market: (1) the “install” checkbox mirrors install/uninstall; (2) the “enable” toggle mirrors loaded/disabled (off does not uninstall). How each applies: install/uninstall needs an engine restart (the bundle list is assembled only at boot); enable/disable applies immediately (the engine hot-reloads the patch layer); a plugin with a page half also needs a page reload — that difference is tagged on its row. Third-party plugins run third-party code with your permissions — off by default; review their source before enabling.",
         "settings.plugins.installLabel": "Install",
         "settings.plugins.enableLabel": "Enabled",
         "settings.plugins.enabled": "Enabled",
@@ -342,7 +390,8 @@
         "settings.plugins.failed": "Failed: {0}",
         "settings.plugins.restart": "Restart engine to apply",
         "settings.plugins.restarting": "Restarting engine…",
-        "settings.plugins.restartHint": "Plugins are mounted when the engine boots. The dsh inside DSH GUI is hosted by this app — restart it with the button above (or restart DSH GUI); the in-page dsh restart only affects the page itself.",
+        "settings.plugins.restartHint": "After install/uninstall, restart the engine with the button above (the in-page dsh restart only affects the page itself).",
+        "settings.plugins.needRestartBadge": "restart engine",
         "settings.saved": "Saved",
       },
     };
@@ -364,6 +413,10 @@
     function esc(str) {
       return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
+    /** 属性值转义（在 esc 之外还要处理引号，否则描述里的引号会截断属性）。 */
+    function escAttr(str) {
+      return esc(str).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
     function stateText(id, s) {
       const st = (s.pluginStatus || {})[id];
       if (st && st.installed) return (uiLang === "en" ? "Installed v" : "已安装 v") + (st.version || "?");
@@ -376,6 +429,43 @@
       if (st.disabledBy === "patch")
         return uiLang === "en" ? "Disabled (profile patch layer)" : "已禁用（profile 补丁层）";
       return uiLang === "en" ? "Disabled (plugin market)" : "已禁用（插件市场）";
+    }
+
+    // ---- 「待重启引擎」标注 ----------------------------------------------------
+    // 哪些操作需要重启引擎（按引擎实现）：**安装 / 卸载**改的是 profile 的 bundle 列表，
+    // 引擎只在启动时 compose 它，所以必须重启；**启用 / 禁用**写的是补丁层，由引擎 live
+    // 热重载即时生效，不需要重启（含页面半边的插件另需刷新页面，走「刷新页面」按钮）。
+    //
+    // 标注是**常驻**的（按钮持续脉冲 + 旁边一枚「待重启引擎」小标签），直到引擎真的重启过：
+    // 既在点击重启按钮时清除，也在 paint() 里观察到 engineRunning 由 false 变 true 时清除
+    // （用户从托盘/重开应用重启也算）。这样不会出现「提示一闪而过、用户没看见」的情况。
+    let pendingEngineRestart = false;
+    // 只有「先见过引擎在运行」之后观察到的 down 才算一次真正的重启——否则设置窗口
+    // 先于引擎启动完成打开时（engineRunning:false）会被误判，引擎一就绪就把标注清掉。
+    let sawEngineUp = false;
+    let sawEngineDown = false;
+    function markRestartNeeded(needed) {
+      pendingEngineRestart = Boolean(needed);
+      sawEngineDown = false; // 从这一刻起重新观察一次真正的重启
+      const badge = document.getElementById("restartBadge");
+      const btn = document.getElementById("btnRestartEngine");
+      if (badge) badge.hidden = !pendingEngineRestart;
+      if (btn) {
+        if (pendingEngineRestart && !btn.disabled) btn.classList.add("attn");
+        else btn.classList.remove("attn");
+      }
+    }
+    /** 观察到引擎重启过（up → down → up）就撤掉标注。 */
+    function settleRestartBadge(s) {
+      if (!s) return;
+      if (s.engineRunning === true) {
+        if (pendingEngineRestart && sawEngineDown) markRestartNeeded(false);
+        sawEngineUp = true;
+        sawEngineDown = false;
+        return;
+      }
+      // engineRunning !== true：只有在见过引擎运行之后，这才是一次「引擎停了」。
+      if (sawEngineUp) sawEngineDown = true;
     }
     // 两个独立状态，各自镜像各自的真实状态、互不持久化“期望”集合：
     //   - 安装勾选框：装了即勾、没装即不勾 → 勾选立即安装 / 取消立即卸载；
@@ -414,7 +504,7 @@
             ? '<label class="plg-enable-label" style="display:inline-flex;gap:5px;align-items:center;margin:2px 0 0 24px;cursor:' +
               (busy ? "not-allowed" : "pointer") +
               ';">' +
-              '<input type="checkbox" class="plg-enable" data-id="' + esc(entry.id) + '" ' + (enabled ? "checked" : "") +
+              '<input type="checkbox" class="plg-enable" data-id="' + escAttr(entry.id) + '" ' + (enabled ? "checked" : "") +
               (busy ? " disabled" : "") +
               ' style="accent-color:#4d9fff;" />' +
               '<span class="hint" style="margin:0;">' +
@@ -424,20 +514,32 @@
           return (
             '<div class="plg-row">' +
             '<label class="plg" style="display:flex;gap:7px;align-items:flex-start;cursor:' + (blocked ? "not-allowed" : "pointer") + ';">' +
-            '<input type="checkbox" class="plg-check" data-id="' + esc(entry.id) + '" ' + (installed ? "checked" : "") +
+            '<input type="checkbox" class="plg-check" data-id="' + escAttr(entry.id) + '" ' + (installed ? "checked" : "") +
             (blocked || busy ? " disabled" : "") +
             ' style="margin-top:3px;accent-color:#4d6bfe;" />' +
             "<span>" +
-            '<span class="plg-title">' + esc(title) + " — <code style=\"opacity:.7\">" + esc(entry.pkg) + "</code></span><br/>" +
-            '<span class="hint plg-desc">' + esc(desc) + "</span>" +
+            // 标题已经带上包名时（如「输入框快捷键（dsh-composer-keys）」）不再重复追加一次，省一行宽度。
+            '<span class="plg-title">' + esc(title) +
+            (title.includes(entry.pkg) ? "" : " — <code style=\"opacity:.7\">" + esc(entry.pkg) + "</code>") +
+            "</span><br/>" +
+            // 描述只占一行（CSS clamp），全文放悬停提示，便于把窗口压小。
+            '<span class="hint plg-desc" title="' + escAttr(desc) + '">' + esc(desc) + "</span>" +
             (blocked && engineHint
               ? '<span class="hint" style="margin:0;display:block;color:#e8806b;">⚠ ' + esc(engineHint) + "</span>"
               : "") +
+            // 状态行：状态 + 仅针对该插件的能力标签。安装/卸载需重启、启用/禁用热重载这两条
+            // 通用规则写在段落说明里（每行重复只会把窗口撑大），这里只标「含页面部分」这类
+            // 因插件而异的事实（由主进程读 package.json 的 dsh.client 得出，见 pluginHasClientHalf）。
             '<span class="plg-state hint" style="margin:1px 0 0;display:block;color:' + (blocked ? "#e8806b" : "#4d9fff") + ';">' +
             esc(state) +
             (installed
               ? ' · <span class="plg-enable-state" style="color:' + (enabled ? "#3fb950" : "#e8806b") + ';">' +
                 esc(enabledText(st)) +
+                "</span>"
+              : "") +
+            (st && st.client === true
+              ? '<span class="plg-tag">' +
+                esc(uiLang === "en" ? "page half · reload page" : "含页面部分 · 需刷新页面") +
                 "</span>"
               : "") +
             "</span>" +
@@ -498,6 +600,8 @@
         if (syncBtn) syncBtn.disabled = window.__syncWasDisabled === true;
         if (restartBtn) restartBtn.disabled = window.__restartWasDisabled === true;
         if (reloadBtn) reloadBtn.disabled = window.__reloadWasDisabled === true;
+        // busy 期间按钮是禁用的，markRestartNeeded 那时加不上高亮；这里按当前状态补一次。
+        markRestartNeeded(pendingEngineRestart);
       }
     }
 
@@ -520,6 +624,8 @@
           ? "(engine not installed)"
           : "（引擎未安装）";
       if (cur && cur.textContent !== engTxt) cur.textContent = engTxt;
+      // 引擎真的重启过就撤掉「待重启引擎」标注（无论用户是怎么重启的）。
+      settleRestartBadge(s);
     }
 
     let flashTimer = null;
@@ -551,7 +657,9 @@
       requestAnimationFrame(() => {
         rafPending = false;
         const h = Math.ceil(document.body.scrollHeight + 8);
-        try { api.autoSize(h); } catch { /* 主进程未就绪 */ }
+        // api.autoSize 是 ipcRenderer.invoke（返回 Promise），try/catch 抓不到它的拒绝，
+        // 必须挂 .catch —— 否则窗口在调用途中被销毁就是一条未处理的 rejection。
+        api.autoSize(h).catch(() => {})
       });
     }
     if (typeof ResizeObserver === "function") {
@@ -564,7 +672,22 @@
     api.get().then((s) => {
       paint(s);
       document.querySelectorAll('input[name="homeMode"]').forEach((el) => {
-        el.addEventListener("change", () => el.checked && api.set({ dshHomeMode: el.value }).then(() => flashSaved()));
+        el.addEventListener("change", () => {
+          if (!el.checked) return;
+          // 迁移确认框被取消时 main 不会保存（甚至原样返回）—— 那种情况下闪「已保存」是错的，
+          // 而且单选框还停留在新值上，直到下一次 broadcast 才被改回去。
+          api.set({ dshHomeMode: el.value }).then((res) => {
+            if (res && res.applied === false) {
+              if (s && s.dshHomeMode) {
+                document.querySelectorAll('input[name="homeMode"]').forEach((other) => {
+                  other.checked = other.value === s.dshHomeMode;
+                });
+              }
+              return;
+            }
+            flashSaved();
+          });
+        });
       });
       document.querySelectorAll('input[name="closeAction"]').forEach((el) => {
         el.addEventListener("change", () => el.checked && api.set({ closeAction: el.value }).then(() => flashSaved()));
@@ -630,8 +753,7 @@
                 pluginMsg.textContent = uiLang === "en"
                   ? "Written to the profile. Restart the engine for it to fully apply."
                   : "已写入 profile。需重启引擎后完全生效。";
-                const btnRestart = document.getElementById("btnRestartEngine");
-                if (btnRestart && !btnRestart.disabled) btnRestart.classList.add("attn");
+                markRestartNeeded(true);
               }
             } else {
               pluginMsg.textContent =
@@ -664,11 +786,11 @@
           const fresh = await api.get();
           paint(fresh);
           if (res && res.ok) {
+            // 安装和卸载都改了 profile 的 bundle 列表 → 两者都需要重启引擎才挂载/消失。
             pluginMsg.textContent = wantChecked
               ? (uiLang === "en" ? "Installed — restart engine to apply." : "已安装 —— 重启引擎后生效。")
-              : (uiLang === "en" ? "Uninstalled." : "已卸载。");
-            const btnRestart = document.getElementById("btnRestartEngine");
-            if (wantChecked && btnRestart && !btnRestart.disabled) btnRestart.classList.add("attn");
+              : (uiLang === "en" ? "Uninstalled — restart engine to apply." : "已卸载 —— 重启引擎后生效。");
+            markRestartNeeded(true);
           } else if (res && res.skipped) {
             pluginMsg.textContent =
               (uiLang === "en" ? "Engine-incompatible — not installed." : "与当前引擎不兼容，未安装。");
@@ -719,7 +841,10 @@
       btnRestartEngine.addEventListener("click", async () => {
         if (btnRestartEngine.disabled) return;
         btnRestartEngine.disabled = true;
-        btnRestartEngine.classList.remove("attn");
+        // 先记下「有待重启的改动」再清标注：重启失败时要把标注放回去，否则界面会假装
+        // 什么都不用做，而那次「需重启才生效」的改动其实一直没落地。
+        const wasPending = pendingEngineRestart;
+        markRestartNeeded(false);
         const orig = restartLabel.textContent;
         restartLabel.textContent = uiLang === "en" ? "Restarting engine…" : "正在重启引擎…";
         pluginMsg.textContent = "";
@@ -730,6 +855,7 @@
               (uiLang === "en" ? "Restart unavailable: " : "重启不可用：") + String(res.reason || "?");
             restartLabel.textContent = orig;
             btnRestartEngine.disabled = false;
+            if (wasPending) markRestartNeeded(true); // 重启没发生：标注放回去
             return;
           }
           // 引擎重启中：稍后由 paint(engineRunning=false→true) 反映；按钮短暂保持禁用。
@@ -741,6 +867,7 @@
           pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
           restartLabel.textContent = orig;
           btnRestartEngine.disabled = false;
+          if (wasPending) markRestartNeeded(true); // 重启没发生：标注放回去
         }
       });
       btnSyncPlugins.addEventListener("click", async () => {
@@ -749,7 +876,7 @@
         const orig = syncLabel.textContent;
         syncLabel.textContent = uiLang === "en" ? "Repairing…" : "修复中…";
         pluginMsg.textContent = "";
-        btnRestartEngine.classList.remove("attn");
+        markRestartNeeded(false);
         setPluginBusy(true, uiLang === "en" ? "Repairing plugins…" : "正在修复插件…");
         try {
           const res = await api.syncPlugins();
@@ -783,8 +910,8 @@
           if (failN > 0 && Array.isArray(res.errors) && res.errors[0]) {
             pluginMsg.textContent += (uiLang === "en" ? " First error: " : " 首个错误：") + String(res.errors[0]);
           }
-          // 有实际变动：重启按钮若在可用状态就提示用户点它。
-          if (changed && !btnRestartEngine.disabled) btnRestartEngine.classList.add("attn");
+          // 有实际变动（新装/卸载/捆绑更新）：标注「待重启引擎」；没有变动则撤掉旧标注。
+          markRestartNeeded(changed);
         } catch (error) {
           pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
         } finally {

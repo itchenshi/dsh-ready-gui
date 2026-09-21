@@ -2,11 +2,11 @@
 // Run: node tests/test.mjs
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { isSessionId, lastSessionFile, readLastSession, writeLastSession } from '../lib/index.js'
+import { isSessionId, lastSessionFile, readLastSession, writeLastSession, rejectUntrusted } from '../lib/index.js'
 
 // --- load the client bundle exactly the way the engine does -----------------
 // The engine requires a lazy CJS factory registration, NOT plain ESM:
@@ -122,6 +122,15 @@ await check('write is atomic: no leftover tmp file', async () => {
     await writeLastSession('session-atomic1', home)
     const raw = await readFile(lastSessionFile(home), 'utf8')
     assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ['sessionId', 'updatedAt'])
+    // The check's own claim: the temp file used for the atomic rename must be gone,
+    // and the home must contain nothing but the pointer (this used to assert neither).
+    const entries = await readdir(home)
+    assert.deepEqual(entries, ['last-session.json'], `unexpected leftovers: ${entries.join(', ')}`)
+    assert.equal(entries.some((name) => name.endsWith('.tmp')), false)
+    // A second write replaces the pointer in place, still leaving no temp file.
+    await writeLastSession('session-atomic2', home)
+    assert.deepEqual(await readdir(home), ['last-session.json'])
+    assert.equal(JSON.parse(await readFile(lastSessionFile(home), 'utf8')).sessionId, 'session-atomic2')
   } finally {
     await rm(home, { recursive: true, force: true })
   }
@@ -334,6 +343,44 @@ await check('dispose stops recording', async () => {
   sessions._set({ current: 'session-after-dispose' })
   await new Promise((r) => setTimeout(r, 20))
   assert.deepEqual(stored, [])
+})
+
+// --- route trust fence -------------------------------------------------------
+// These routes serve usage/balance and settings writes, so the fence is the
+// difference between "only the engine page can reach it" and "any local process, or
+// a page that rebound a hostname to 127.0.0.1, can". The assertions pin the
+// fail-closed default and the status mapping.
+check('rejectUntrusted fails closed when the fence is unavailable', () => {
+  const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
+  for (const ctx of [{ get: () => undefined }, { get: () => ({}) }, { get: () => null }, {}]) {
+    const res = mk()
+    assert.equal(rejectUntrusted(ctx, {}, res), true, 'must reject when connection is missing')
+    assert.equal(res.statusCode, 403)
+    assert.equal(res.ended, 1, 'the response must be ended exactly once')
+  }
+})
+
+check('rejectUntrusted mirrors the engine fence and lets allowed requests through', () => {
+  const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
+  // allowed: the engine fence returns undefined
+  let res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => undefined }) }, {}, res), false)
+  assert.equal(res.ended, 0, 'the fence must not answer an allowed request')
+  // unauthenticated
+  res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => 401 }) }, {}, res), true)
+  assert.equal(res.statusCode, 401)
+  assert.equal(res.body, 'unauthorized')
+  // untrusted host/origin
+  res = mk()
+  assert.equal(rejectUntrusted({ get: () => ({ requestRejection: () => 403 }) }, {}, res), true)
+  assert.equal(res.statusCode, 403)
+  assert.equal(res.body, 'forbidden')
+  // the raw request is handed to the engine fence unchanged
+  const marker = { headers: { host: '127.0.0.1:1' } }
+  let seen = null
+  rejectUntrusted({ get: () => ({ requestRejection: (r) => { seen = r; return undefined } }) }, marker, mk())
+  assert.equal(seen, marker)
 })
 
 console.log(`\n${process.exitCode ? 'FAILED' : `all ${passed} passed`}`)

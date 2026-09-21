@@ -198,7 +198,7 @@ function hasSessionHeader(input, init) {
 export function patchFetch(original, als) {
   return function patchedFetch(input, init) {
     const state = als.getStore()
-    if (state && !hasSessionHeader(input, init)) {
+    if (state && !hasSessionHeader(input, init) && targetsOpenCode(input, state.hosts)) {
       const headers = new Headers(
         init?.headers
           ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined),
@@ -207,6 +207,39 @@ export function patchFetch(original, als) {
       return original.call(this, input, { ...init, headers })
     }
     return original.apply(this, arguments)
+  }
+}
+
+/**
+ * 只往 OpenCode 自己的主机上加头。
+ *
+ * 补丁按 AsyncLocalStorage 窗口生效，窗口里任何 fetch 都会命中 —— 包括提供商内部发出、
+ * 或 MCP/SDK 等调用链上的**跨主机**请求。那既不必要（对方不认这个头，还会把简单请求变成
+ * 需要预检的跨域请求）又有泄露风险（`session-id` 模式下的值就是内部会话 id）。
+ * 拿不到主机信息时保持旧行为，避免把功能关掉。
+ */
+function openCodeHosts(options) {
+  const hosts = new Set()
+  const candidates = [options?.baseUrl, options?.provider?.baseUrl, options?.provider?.options?.baseURL]
+  for (const value of candidates) {
+    if (typeof value !== 'string' || value === '') continue
+    try {
+      hosts.add(new URL(value).host)
+    } catch {
+      /* 不是绝对 URL 就忽略 */
+    }
+  }
+  return [...hosts]
+}
+
+function targetsOpenCode(input, hosts) {
+  if (!Array.isArray(hosts) || hosts.length === 0) return true
+  try {
+    const raw = typeof input === 'string' ? input : input?.url
+    if (typeof raw !== 'string') return true
+    return hosts.includes(new URL(raw).host)
+  } catch {
+    return true
   }
 }
 
@@ -267,6 +300,9 @@ function installSessionHeader(ctx, config) {
     if (typeof downstream[Symbol.asyncIterator] !== 'function') return downstream
 
     if (debug || debugFile !== undefined) {
+      // `value` 也要脱敏：在 session-id 模式下它就是**原始** DSH 会话 id，直接落盘/打日志
+      // 会推翻 cordis.patch.yml 与 README 里「never the raw DSH session id」的承诺。
+      const logged = mode === 'session-id' ? redactSessionId(sessionId) : value
       const entry = {
         ts: new Date().toISOString(),
         provider: options.provider,
@@ -274,7 +310,7 @@ function installSessionHeader(ctx, config) {
         mode,
         session: redactSessionId(sessionId),
         header: SESSION_HEADER,
-        value,
+        value: logged,
       }
       if (debugFile !== undefined) {
         recordDebug(ctx, debugFile.file, entry)
@@ -285,11 +321,12 @@ function installSessionHeader(ctx, config) {
           options.provider,
           mode,
           SESSION_HEADER,
-          value,
+          logged,
         )
       }
     }
-    return withStore(downstream, { value }, als)
+    // hosts 让 fetch 补丁只作用于 OpenCode 自己的主机（见 targetsOpenCode）。
+    return withStore(downstream, { value, hosts: openCodeHosts(options) }, als)
   }, { prepend: true })
 }
 
@@ -331,6 +368,31 @@ export function appendV41Models(existing) {
   return [...models, ...V4_1_MODELS.map((m) => ({ ...m }))]
 }
 
+/**
+ * Decide what to write for the route's `models`, from the **user's own** layer.
+ *
+ * The engine treats a non-empty configured `models` list as the complete set for
+ * that provider (`entries = configured.length > 0 ? configured : defaults`), so a
+ * list written where the user had none REPLACES the provider's built-in catalog
+ * with exactly what we send — appending to an empty list would leave the model
+ * picker showing a single model. Therefore: only extend a list the user already
+ * configured; when they have not, the engine's catalog stays authoritative and we
+ * write nothing.
+ *
+ * The merged (`resolved`) settings cannot drive this decision: this plugin's own
+ * cordis patch injects `providers.opencode-go.api`, so the merged layer always has
+ * the route and a "route exists" guard would never fire.
+ *
+ * @param userProfile - `settings.section(NS).providers['opencode-go']`, or undefined.
+ * @returns {Array|null} the models array to write, or null when nothing should be written.
+ */
+export function nextV41Models(userProfile) {
+  if (userProfile === null || typeof userProfile !== 'object') return null
+  const models = userProfile.models
+  if (!Array.isArray(models) || models.length === 0) return null
+  return appendV41Models(models)
+}
+
 async function waitForNamespace(settings) {
   const deadline = Date.now() + NS_WAIT_TIMEOUT_MS
   while (Date.now() < deadline) {
@@ -362,12 +424,21 @@ async function ensureV41Models(ctx, settings) {
 
   let userSection
   try {
+    if (typeof settings.section !== 'function') {
+      // 引擎的 settings provider 没实现 section()（它在类型里是 private）时，自动补模型会
+      // 变成静默失效 —— 正是本仓库别处批评过的那种「什么都没发生也没有日志」。
+      ctx.logger?.warn('[opencode-go] settings.section() is unavailable; skipping the V4.1 auto-add')
+      return
+    }
     userSection = settings.section(NS)
-  } catch {
+  } catch (error) {
+    ctx.logger?.warn('[opencode-go] reading the user settings section failed: %s', error?.message ?? String(error))
     userSection = undefined
   }
-  const next = appendV41Models(userSection?.providers?.[PROVIDER]?.models)
-  if (next === null) return // already has a DeepSeek V4.1
+  // 只扩展用户自己配置过的 models 列表 —— 详见 nextV41Models 的说明（空列表写入会
+  // 用我们这份列表整体替换引擎目录，导致模型选择器只剩一个模型）。
+  const next = nextV41Models(userSection?.providers?.[PROVIDER])
+  if (next === null) return // not user-configured, or a DeepSeek V4.1 is already listed
 
   ctx.logger.info('[opencode-go] route exists; adding DeepSeek V4.1 models: %s', V4_1_MODELS.map((m) => m.id).join(', '))
   await settings.update(NS, { providers: { [PROVIDER]: { models: next } } })
