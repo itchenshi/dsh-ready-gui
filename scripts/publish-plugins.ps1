@@ -2,7 +2,7 @@
 #
 # The four plugins live in their own repositories, siblings of this one:
 #   ../dsh-model-usage  ../dsh-gui-last-session
-#   ../dsh-opencode-go-path  ../dsh-composer-keys-setting
+#   ../dsh-opencode-go-path  ../dsh-keys-setting
 #
 # WHY --registry IS FORCED EVERYWHERE:
 #   A China-mirror npmrc (registry=https://registry.npmmirror.com) is common and
@@ -47,7 +47,7 @@ $Packages = @(
   'dsh-model-usage',
   'dsh-gui-last-session',
   'dsh-opencode-go-path',
-  'dsh-composer-keys-setting'
+  'dsh-keys-setting'
 )
 if ($Only.Count -gt 0) {
   foreach ($name in $Only) {

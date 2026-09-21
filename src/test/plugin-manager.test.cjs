@@ -124,7 +124,7 @@ function checkClientHalf() {
     // to read before install — the flag keeps the settings row's
     // "needs a page reload" hint working for uninstalled entries.)
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-composer-keys-setting", client: true }),
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-keys-setting", client: true }),
       true,
       "declared page half -> true",
     );
@@ -245,7 +245,7 @@ function checkDisableRefusals() {
       "other-bundle": { declaresPatch: true, patchYml: "- insert:\n  - id: shared-row\n" },
       // A CATALOG entry that is installed but declares the other CATALOG entry's row.
       "dsh-model-usage": { patchYml: "- insert:\n    - id: model-usage\n" },
-      "dsh-composer-keys-setting": { patchYml: "- insert:\n    - id: model-usage\n" },
+      "dsh-keys-setting": { patchYml: "- insert:\n    - id: model-usage\n" },
     },
     state: { disabled: [], region: "china" },
   });
@@ -271,7 +271,7 @@ function checkDisableRefusals() {
       enabled: false,
     });
     assert.strictEqual(catalogClash.ok, false, "another installed CATALOG bundle owns the row");
-    assert.match(catalogClash.reason, /dsh-composer-keys-setting/);
+    assert.match(catalogClash.reason, /dsh-keys-setting/);
 
     assert.strictEqual(fs.readFileSync(patchFile, "utf8"), before, "a refusal must not touch the patch layer");
     assert.deepStrictEqual(

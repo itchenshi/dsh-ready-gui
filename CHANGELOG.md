@@ -18,7 +18,7 @@
 | 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
 | 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
 | OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
-| 输入框快捷键 | `dsh-composer-keys-setting` | https://github.com/itchenshi/dsh-composer-keys-setting |
+| 输入框快捷键 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
 ### 为什么
 
@@ -30,7 +30,7 @@
   与插件市场收录。
 - **一个仓库一个条目**：注册表按 `owner/repo` 收录，插件埋在 monorepo 里无法上架。
 
-### 两个包名带上了后缀（重要）
+### 两个包名换掉了（重要）
 
 **npm 上的 `dsh-opencode-go` 与 `dsh-composer-keys` 已被其他作者占用**，无法使用：
 
@@ -38,7 +38,14 @@
 - `dsh-opencode-go-plus` → **[yumusb/dsh-opencode-go-plus](https://github.com/yumusb/dsh-opencode-go-plus)**
 - `dsh-composer-keys` → **[zlqd123/dsh-composer-keys](https://github.com/zlqd123/dsh-composer-keys)**
 
-因此本项目的包名为 `dsh-opencode-go-path` 与 `dsh-composer-keys-setting`。
+因此本项目的包名为 **`dsh-opencode-go-path`** 与 **`dsh-keys-setting`**。
+（输入框快捷键曾短暂用过 `dsh-composer-keys-setting` 这个中间名，后改为更短的
+`dsh-keys-setting`；该中间名从未发布到 npm，v0.5.0 也没随壳发过，但迁移表里仍留着
+一条兜底清理——见下文。）
+
+**补丁层的行 id 与设置命名空间保持 `composer-keys` 不变**，这是刻意的：禁用行、
+市场 `state.json` 的开关、`settings.yaml` 里保存的键位都记在那个名字下。包名只是
+安装标识，改它不该让用户的键位设置或启用/禁用选择失效。
 **这不影响功能**，只影响 `dsh plugin add` 里写的包名。
 
 ### 老用户迁移（自动，无需手动操作）

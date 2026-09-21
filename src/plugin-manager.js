@@ -162,10 +162,14 @@ const CATALOG = [
     url: "",
   },
   {
-    id: "dsh-composer-keys-setting",
-    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-composer-keys-setting）。
-    // 包名必须带 `-setting` 后缀：`dsh-composer-keys` 已被社区占用
-    // （github.com/zlqd123/dsh-composer-keys，功能同名），npm 上不可用。
+    id: "dsh-keys-setting",
+    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-keys-setting）。
+    // 名字换过两次：最初是 `dsh-composer-keys`（npm 上已被社区占用 —— 见
+    // github.com/zlqd123/dsh-composer-keys，功能同名），临时用过
+    // `dsh-composer-keys-setting`，最终定为 `dsh-keys-setting`。
+    // **补丁层的行 id 与设置命名空间仍是 `composer-keys`**，与包名解耦——禁用行、
+    // 市场 state.json 的开关、settings.yaml 里保存的键位都记在那个名字下，改包名
+    // 不该让用户的键位设置或启用/禁用选择失效。
     //
     // 输入框快捷键：Enter / Shift+Enter / Ctrl+Enter 各自可设为「发送」或「换行」，
     // 设置行注册在 DSH 设置窗口的**通用**页（settings.general.item，紧挨引擎自带的
@@ -182,10 +186,10 @@ const CATALOG = [
     //
     // 与其它捆绑插件一样**不设 engineRange**：依赖的是 settings 服务与
     // settings.general.item 槽位的公开契约，不是引擎版本号。
-    pkg: "dsh-composer-keys-setting",
+    pkg: "dsh-keys-setting",
     client: true,
-    zh: "输入框快捷键（dsh-composer-keys-setting）",
-    en: "Composer shortcuts (dsh-composer-keys-setting)",
+    zh: "输入框快捷键（dsh-keys-setting）",
+    en: "Composer shortcuts (dsh-keys-setting)",
     zhDesc: "在设置窗口的通用页配置 Enter / Shift+Enter / Ctrl+Enter 是发送消息还是换行。",
     enDesc: "Configure in Settings → General whether Enter / Shift+Enter / Ctrl+Enter sends the message or inserts a line break.",
     url: "",
@@ -1289,7 +1293,16 @@ const LEGACY_PLUGIN_PKGS = [
   {
     pkg: "dsh-composer-keys",
     rowIds: ["composer-keys"],
-    replacedBy: "dsh-composer-keys-setting",
+    replacedBy: "dsh-keys-setting",
+  },
+  // `dsh-composer-keys-setting` 只是一个短暂的中间名——它从未发布到 npm，v0.5.0 也
+  // 没随壳发过。留着这条是为了兜住开发机/本地 `file:` 装过它的环境：这个包一旦残留在
+  // profile 里，引擎仍会加载它，于是与新包同时挂载、设置行出现两遍。清理成本为零，
+  // 与上面 `dsh-opencode-go`（同样从未上过 npm）的处理保持一致。
+  {
+    pkg: "dsh-composer-keys-setting",
+    rowIds: ["composer-keys"],
+    replacedBy: "dsh-keys-setting",
   },
 ];
 

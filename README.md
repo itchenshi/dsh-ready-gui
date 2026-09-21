@@ -47,15 +47,16 @@ Tauri 客户端、`dsh web`、CLI 里都能用 `dsh plugin add` 装，也可以�
 | 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
 | 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
 | OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
-| 输入框快捷键 | `dsh-composer-keys-setting` | https://github.com/itchenshi/dsh-composer-keys-setting |
+| 输入框快捷键 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
 ```bash
 dsh plugin --profile web add dsh-model-usage
 ```
 
-> **关于两个带后缀的包名**：`dsh-opencode-go`、`dsh-opencode-go-plus` 与
-> `dsh-composer-keys` 在 npm 上都已被其他作者占用，因此这里用了 `-path` 与
-> `-setting` 后缀。这与插件的功能无关，只影响安装时写的包名。
+> **关于几个带后缀的包名**：`dsh-opencode-go`、`dsh-opencode-go-plus` 与
+> `dsh-composer-keys` 在 npm 上都已被其他作者占用，因此 OpenCode Go 增强用的是
+> `-path` 后缀，输入框快捷键最终定为 **`dsh-keys-setting`**。这与插件的功能无关，
+> 只影响安装时写的包名。
 
 四个插件的发布用 `scripts/publish-plugins.ps1` 一次完成（会强制走官方 registry、
 逐个校验 tarball 内容、发布后在官方 registry 上复核）：
@@ -76,11 +77,13 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   npm；DSH GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
   不再需要等壳发版，且在任何 DSH 宿主（官方桌面端、Tauri 客户端、`dsh web`、CLI）
   里都能装。
-- **⚠️ 两个插件的包名带上了后缀**，因为原名在 npm 上已被其他作者占用：
-  `dsh-opencode-go` → **`dsh-opencode-go-path`**、
-  `dsh-composer-keys` → **`dsh-composer-keys-setting`**。老用户无需手动操作：
+- **⚠️ 两个插件的包名变了**：`dsh-opencode-go` → **`dsh-opencode-go-path`**（原名被占
+  用）、`dsh-composer-keys` → **`dsh-keys-setting`**（原名被占用，中间短暂用过
+  `dsh-composer-keys-setting`）。老用户无需手动操作：
   GUI 启动维护会把旧包名一次性清理掉（摘 bundles 登记 + 清补丁层残留行 +
   把「已禁用」的选择搬到新包上），不会出现新旧两份同时加载。
+  **补丁层行 id 与设置命名空间仍是 `composer-keys`**，所以你保存的键位和启用/禁用
+  选择都不会因为改包名而失效。
 - **🔁 旧版留下的 `file:` 安装也会自动转成 registry 版本**：v0.4.1 是把插件 staging
   到 `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile 的，所以
   `dsh-model-usage` 与 `dsh-gui-last-session`（**包名没变**）也会停在旧副本上、拿不到
@@ -103,7 +106,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 - **🔄 自动检查 DSH GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
   **自动兼顾国内外网络** —— 国内先试 Gitee → GitCode → GitHub，国外反之，逐源限时回退并记住上次
   可用的源（实测本机 Gitee 首次尝试 251ms 命中）。
-- **⌨️ 新插件「输入框快捷键」**（`dsh-composer-keys-setting`）：在设置窗口「通用」页配置
+- **⌨️ 新插件「输入框快捷键」**（`dsh-keys-setting`）：在设置窗口「通用」页配置
   Enter / Shift+Enter / Ctrl+Enter 是**发送消息**还是**换行**；默认即引擎默认，不改动任何现有习惯。
 
 完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md)。
@@ -197,7 +200,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   只增不删，可作安装失败后的重试；同时对齐启用/禁用状态。
 - **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、最近会话恢复
   （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode Go 增强
-  （dsh-opencode-go-path）、输入框快捷键（dsh-composer-keys-setting）。设置窗口
+  （dsh-opencode-go-path）、输入框快捷键（dsh-keys-setting）。设置窗口
   展示顺序即此顺序。**后四个自 v0.5.0 起是独立仓库 + npm 包**，全部从 registry
   安装，不再随本仓库打包（见下方「相关仓库」）。
 - **生效方式按插件标注**：安装/卸载改的是 profile 的 bundle 列表（引擎只在启动时组装），因此**需重启引擎**；
