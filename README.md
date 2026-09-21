@@ -85,8 +85,16 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
   registry 的版本表（更新频率不可调），发现新版按策略处理：**询问后再更新
   （默认）/ 静默更新 / 仅提示**；更新安装到应用私有目录，完成后右下角弹出
   **持久角标**。
-- **GUI 与引擎更新分家**：托盘「检查 DSH GUI 更新…」查 GitHub Releases，
-  有新版本时打开下载页；引擎更新由 GUI 后台按设置策略自动处理。
+- **GUI 与引擎更新分家**：引擎更新由 GUI 后台按设置策略自动处理；**DSH GUI 自身启动后
+  会自动检查有没有新版本**，有则用通知窗口提醒（不打断使用），无新版或离线时静默，同一个
+  新版本只提醒一次。**只在启动时查一次不够**——这个 GUI 常常开着不关，所以长会话期间每
+  6 小时还会后台复查一遍；启动检查本身 1 小时内不重复（避免频繁重启连着打网络）。检查
+  **自动兼顾国内外网络**：同时使用 GitHub / Gitee / GitCode 三个开源平台的 Release，国内
+  网络（`zh-CN` 或 Asia/Shanghai 等时区）先试 Gitee → GitCode → GitHub，国外反之，每个源单独
+  限时、逐个回退，并记住上次可用的源优先使用 —— 国内用户不会先在 GitHub 上白等一次超时。
+  **来源无需用户配置**；手动入口是托盘「检查 DSH GUI 更新…」，会打开实际答上来的那个平台的
+  下载页。实测：本机（Asia/Shanghai）Gitee 首次尝试 251ms 命中（两家的未认证 API 都是每 IP
+  每小时 60 次，1 小时 1 次仅占 1/60；真被限流会当该源失败并自动换源）。
 - **GUI 托管的引擎重启**：dsh 由 DSH GUI 作为子进程托管，页面/插件内建的
   “重启”无法重启它。需要重启使插件（或引擎自身）生效时，用设置窗口「重启
   引擎使生效」、页面桥 `window.__dshGui.restartEngine()`，或直接重启 DSH GUI；
@@ -130,7 +138,11 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
   只增不删，可作安装失败后的重试；同时对齐启用/禁用状态。
 - **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、最近会话恢复
   （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode Go 增强
-  （dsh-opencode-go）。设置窗口展示顺序即此顺序。
+  （dsh-opencode-go）、输入框快捷键（dsh-composer-keys）。设置窗口展示顺序即此顺序。
+- **生效方式按插件标注**：安装/卸载改的是 profile 的 bundle 列表（引擎只在启动时组装），因此**需重启引擎**；
+  启用/禁用写的是补丁层，由引擎**热重载即时生效**；含页面半边（`dsh.client`）的插件，那一半还需**刷新 Harness 页面**。
+  这两条通用规则写在插件的段落说明里（每行重复只会把窗口撑大），**因插件而异的「含页面部分 · 需刷新页面」
+  以小标签标在对应行上**——「是否含页面半边」由 GUI 读取插件 package.json 判定（未安装的 npm 条目无从判断时不标）。
 - **`dsh-opencode-go`（OpenCode Go 增强）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
   ① 给 `opencode-go` 路由声明 wire 协议（`api: openai-completions`），修掉目录外模型
   （如 `deepseek-v4.1-flash`）的 `needs an api` 报错与模型页保存被拒；② 引擎启动后若该路由存在
@@ -281,7 +293,8 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 ├─ plugins/               # 仓库内置的本地插件（打包进 app.asar）
 │  ├─ dsh-model-usage/           # 模型用量与余量（OpenCode Go 用量 + DeepSeek 余额）
 │  ├─ dsh-gui-last-session/      # 启动后回到最近一次对话
-│  └─ dsh-opencode-go/           # OpenCode Go 增强（协议声明 + V4.1 模型 + 会话头）
+│  ├─ dsh-opencode-go/           # OpenCode Go 增强（协议声明 + V4.1 模型 + 会话头）
+│  └─ dsh-composer-keys/         # 输入框快捷键（Enter / Shift+Enter / Ctrl+Enter 发送或换行）
 ├─ scripts/               # 构建与测试脚本
 │  ├─ make-icons.mjs      # 官网 favicon → 各尺寸图标 + win 用的混合帧 icon.ico
 │  ├─ ico-info.cjs        # 检查任意 .ico 的帧构成与长度自洽性

@@ -179,12 +179,15 @@ DSH GUI keeps its own pointer at `<userData>/last-session.json`. This plugin
 deliberately owns a **separate** file so it stays self-contained and works for
 anyone who installs it, not just DSH GUI users. DSH GUI performs this hand-off
 automatically at startup (one-way: it never overwrites a pointer the plugin
-already recorded). To do it by hand, copy the `sessionId` across:
+already recorded). To do it by hand, copy the `sessionId` across — note the route
+is behind the engine's trust fence, so a bare `curl` now gets **401**
+(pass the engine's session cookie: open the engine URL printed by `dsh web` once,
+then reuse its cookie):
 
 ```sh
-# the GUI hands its pointer over through the same public route
 curl -X POST http://127.0.0.1:<port>/gui-last-session \
      -H 'content-type: application/json' \
+     -H 'cookie: <engine session cookie>' \
      -d '{"sessionId":"session-..."}'
 ```
 

@@ -30,11 +30,20 @@ route.api  ??  目录里该模型的 api  ??  目录内全部模型共有的 api
 
 引擎启动后，运行时（`lib/index.js`）等 `llm-pi-ai` 设置命名空间就绪，然后：
 
-- **存在** `opencode-go` 路由且 `models` 里没有 `deepseek-v4.1-*` → 自动追加
-  （走与 GUI 模型页相同的 `settings.update` 写入路径，落在 `settings.yaml`，
-  严格校验因为有 api 而通过）；
-- 路由不存在 → 什么都不做；
+- **用户在 `settings.yaml` 里已配置** `opencode-go` 的 `models` 列表、且列表里没有
+  `deepseek-v4.1-*` → 自动追加（走与 GUI 模型页相同的 `settings.update` 写入路径，
+  落在 `settings.yaml`，严格校验因为有 api 而通过）；
+- **用户没有配置 `models`** → 什么都不做。引擎把「非空的已配置列表」当作该 provider 的
+  **完整**模型集（`entries = configured.length > 0 ? configured : defaults`），所以往一个
+  空列表里写入会把整个内置目录替换成我们写的那几个模型 —— 此时引擎自带的目录才是权威；
 - 已有 v4.1 模型 → 不动（幂等）。
+
+> 判定读的是**用户层**（`settings.section(NS)`）而不是合并后的 `resolved`：本插件自己的
+> 补丁会注入 `providers.opencode-go.api`，合并层永远有这个路由，用「路由是否存在」当守卫
+> 是永远不会生效的。
+
+路由存在性检查、模型列表拼接与「是否已含 v4.1」分别是
+`nextV41Models()` / `appendV41Models()` / `isV41()`，都有单测覆盖。
 
 ### 3. 附加 `x-opencode-session` 头
 

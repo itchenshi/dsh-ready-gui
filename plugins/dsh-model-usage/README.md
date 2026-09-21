@@ -57,6 +57,12 @@ calls the upstream.
 
 ## Host route
 
+> **这条路由受引擎的信任围栏保护**（Host 白名单 + 浏览器会话 cookie）。它返回账户用量与余额，
+> 因此**不带 cookie 的裸 `curl` 会得到 `401 unauthorized`**（修复前返回 200 —— 任何本机进程、
+> 以及被 DNS rebinding 的页面都能读到）。同源的页面请求会自动带上 cookie；手工调用需先用
+> `dsh web` 打印的 URL 换一次会话 cookie，再以 `-H 'cookie: …'` 传入（示例见
+> `dsh-gui-last-session/README.md`）。
+
 ```
 GET /model-usage
 {
