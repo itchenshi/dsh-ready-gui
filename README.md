@@ -36,6 +36,43 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 
 三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/DeepSeekHarnessGUI/releases) 为准。
 
+## 📦 相关仓库（随附插件）
+
+四个随附插件自 v0.5.0 起各自独立成仓库并发布到 npm。它们**与宿主无关**：官方桌面端、
+Tauri 客户端、`dsh web`、CLI 里都能用 `dsh plugin add` 装，也可以直接在
+[插件市场](https://github.com/dsh-market/dsh-market) 里一键安装。
+
+| 插件 | npm 包 | 仓库 |
+|---|---|---|
+| 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
+| 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
+| OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
+| 输入框快捷键 | `dsh-composer-keys-setting` | https://github.com/itchenshi/dsh-composer-keys-setting |
+
+```bash
+dsh plugin --profile web add dsh-model-usage
+```
+
+> **关于两个带后缀的包名**：`dsh-opencode-go`、`dsh-opencode-go-plus` 与
+> `dsh-composer-keys` 在 npm 上都已被其他作者占用，因此这里用了 `-path` 与
+> `-setting` 后缀。这与插件的功能无关，只影响安装时写的包名。
+
+## 🆕 v0.5.0 亮点
+
+- **📦 插件拆仓 + 发布 npm**：四个随附插件（模型用量与余量、最近会话恢复、
+  OpenCode Go 增强、输入框快捷键）**不再随本仓库打包**，各自独立成仓库并发布到
+  npm；DSH GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
+  不再需要等壳发版，且在任何 DSH 宿主（官方桌面端、Tauri 客户端、`dsh web`、CLI）
+  里都能装。
+- **⚠️ 两个插件的包名带上了后缀**，因为原名在 npm 上已被其他作者占用：
+  `dsh-opencode-go` → **`dsh-opencode-go-path`**、
+  `dsh-composer-keys` → **`dsh-composer-keys-setting`**。老用户无需手动操作：
+  GUI 启动维护会把旧包名一次性清理掉（摘 bundles 登记 + 清补丁层残留行 +
+  把「已禁用」的选择搬到新包上），不会出现新旧两份同时加载。
+- **🧹 移除 app.asar 内的插件 staging 机制**：该机制存在的唯一理由是子进程 pnpm
+  读不到 app.asar 内部路径；插件走 registry 之后没有任何条目需要 `file:` 安装，
+  相关代码（staging 目录、递归复制、8.3 短路径处理）整体删除。
+
 ## 🆕 v0.4.1 亮点
 
 - **🔐 安全修复（建议所有用户升级）**：三个插件的**浏览器路由此前完全没有鉴权** —— 实测不带任何
@@ -49,7 +86,7 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 - **🔄 自动检查 DSH GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
   **自动兼顾国内外网络** —— 国内先试 Gitee → GitCode → GitHub，国外反之，逐源限时回退并记住上次
   可用的源（实测本机 Gitee 首次尝试 251ms 命中）。
-- **⌨️ 新插件「输入框快捷键」**（`dsh-composer-keys`）：在设置窗口「通用」页配置
+- **⌨️ 新插件「输入框快捷键」**（`dsh-composer-keys-setting`）：在设置窗口「通用」页配置
   Enter / Shift+Enter / Ctrl+Enter 是**发送消息**还是**换行**；默认即引擎默认，不改动任何现有习惯。
 
 完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md)。
@@ -143,17 +180,21 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
   只增不删，可作安装失败后的重试；同时对齐启用/禁用状态。
 - **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、最近会话恢复
   （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode Go 增强
-  （dsh-opencode-go）、输入框快捷键（dsh-composer-keys）。设置窗口展示顺序即此顺序。
+  （dsh-opencode-go-path）、输入框快捷键（dsh-composer-keys-setting）。设置窗口
+  展示顺序即此顺序。**后四个自 v0.5.0 起是独立仓库 + npm 包**，全部从 registry
+  安装，不再随本仓库打包（见下方「相关仓库」）。
 - **生效方式按插件标注**：安装/卸载改的是 profile 的 bundle 列表（引擎只在启动时组装），因此**需重启引擎**；
   启用/禁用写的是补丁层，由引擎**热重载即时生效**；含页面半边（`dsh.client`）的插件，那一半还需**刷新 Harness 页面**。
   这两条通用规则写在插件的段落说明里（每行重复只会把窗口撑大），**因插件而异的「含页面部分 · 需刷新页面」
   以小标签标在对应行上**——「是否含页面半边」由 GUI 读取插件 package.json 判定（未安装的 npm 条目无从判断时不标）。
-- **`dsh-opencode-go`（OpenCode Go 增强）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
+- **`dsh-opencode-go-path`（OpenCode Go 增强）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
   ① 给 `opencode-go` 路由声明 wire 协议（`api: openai-completions`），修掉目录外模型
   （如 `deepseek-v4.1-flash`）的 `needs an api` 报错与模型页保存被拒；② 引擎启动后若该路由存在
   且缺 `deepseek-v4.1-*`，自动补上 DeepSeek V4.1 模型（幂等，写在 `settings.yaml`）；③ 为发往
   OpenCode 的请求附加稳定的按会话 `x-opencode-session` 头（修复 400 MissingSessionID，默认不透明
-  UUID，绝不发内部会话 ID）。**该插件合并自原 `dsh-opencode-go-session` 与 `dsh-opencode-go-api`**——
+  UUID，绝不发内部会话 ID）。**该插件合并自原 `dsh-opencode-go-session` 与
+  `dsh-opencode-go-api`；包名由 `dsh-opencode-go` 改为 `dsh-opencode-go-path`
+  （原名在 npm 上已被他人占用）**——
   升级时 GUI 会自动摘除旧包并装上新版（连"已禁用"的选择一起搬过去），不会新旧两版同时加载。
 - **`dsh-model-usage`（模型用量与余量）**：在会话标题右侧显示**当前模型**的用量/余量，
   按会话当前选中的模型路由分流（仅在使用对应模型时出现）：
@@ -191,7 +232,7 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 ### 💬 会话体验
 
 - **启动后自动回到最近一次对话**：记录最后使用的会话，重启 DeepSeek Harness
-  后自动切回（由内置插件 `dsh-gui-last-session` 实现，默认开启）。
+  后自动切回（由随附插件 `dsh-gui-last-session` 实现，默认开启）。
 
 ### 🎛 设置与持久化
 
@@ -295,11 +336,8 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 │  ├─ status.html         # 启动/更新状态页（跟随 Harness 主题）
 │  ├─ notice.html         # 持久更新角标
 │  └─ home-migrate.js     # 数据目录检测与迁移（纯 Node，可单测）
-├─ plugins/               # 仓库内置的本地插件（打包进 app.asar）
-│  ├─ dsh-model-usage/           # 模型用量与余量（OpenCode Go 用量 + DeepSeek 余额）
-│  ├─ dsh-gui-last-session/      # 启动后回到最近一次对话
-│  ├─ dsh-opencode-go/           # OpenCode Go 增强（协议声明 + V4.1 模型 + 会话头）
-│  └─ dsh-composer-keys/         # 输入框快捷键（Enter / Shift+Enter / Ctrl+Enter 发送或换行）
+├─ （v0.5.0 起本仓库不再包含 plugins/：四个随附插件已拆成独立仓库并发布到
+│    npm，见下方「相关仓库」）
 ├─ scripts/               # 构建与测试脚本
 │  ├─ make-icons.mjs      # 官网 favicon → 各尺寸图标 + win 用的混合帧 icon.ico
 │  ├─ ico-info.cjs        # 检查任意 .ico 的帧构成与长度自洽性

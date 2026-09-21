@@ -1,3 +1,77 @@
+# DSH GUI v0.5.0 更新说明
+
+**发布日：2026-09-21** · 从 v0.4.1 累积的所有改动。
+
+> 一句话：**插件拆仓 + 发布 npm** —— 四个随附插件不再随本仓库打包，各自独立成仓库
+> 并发布到 npm，DSH GUI 改为从 registry 安装它们。
+
+---
+
+## 📦 四个插件拆成独立仓库并发布到 npm
+
+### 改了什么
+
+`plugins/` 目录从本仓库移除。四个插件的源码、测试与发布流程各自独立：
+
+| 插件 | npm 包名 | 仓库 |
+|---|---|---|
+| 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
+| 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
+| OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
+| 输入框快捷键 | `dsh-composer-keys-setting` | https://github.com/itchenshi/dsh-composer-keys-setting |
+
+### 为什么
+
+- **插件更新不必再等壳发版**：以前插件代码打进 app.asar，只有装新版 GUI 才会更新；
+  现在是一条普通的 registry 条目，`dsh plugin update` / 插件市场即可升级。
+- **插件与宿主解耦**：官方桌面端、Tauri 客户端、`dsh web`、CLI 都能装，不再只服务
+  于本壳。生态里 4000+ 插件都是这个形态，独立仓库才能被
+  [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+  与插件市场收录。
+- **一个仓库一个条目**：注册表按 `owner/repo` 收录，插件埋在 monorepo 里无法上架。
+
+### 两个包名带上了后缀（重要）
+
+**npm 上的 `dsh-opencode-go` 与 `dsh-composer-keys` 已被其他作者占用**，无法使用：
+
+- `dsh-opencode-go` → **[Duskriver/dsh-opencode-go](https://github.com/Duskriver/dsh-opencode-go)**
+- `dsh-opencode-go-plus` → **[yumusb/dsh-opencode-go-plus](https://github.com/yumusb/dsh-opencode-go-plus)**
+- `dsh-composer-keys` → **[zlqd123/dsh-composer-keys](https://github.com/zlqd123/dsh-composer-keys)**
+
+因此本项目的包名为 `dsh-opencode-go-path` 与 `dsh-composer-keys-setting`。
+**这不影响功能**，只影响 `dsh plugin add` 里写的包名。
+
+### 老用户迁移（自动，无需手动操作）
+
+GUI 启动维护会把两个旧包名一次性清理掉，逻辑与既有的改名迁移完全一致：
+
+1. 摘掉 profile 的 bundles 登记与 `package.json` 里的 `file:` 依赖（只摘 bundles 不够——
+   引擎的 reconcile 会依据残留依赖把旧插件重新登记回来，实测会导致新旧同时加载）；
+2. 清掉补丁层里指向旧行 id 的残留 `disabled:` 行（`opencode-go` / `composer-keys`）；
+3. 把「已禁用」的选择搬到新包上——**改名不该改变用户的选择**；
+4. 随后由启动流程从 npm 安装新包（新旧补丁层行 id 保持一致，因此选择能对上）。
+
+失败自动恢复、插件市场双向同步等既有能力不受影响。
+
+## 🧹 顺带：删掉不再需要的 app.asar staging 机制
+
+原先「捆绑插件」不能按 app.asar 内路径安装（子进程 pnpm 会把 app.asar 当普通文件，
+报 *as it does not exist*），所以主进程要先把插件复制成磁盘上的真实目录再装。插件走
+registry 之后**没有任何目录条目需要 `file:` 安装**，这套机制整体删除：
+
+- `src/plugin-manager.js`：`bundledPluginsRoot` / `bundledSourceDir` / `copyDirRecursive` /
+  `stageBundledPlugin` / `readPackageVersion` / `installedBundleVersion`，以及
+  `syncEnabledPlugins` 里「随包版本更新则强制重装」的分支；
+- `src/main.js`：`pluginBundledPluginsDir()` 与 `shortPathIfSpaced()`（后者只为 staging
+  路径的 8.3 短化而存在）；
+- `electron-builder.yml`：`plugins/**/*` 不再打进 app.asar。
+
+`pluginHasClientHalf` 改为「已装读真实 manifest、未装用目录条目的 `client` 声明」——
+拆仓后本地没有源码可读，而「是否含页面半边」决定启用/禁用后要不要刷新页面，必须
+在安装前就能显示。目录条目因此新增 `client: true|false` 字段。
+
+---
+
 # DSH GUI v0.4.1 更新说明
 
 **发布日：2026-09-21** · 从 v0.4.0 累积的所有改动。

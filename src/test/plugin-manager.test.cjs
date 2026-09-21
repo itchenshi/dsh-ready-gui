@@ -119,32 +119,32 @@ function checkClientHalf() {
     // installed copy WITHOUT one (host-only plugin)
     writePkg("host-only", { name: "host-only", version: "1.0.0", dsh: { bundle: { patch: "./cordis.patch.yml" } } });
     assert.strictEqual(pm.pluginHasClientHalf(dshHome, { pkg: "host-only" }), false, "no dsh.client -> false");
-    // not installed, but the repo carries the source (localSource entries)
+    // not installed: the entry's verified `client` declaration answers instead.
+    // (Plugins are installed from npm since v0.5.0, so there is no local source
+    // to read before install — the flag keeps the settings row's
+    // "needs a page reload" hint working for uninstalled entries.)
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-composer-keys", localSource: "dsh-composer-keys" }),
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-composer-keys-setting", client: true }),
       true,
-      "bundled source with a page half -> true",
+      "declared page half -> true",
     );
-    assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-model-usage", localSource: "dsh-model-usage" }),
-      true,
-      "bundled source with a page half -> true (second case)",
-    );
-    // ...and a bundled HOST-ONLY plugin is false, not unknown: this is exactly the
+    // ...and a declared HOST-ONLY plugin is false, not unknown: this is exactly the
     // per-plugin difference the settings row reports (no page reload needed).
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-opencode-go", localSource: "dsh-opencode-go" }),
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-opencode-go-path", client: false }),
       false,
-      "bundled host-only source -> false",
+      "declared host-only -> false",
     );
-    // unknown: nothing installed and no bundled source to read (npm entries)
-    assert.strictEqual(pm.pluginHasClientHalf(dshHome, { pkg: "not-installed-yet" }), null, "unknown -> null");
+    // the installed copy stays authoritative once it is on disk
+    writePkg("dsh-opencode-go-path", { name: "dsh-opencode-go-path", version: "1.0.0", dsh: { client: { platform: "web" } } });
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "ghost", localSource: "does-not-exist" }),
-      null,
-      "missing bundled source -> null",
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-opencode-go-path", client: false }),
+      true,
+      "installed manifest wins over the declaration",
     );
-    console.log("ok - pluginHasClientHalf detects the page half (installed copy first, bundled source second)");
+    // unknown: nothing installed and no declaration (e.g. dsh-market)
+    assert.strictEqual(pm.pluginHasClientHalf(dshHome, { pkg: "not-installed-yet" }), null, "unknown -> null");
+    console.log("ok - pluginHasClientHalf detects the page half (installed copy first, catalog flag second)");
   } finally {
     try {
       fs.rmSync(root, { recursive: true, force: true });
@@ -245,7 +245,7 @@ function checkDisableRefusals() {
       "other-bundle": { declaresPatch: true, patchYml: "- insert:\n  - id: shared-row\n" },
       // A CATALOG entry that is installed but declares the other CATALOG entry's row.
       "dsh-model-usage": { patchYml: "- insert:\n    - id: model-usage\n" },
-      "dsh-composer-keys": { patchYml: "- insert:\n    - id: model-usage\n" },
+      "dsh-composer-keys-setting": { patchYml: "- insert:\n    - id: model-usage\n" },
     },
     state: { disabled: [], region: "china" },
   });
@@ -271,7 +271,7 @@ function checkDisableRefusals() {
       enabled: false,
     });
     assert.strictEqual(catalogClash.ok, false, "another installed CATALOG bundle owns the row");
-    assert.match(catalogClash.reason, /dsh-composer-keys/);
+    assert.match(catalogClash.reason, /dsh-composer-keys-setting/);
 
     assert.strictEqual(fs.readFileSync(patchFile, "utf8"), before, "a refusal must not touch the patch layer");
     assert.deepStrictEqual(

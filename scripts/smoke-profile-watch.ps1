@@ -244,8 +244,10 @@ try {
     (Join-Path $homeDir "profiles\web\package.json"),
     (Join-Path $homeDir "profiles\web\node_modules\dshmarket\package.json"),
     (Join-Path $homeDir "profiles\web\node_modules\dsh-gui-last-session\package.json"),
-    # Renamed: dsh-opencode-go-session + dsh-opencode-go-api merged into dsh-opencode-go.
-    (Join-Path $homeDir "profiles\web\node_modules\dsh-opencode-go\package.json")
+    # Renamed chain: dsh-opencode-go-session + dsh-opencode-go-api merged into
+    # dsh-opencode-go, which v0.5.0 split out to npm as dsh-opencode-go-path
+    # (the npm name dsh-opencode-go was already taken by another author).
+    (Join-Path $homeDir "profiles\web\node_modules\dsh-opencode-go-path\package.json")
   )
   Write-Host "isolated copy verified"
 

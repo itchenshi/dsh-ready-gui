@@ -18,12 +18,10 @@
  *     启动崩溃，如 dsh-agent-teams 0.1.15 ↔ dsh 0.1.2-rc.1）；非 GUI 勾选的
  *     已装插件保留不动，交给“启动失败诊断”弹窗由用户决定，避免误清理。
  *
- * 仓库自带的捆绑插件（CATALOG 中带 `localSource` 的项，位于 <repo>/plugins）
- * 不直接按 app.asar 内路径安装——打包后该目录在 app.asar 里，子进程 pnpm 无法
- * 读取（会把 app.asar 当普通文件，“as it does not exist”）。主进程 Electron fs
- * 能透明读 asar，因此先把捆绑插件 staging 成磁盘上的真实目录（主进程传的无空格
- * 根目录 <home>\.dsh-gui\bundled-plugins，必要时 8.3 短路径），再让 pnpm 安装
- * 那份拷贝（见 stageBundledPlugin / syncEnabledPlugins）。
+ * 四个随附插件（最近会话恢复 / 模型用量 / OpenCode Go 增强 / 输入框快捷键）自
+ * v0.5.0 起**已拆成各自独立的仓库并发布到 npm**，本仓库不再携带 `plugins/` 源码，
+ * 也不再需要「把捆绑插件 staging 成真实目录再装」那套绕开 app.asar 的机制——它们
+ * 现在和 dsh-market 一样，是一条普通的 registry 条目。
  *
  * 安全说明：第三方插件=以你的权限在你的机器上运行的第三方代码。设置窗口勾选
  * 即安装、取消即卸载；默认全部关闭（未勾选一律不装）。列表只收录在官方目录
@@ -53,9 +51,10 @@ const CATALOG = [
   },
   {
     id: "dsh-gui-last-session",
-    // Local source install, same mechanism as dsh-opencode-go below:
-    // distributed in this repository under plugins/<localSource>, staged to a
-    // real directory before pnpm installs it (see stageBundledPlugin).
+    // npm install: published as its own package
+    // (github.com/itchenshi/dsh-gui-last-session) and fetched from the registry
+    // like every other catalog entry. It used to ship inside this repo under
+    // plugins/<name> and be staged to a real directory first; that is gone.
     //
     // This plugin replaces the old engine-file patch for "reopen the last
     // conversation" (src/engine-patch.js). That patch edited the engine's own
@@ -84,7 +83,7 @@ const CATALOG = [
     // （对比：dsh-agent-teams 那种「装上去直接把引擎打崩」的插件才需要 engineRange，
     //  这个插件最坏情况只是「没恢复会话」，不会影响引擎启动。）
     pkg: "dsh-gui-last-session",
-    localSource: "dsh-gui-last-session",
+    client: true,
     zh: "最近会话恢复（dsh-gui-last-session）",
     en: "Reopen last session (dsh-gui-last-session)",
     zhDesc: "启动后自动回到最近一次对话，不再修改引擎文件（引擎更新不会让功能失效）。",
@@ -93,7 +92,7 @@ const CATALOG = [
   },
   {
     id: "dsh-model-usage",
-    // Local source install，与 dsh-opencode-go / dsh-gui-last-session 同一机制。
+    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-model-usage）。
     //
     // 在会话标题右侧、打开功能按钮左侧显示**模型用量 / 账户余额**，按该会话当前
     // 选中的模型路由分流（仅在使用对应模型时显示）：
@@ -118,7 +117,7 @@ const CATALOG = [
     // 客户端 bundle 被重复执行（duplicate factory registration），进而拖垮页面。
     // 本插件不需要额外的加载顺序约束（页内用 ctx.slots.inject 自行等待 slot）。
     pkg: "dsh-model-usage",
-    localSource: "dsh-model-usage",
+    client: true,
     zh: "模型用量与余量（dsh-model-usage）",
     en: "Model usage & balance (dsh-model-usage)",
     zhDesc: "在会话标题右侧显示当前模型的用量/余量：OpenCode Go 显示套餐用量与选中模型月上限，DeepSeek 显示账户余额。仅在使用对应模型时出现。",
@@ -126,15 +125,14 @@ const CATALOG = [
     url: "",
   },
   {
-    id: "dsh-opencode-go",
-    // Local source install: this plugin is distributed in this repository under
-    // plugins/<localSource> and is never fetched from the npm registry.
-    // `pkg` is the TRUE package name (the key used in the profile bundles
-    // registry / node_modules / settings UI). The bundled folder cannot be
-    // installed straight from the app bundle: in packaged builds it lives
-    // inside app.asar, which a child pnpm process cannot read (app.asar looks
-    // like a plain file to it). plugin-manager therefore stages a real copy
-    // under the pnpm tools dir first and installs that (see stageBundledPlugin).
+    id: "dsh-opencode-go-path",
+    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-opencode-go-path）。
+    //
+    // 包名必须带 `-path` 后缀：`dsh-opencode-go` 与 `dsh-opencode-go-plus` 都已
+    // 被社区占用，无法在 npm 上使用（后者是同期另一个更强的独立实现，见
+    // github.com/yumusb/dsh-opencode-go-plus）。`pkg` 是真正的包名——profile 的
+    // bundles 登记、node_modules 目录、设置界面显示都用它。
+    // 补丁层的行 id 仍是 `opencode-go`，与包名解耦，因此老用户已有的禁用选择不丢。
     //
     // 合并自原 dsh-opencode-go-session + dsh-opencode-go-api（两者在
     // LEGACY_PLUGIN_PKGS 里做一次性迁移）。三件事：
@@ -155,17 +153,19 @@ const CATALOG = [
     // 引擎装配层、settings 服务与 llm 事件的公开契约（bundle patch 按 row id 合并
     // + llm-pi-ai 的 profile schema 接受 route 级 `api` 字段 + ctx.settings
     // update/section/describe + llm/stream 瀑布），不是引擎版本号。
-    pkg: "dsh-opencode-go",
-    localSource: "dsh-opencode-go",
-    zh: "OpenCode Go 增强（dsh-opencode-go）",
-    en: "OpenCode Go toolkit (dsh-opencode-go)",
+    pkg: "dsh-opencode-go-path",
+    client: false,
+    zh: "OpenCode Go 增强（dsh-opencode-go-path）",
+    en: "OpenCode Go toolkit (dsh-opencode-go-path)",
     zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头，修复 400 MissingSessionID。",
     enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID.",
     url: "",
   },
   {
-    id: "dsh-composer-keys",
-    // Local source install, same mechanism as the other bundled plugins.
+    id: "dsh-composer-keys-setting",
+    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-composer-keys-setting）。
+    // 包名必须带 `-setting` 后缀：`dsh-composer-keys` 已被社区占用
+    // （github.com/zlqd123/dsh-composer-keys，功能同名），npm 上不可用。
     //
     // 输入框快捷键：Enter / Shift+Enter / Ctrl+Enter 各自可设为「发送」或「换行」，
     // 设置行注册在 DSH 设置窗口的**通用**页（settings.general.item，紧挨引擎自带的
@@ -182,10 +182,10 @@ const CATALOG = [
     //
     // 与其它捆绑插件一样**不设 engineRange**：依赖的是 settings 服务与
     // settings.general.item 槽位的公开契约，不是引擎版本号。
-    pkg: "dsh-composer-keys",
-    localSource: "dsh-composer-keys",
-    zh: "输入框快捷键（dsh-composer-keys）",
-    en: "Composer shortcuts (dsh-composer-keys)",
+    pkg: "dsh-composer-keys-setting",
+    client: true,
+    zh: "输入框快捷键（dsh-composer-keys-setting）",
+    en: "Composer shortcuts (dsh-composer-keys-setting)",
     zhDesc: "在设置窗口的通用页配置 Enter / Shift+Enter / Ctrl+Enter 是发送消息还是换行。",
     enDesc: "Configure in Settings → General whether Enter / Shift+Enter / Ctrl+Enter sends the message or inserts a line break.",
     url: "",
@@ -1050,24 +1050,20 @@ function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
  *   - 但页面里**已经加载**的客户端 bundle 不会自己出现或消失，启用/禁用后
  *     那一半要刷新页面才同步（GUI 会在市场返回 refresh 时给出「刷新页面」按钮）。
  *
- * 已装 → 读 profile node_modules 里的真实 package.json；未装但带 localSource
- * → 读仓库内的源；npm 条目未安装时无从判断，返回 null（界面只陈述引擎侧规则）。
+ * 已装 → 读 profile node_modules 里的真实 package.json（权威）；未装 → 用目录
+ * 条目里核实过的 `entry.client` 声明。拆仓后插件从 npm 安装，本地没有源码可读，
+ * 而「是否含页面半边」决定启用/禁用后要不要刷新页面，必须安装前就能显示。
  * @returns {boolean|null}
  */
 function pluginHasClientHalf(dshHome, entry) {
-  const candidates = [
-    path.join(profileDir(dshHome), "node_modules", entry.pkg, "package.json"),
-    entry.localSource ? path.join(bundledPluginsRoot(), entry.localSource, "package.json") : null,
-  ].filter((file) => typeof file === "string");
-  for (const file of candidates) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-      return manifest?.dsh?.client !== undefined && manifest?.dsh?.client !== null;
-    } catch {
-      /* try the next candidate */
-    }
+  try {
+    const file = path.join(profileDir(dshHome), "node_modules", entry.pkg, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    return manifest?.dsh?.client !== undefined && manifest?.dsh?.client !== null;
+  } catch {
+    /* not installed (or unreadable) — fall back to the catalog declaration */
   }
-  return null;
+  return typeof entry.client === "boolean" ? entry.client : null;
 }
 
 /** 每个候选目录项的已装 / 启用状态：bundles 登记 + 实存 + 补丁层/市场禁用。 */
@@ -1079,9 +1075,7 @@ function catalogStatus(dshHome) {
   const out = {};
   for (const entry of CATALOG) {
     // The materialised name in node_modules / the bundles registry is the true
-    // package name (bundles never contains a `file:` spec), so compare against
-    // `pkg` (== the registry name for npm entries, == the localSource package
-    // name for bundled entries).
+    // package name (bundles never contains a `file:` spec), so compare against `pkg`.
     const bundleName = entry.pkg;
     const pkgDir = path.join(modulesRoot, bundleName);
     let installed = bundles.has(bundleName) && fs.existsSync(path.join(pkgDir, "package.json"));
@@ -1115,99 +1109,6 @@ function catalogStatus(dshHome) {
     };
   }
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// bundled (local-source) plugins
-// ---------------------------------------------------------------------------
-//
-// 打包版里 `plugins/` 随 src/ 一起打进 app.asar；子进程 pnpm 把 app.asar 当作
-// 一个普通文件，读不到里面的目录，所以 `pnpm add file:<app.asar 内路径>` 会报
-// “as it does not exist”。Electron 主进程的 fs 能透明读 asar 路径，因此这里
-// 先把捆绑插件复制成 pnpm-tools 目录下的真实文件夹（staging），再装那份拷贝。
-// 开发模式（electron .）下 source 本身就在磁盘上，逻辑完全相同。
-
-/** 仓库内捆绑插件的根目录（本进程可读：开发=真实目录，打包=app.asar 内路径）。 */
-function bundledPluginsRoot() {
-  return path.join(__dirname, "..", "plugins");
-}
-
-/** 某个捆绑插件条目可读的源目录。 */
-function bundledSourceDir(entry) {
-  return path.join(bundledPluginsRoot(), entry.localSource ?? entry.pkg);
-}
-
-/** 递归复制目录（read/readdir/stat 均可被 Electron 的 asar fs 透明处理）。 */
-async function copyDirRecursive(src, dst) {
-  await fsp.mkdir(dst, { recursive: true });
-  const names = await fsp.readdir(src);
-  for (const name of names) {
-    const from = path.join(src, name);
-    const to = path.join(dst, name);
-    // lstat（不跟随链接）：`stat` 会把捆绑插件源码树里的 junction/软链指向的外部内容
-    // 一起拷进将要安装的包里（实测能把仓库外的文件复制进来）。链接一律跳过。
-    const st = await fsp.lstat(from);
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory()) await copyDirRecursive(from, to);
-    else await fsp.writeFile(to, await fsp.readFile(from));
-  }
-}
-
-/** 读取某目录 package.json 的 version（读不到返回 null）。 */
-function readPackageVersion(dir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** 读取某目录 package.json 的 name（读不到返回 null）。 */
-function readPackageName(dir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).name ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** 已装插件在 profile node_modules 里的版本（未装/不可读返回 null）。 */
-function installedBundleVersion(dshHome, pkg) {
-  return readPackageVersion(path.join(profileDir(dshHome), "node_modules", pkg));
-}
-
-/**
- * 把捆绑插件 staging 成 <stagingRoot>/<pkg> 的真实目录并返回该目录。
- * 每次安装前都整目录刷新，保证装的是当前随应用发布的代码。staging 路径必须
- * 稳定（pnpm 会把 `file:` spec 原样写进 profile 的 dependencies，之后在该
- * profile 里再跑 pnpm 仍要能解析到这份拷贝）。
- *
- * stagingRoot 还必须不含空格：引擎把 `pnpm <args>` 用 shell 转发（Node 26 起
- * shell:true 不再转义参数），file: spec 路径里出现空格会被拆词。主进程从
- * <home>\.dsh-gui\bundled-plugins（必要时 8.3 短路径）传入；这里仅作最后防线。
- * @returns {Promise<string>} 真实 staging 目录
- */
-async function stageBundledPlugin(entry, { stagingRoot, log = () => {} }) {
-  const name = entry.pkg;
-  const sourceDir = bundledSourceDir(entry);
-  if (!fs.existsSync(path.join(sourceDir, "package.json"))) {
-    throw new Error(`bundled plugin source missing: ${sourceDir}`);
-  }
-  const sourceName = readPackageName(sourceDir);
-  if (sourceName && sourceName !== name) {
-    throw new Error(`bundled plugin name mismatch: ${sourceDir} is "${sourceName}", expected "${name}"`);
-  }
-  const stagingDir = path.join(stagingRoot, name);
-  if (/[\s"&|^%!<>]/u.test(stagingDir)) {
-    throw new Error(
-      `bundled plugin staging path contains characters the engine's shell cannot carry (${stagingDir}); ` +
-        "use a stagingRoot without spaces or cmd metacharacters",
-    );
-  }
-  await fsp.rm(stagingDir, { recursive: true, force: true });
-  await copyDirRecursive(sourceDir, stagingDir);
-  log("bundled plugin staged:", sourceDir, "->", stagingDir);
-  return stagingDir;
 }
 
 /**
@@ -1340,12 +1241,26 @@ const LEGACY_PLUGIN_PKGS = [
   {
     pkg: "dsh-opencode-go-session",
     rowIds: ["opencode-go-session-header"],
-    replacedBy: "dsh-opencode-go",
+    replacedBy: "dsh-opencode-go-path",
   },
   {
     pkg: "dsh-opencode-go-api",
     rowIds: ["opencode-go-api"],
-    replacedBy: "dsh-opencode-go",
+    replacedBy: "dsh-opencode-go-path",
+  },
+  // v0.4.1 及更早的版本把下面两个插件**随壳捆绑**在 plugins/ 下，用 `file:` 装进
+  // profile——它们当时从未发布到 npm。拆仓后改为从 registry 安装，而 npm 上的同名包
+  // 已被别人占用，所以各加了一个后缀。旧包名仍留在老用户的 profile 里（bundles 登记
+  // + package.json 的 file: 依赖），必须清掉，否则新旧两份会被引擎同时加载。
+  {
+    pkg: "dsh-opencode-go",
+    rowIds: ["opencode-go"],
+    replacedBy: "dsh-opencode-go-path",
+  },
+  {
+    pkg: "dsh-composer-keys",
+    rowIds: ["composer-keys"],
+    replacedBy: "dsh-composer-keys-setting",
   },
 ];
 
@@ -1694,14 +1609,9 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
  *  - 已装但未勾选：sync 模式按“未勾选”卸载；install 模式不静默清理，留给
  *    “启动失败诊断”弹窗由用户知情后处理。
  *
- * 其他：幂等（已装且版本未变则跳过；捆绑插件随应用更新会先 remove 再 add，
- * 让 profile 里的拷贝跟上随包发布的代码）；捆绑（localSource）插件从不直接
- * 指向 app.asar 内的源目录安装，先 staging 成真实目录（子进程 pnpm 读不到
- * app.asar 内部）再装那份。
+ * 其他：幂等（已装则跳过）。
  * @param {object} o
  * @param {"sync"|"install"} [o.mode] 默认 "install"（只增不删）。
- * @param {string} [o.stagingRoot] 捆绑插件的 staging 根目录。默认取
- *   <pnpmInstallDir>/bundled-plugins；主进程应传入无空格的路径（见 stageBundledPlugin）。
  * @returns {Promise<{installed:string[], removed:string[], skipped:string[], errors:string[], changed:boolean}>}
  *   changed 表示已装集合真的变了（调用方据此提示“需重启引擎”）。
  */
@@ -1711,7 +1621,6 @@ async function syncEnabledPlugins({
   dshHome,
   nodeExec,
   pnpmInstallDir,
-  stagingRoot,
   mode = "install",
   log = () => {},
 }) {
@@ -1730,9 +1639,6 @@ async function syncEnabledPlugins({
     log("pnpm provisioning failed:", error);
     return result;
   }
-  // 捆绑插件 staging 根目录（保持稳定：pnpm 会把 `file:` spec 原样写进 profile
-  // 的 dependencies，之后在该 profile 里再跑 pnpm 仍需能解析到同一路径）。
-  const bundledStagingRoot = stagingRoot ?? path.join(pnpmInstallDir, "bundled-plugins");
   const engineVersion = readEngineVersion(engineDir);
   for (const entry of CATALOG) {
     const name = entry.pkg;
@@ -1784,39 +1690,13 @@ async function syncEnabledPlugins({
       continue;
     }
 
-    // 捆绑插件随应用更新：安装的版本落后于随包发布的源版本时强制重装。
-    let wantsUpdate = false;
-    if (has && entry.localSource) {
-      const sourceVersion = readPackageVersion(bundledSourceDir(entry));
-      const installedVersion = installedBundleVersion(dshHome, name);
-      // 只在**随包版本更新**时重装。`!==` 会让「已装版本比随包新」也触发 remove+add ——
-      // 那是一次无人值守的**降级**（应用回滚过、市场侧更新过、或手工换过更新的副本时都会
-      // 发生）。版本号不可解析时才退回不等式。
-      if (sourceVersion && installedVersion) {
-        const bothValid = semver.valid(sourceVersion) !== null && semver.valid(installedVersion) !== null;
-        wantsUpdate = bothValid ? semver.gt(sourceVersion, installedVersion) : sourceVersion !== installedVersion;
-        if (wantsUpdate) {
-          log("bundled plugin is newer:", name, installedVersion, "->", sourceVersion);
-        } else if (installedVersion !== sourceVersion) {
-          log("keeping the newer installed plugin:", name, installedVersion, "(bundled " + sourceVersion + ")");
-        }
-      }
-    }
-    if (has && !wantsUpdate) continue;
+    // 已装且被勾选 → 什么都不做。升级交给 dsh-market / `dsh plugin update`：
+    // 本目录的条目都是普通 registry 包，GUI 不再凭空比较「随包版本」去重装
+    // （拆仓前那套逻辑只服务于 `file:` 安装的捆绑插件）。
+    if (has) continue;
     try {
-      // 先准备好可安装的 spec（捆绑插件先 staging 成真实目录——子进程 pnpm
-      // 读不到 app.asar 内部路径；npm 条目按目录声明的 version 固定），再做
-      // remove/add，失败时不至于先拆了旧的。
-      const spec = entry.localSource
-        ? `file:${await stageBundledPlugin(entry, { stagingRoot: bundledStagingRoot, log })}`
-        : registrySpec(entry);
-      if (wantsUpdate) {
-        const rm = await removePlugin({ engineDir, dshHome, pnpmBinDir, pkg: name, nodeExec, log });
-        if (!rm.ok) {
-          result.errors.push(`${name}: remove failed (${rm.output.slice(-160)})`);
-          continue;
-        }
-      }
+      // 按目录声明的 version 固定（未声明则跟随 latest），失败时不至于先拆了旧的。
+      const spec = registrySpec(entry);
       const res = await installPlugin({ engineDir, dshHome, pnpmBinDir, pkg: spec, name, nodeExec, log });
       if (res.ok) {
         result.installed.push(entry.id);

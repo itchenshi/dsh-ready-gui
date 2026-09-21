@@ -352,11 +352,11 @@ try {
 
   Assert-Paths @(
     (Join-Path $ud "dsh-engine\node_modules\@deepseek-ai\dsh\package.json"),
-    (Join-Path $homeDir "profiles\web\package.json"),
-    # The plugin source the GUI stages and installs (repo checkout in dev mode).
-    (Join-Path $root "plugins\dsh-model-usage\package.json"),
-    (Join-Path $root "plugins\dsh-model-usage\cordis.patch.yml")
+    (Join-Path $homeDir "profiles\web\package.json")
   )
+  # NOTE: the catalog plugins are installed from the npm registry since v0.5.0
+  # (they used to be staged from <repo>/plugins). There is no repo-local source
+  # to assert any more; the install itself is exercised by the steps below.
   Write-Host "isolated copy verified"
 
   $patchFile = Join-Path $homeDir "profiles\web\cordis.patch.yml"

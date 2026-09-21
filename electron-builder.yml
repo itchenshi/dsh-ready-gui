@@ -12,14 +12,13 @@ directories:
 # The packaged app only needs src + the semver prod dependency. The dsh
 # engine lives in userData/dsh-engine at runtime (installed by the app
 # itself), so it is deliberately NOT packaged here.
-# plugins/ ships the repo's bundled local plugins inside app.asar. The GUI
-# main process can read them there (Electron asar-aware fs) and stages real
-# on-disk copies under <userData>/pnpm-tools before installing them with
-# pnpm — a child pnpm cannot read inside app.asar (see src/plugin-manager.js).
+#
+# plugins/ is NOT packaged: since v0.5.0 the four bundled plugins live in their
+# own repositories and are installed from the npm registry like any other
+# catalog entry (see src/plugin-manager.js).
 files:
   - src/**/*
   - package.json
-  - plugins/**/*
 
 # Do not run node-gyp rebuilds on the app's own deps (only semver, pure JS).
 npmRebuild: false
