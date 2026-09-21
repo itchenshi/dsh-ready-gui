@@ -111,9 +111,9 @@ const mode = process.argv[3]; // "rm" | "add"
 const m = JSON.parse(fs.readFileSync(p, "utf8"));
 const b = m.dsh && m.dsh.profile && m.dsh.profile.bundles;
 if (!Array.isArray(b)) { console.error("no dsh.profile.bundles"); process.exit(2); }
-const i = b.indexOf("dsh-model-usage");
+const i = b.indexOf("dsh-model-surplus");
 if (mode === "rm" && i >= 0) b.splice(i, 1);
-if (mode === "add" && i < 0) b.push("dsh-model-usage");
+if (mode === "add" && i < 0) b.push("dsh-model-surplus");
 fs.writeFileSync(p, JSON.stringify(m, null, 2));
 console.log("flip " + mode + " -> bundles: " + JSON.stringify(b));
 '@
@@ -253,7 +253,7 @@ try {
 
   # Seed a PRE-RENAME install deterministically instead of depending on whatever
   # the live home happens to hold (it may already have migrated). The GUI's boot
-  # migration must replace it with dsh-model-usage, which is the plugin this test
+  # migration must replace it with dsh-model-surplus, which is the plugin this test
   # then flips in and out of the profile manifest.
   $seedFile = Join-Path $env:TEMP ("dsh-profw-seed-" + [guid]::NewGuid().ToString("N") + ".cjs")
   $seed = @'
@@ -357,22 +357,22 @@ console.log("seeded pre-rename install:", oldPkg);
   $migrated = $false
   while ((Get-Date) -lt $deadline0) {
     $b = Get-Bundles
-    if (($b -contains "dsh-model-usage") -and ($b -notcontains "dsh-opencode-go-usage")) { $migrated = $true; break }
+    if (($b -contains "dsh-model-surplus") -and ($b -notcontains "dsh-opencode-go-usage")) { $migrated = $true; break }
     if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { break }
     Start-Sleep -Milliseconds 500
   }
   if (-not $migrated) {
     Dump-Log
-    throw "the rename migration never converged on dsh-model-usage: $((Get-Bundles) -join ',')"
+    throw "the rename migration never converged on dsh-model-surplus: $((Get-Bundles) -join ',')"
   }
-  Write-Host "STEP1b PASS: rename migration installed dsh-model-usage"
+  Write-Host "STEP1b PASS: rename migration installed dsh-model-surplus"
 
   # Let boot reconciliation settle, then simulate market disable. The watcher
   # logs the new fingerprint JSON; the checkbox mirror renders from it, so
-  # "dsh-model-usage" with installed:false proves the checkbox unchecks.
+  # "dsh-model-surplus" with installed:false proves the checkbox unchecks.
   Start-Sleep -Seconds 2
   Flip-Manifest "rm"
-  Wait-Log "plugin state changed outside the GUI.*dsh-model-usage.*installed.:false" 30 "market disable not detected"
+  Wait-Log "plugin state changed outside the GUI.*dsh-model-surplus.*installed.:false" 30 "market disable not detected"
   Write-Host "STEP2 PASS: market disable detected, checkbox state now unchecked"
 
   # Simulate market re-enable: state restored, checkbox back to checked. Wait
@@ -390,7 +390,7 @@ console.log("seeded pre-rename install:", oldPkg);
   }
   if (-not $seen) { Dump-Log; throw "re-enable didn't produce a new plugin-state change" }
   $lastLine = ($lines[-1]).Line
-  if ($lastLine -notmatch "dsh-model-usage.*installed.:true") {
+  if ($lastLine -notmatch "dsh-model-surplus.*installed.:true") {
     Dump-Log
     throw "re-enable didn't restore installed state: $lastLine"
   }
@@ -402,7 +402,7 @@ console.log("seeded pre-rename install:", oldPkg);
   # banner appears while each operation runs and hides when it finishes.
   $beforeClicks = @(Get-Content $log -ErrorAction SilentlyContinue | Select-String "plugin state changed outside the GUI").Count
   Write-Host "STEP4: driving settings-window checkbox via CDP (uninstall -> reinstall, with progress)..."
-  & node $driverFile $dbgPort "dsh-model-usage"
+  & node $driverFile $dbgPort "dsh-model-surplus"
   if ($LASTEXITCODE -ne 0) { Dump-Log; throw "CDP checkbox drive failed (exit $LASTEXITCODE)" }
   Write-Host "STEP4 PASS: checkbox click -> immediate uninstall/reinstall (+ progress banner)"
 
@@ -419,7 +419,7 @@ console.log("seeded pre-rename install:", oldPkg);
     Dump-Log
     throw "checkbox clicks didn't produce two profile changes (before=$beforeClicks after=$($afterClicks.Count))"
   }
-  if ($afterClicks[-1].Line -notmatch "dsh-model-usage.*installed.:true") {
+  if ($afterClicks[-1].Line -notmatch "dsh-model-surplus.*installed.:true") {
     Dump-Log
     throw "after reinstall the profile should list the plugin as installed: $($afterClicks[-1].Line)"
   }

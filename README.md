@@ -44,18 +44,19 @@ Tauri 客户端、`dsh web`、CLI 里都能用 `dsh plugin add` 装，也可以�
 
 | 插件 | npm 包 | 仓库 |
 |---|---|---|
-| 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
-| 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
-| OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
-| 输入框快捷键 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
+| 模型余量 | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
+| 会话续接 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
+| OpenCode Go 路由 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
+| 按键设置 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
 ```bash
-dsh plugin --profile web add dsh-model-usage
+dsh plugin --profile web add dsh-model-surplus
 ```
 
-> **关于几个带后缀的包名**：`dsh-opencode-go`、`dsh-opencode-go-plus` 与
-> `dsh-composer-keys` 在 npm 上都已被其他作者占用，因此 OpenCode Go 增强用的是
-> `-path` 后缀，输入框快捷键最终定为 **`dsh-keys-setting`**。这与插件的功能无关，
+> **关于几个换过名字的包**：`dsh-opencode-go`（及 `dsh-opencode-go-plus`）与
+> `dsh-composer-keys` 在 npm 上都已被其他作者占用；`dsh-model-usage` 虽然空着，但
+> GitHub 上已有三个别人的同名仓库。因此最终定名 **`dsh-opencode-go-path`**、
+> **`dsh-keys-setting`**、**`dsh-model-surplus`**。这与插件的功能无关，
 > 只影响安装时写的包名。
 
 四个插件的发布用 `scripts/publish-plugins.ps1` 一次完成（会强制走官方 registry、
@@ -72,23 +73,24 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 
 ## 🆕 v0.5.0 亮点
 
-- **📦 插件拆仓 + 发布 npm**：四个随附插件（模型用量与余量、最近会话恢复、
-  OpenCode Go 增强、输入框快捷键）**不再随本仓库打包**，各自独立成仓库并发布到
+- **📦 插件拆仓 + 发布 npm**：四个随附插件（模型余量、会话续接、
+  OpenCode Go 路由、按键设置）**不再随本仓库打包**，各自独立成仓库并发布到
   npm；DSH GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
   不再需要等壳发版，且在任何 DSH 宿主（官方桌面端、Tauri 客户端、`dsh web`、CLI）
   里都能装。
-- **⚠️ 两个插件的包名变了**：`dsh-opencode-go` → **`dsh-opencode-go-path`**（原名被占
-  用）、`dsh-composer-keys` → **`dsh-keys-setting`**（原名被占用，中间短暂用过
-  `dsh-composer-keys-setting`）。老用户无需手动操作：
-  GUI 启动维护会把旧包名一次性清理掉（摘 bundles 登记 + 清补丁层残留行 +
-  把「已禁用」的选择搬到新包上），不会出现新旧两份同时加载。
-  **补丁层行 id 与设置命名空间仍是 `composer-keys`**，所以你保存的键位和启用/禁用
-  选择都不会因为改包名而失效。
+- **⚠️ 三个插件的包名变了**：`dsh-opencode-go` → **`dsh-opencode-go-path`**、
+  `dsh-composer-keys` → **`dsh-keys-setting`**（这两个原名都被别人占用）、
+  `dsh-model-usage` → **`dsh-model-surplus`**（npm 上那个名字虽然空着，但 GitHub 上
+  已有三个别人的同名仓库、其中两个的 package.json 也写着它——谁先发布谁拿到，所以
+  拆仓时直接换掉了）。老用户无需手动操作：GUI 启动维护会把旧包名一次性清理掉
+  （摘 bundles 登记 + 清补丁层残留行 + 把「已禁用」的选择搬到新包上），不会出现
+  新旧两份同时加载。**补丁层行 id 与设置命名空间保持原样**（`composer-keys` /
+  `model-usage`），所以你保存的键位和启用/禁用选择都不会因为改包名而失效。
 - **🔁 旧版留下的 `file:` 安装也会自动转成 registry 版本**：v0.4.1 是把插件 staging
   到 `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile 的，所以
-  `dsh-model-usage` 与 `dsh-gui-last-session`（**包名没变**）也会停在旧副本上、拿不到
-  更新，而且 staging 目录一旦被清就会让 profile 启动失败。启动维护会识别这类条目
-  （profile 的 `dependencies` 里是 `file:` spec）并换成 npm 版本。
+  `dsh-gui-last-session`（**包名没变的那个**）也会停在旧副本上、拿不到更新，而且
+  staging 目录一旦被清就会让 profile 启动失败。启动维护会识别这类条目（profile 的
+  `dependencies` 里是 `file:` spec）并换成 npm 版本；名字变了的三个由改名迁移处理。
 - **🧹 移除 app.asar 内的插件 staging 机制**：该机制存在的唯一理由是子进程 pnpm
   读不到 app.asar 内部路径；插件走 registry 之后没有任何条目需要 `file:` 安装，
   相关代码（staging 目录、递归复制、8.3 短路径处理）整体删除。
@@ -106,7 +108,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 - **🔄 自动检查 DSH GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
   **自动兼顾国内外网络** —— 国内先试 Gitee → GitCode → GitHub，国外反之，逐源限时回退并记住上次
   可用的源（实测本机 Gitee 首次尝试 251ms 命中）。
-- **⌨️ 新插件「输入框快捷键」**（`dsh-keys-setting`）：在设置窗口「通用」页配置
+- **⌨️ 新插件「按键设置」**（`dsh-keys-setting`）：在设置窗口「通用」页配置
   Enter / Shift+Enter / Ctrl+Enter 是**发送消息**还是**换行**；默认即引擎默认，不改动任何现有习惯。
 
 完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md)。
@@ -117,7 +119,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 |---|---|
 | ![主窗口](screenshots/主窗口.png) | ![设置窗口](screenshots/设置.png) |
 
-**模型用量与余量**（会话标题右侧，按当前模型自动切换）：用 OpenCode Go 模型时显示套餐用量，用 DeepSeek 模型时显示账户余额。
+**模型余量**（会话标题右侧，按当前模型自动切换）：用 OpenCode Go 模型时显示套餐用量，用 DeepSeek 模型时显示账户余额。
 
 | OpenCode Go 用量 | DeepSeek 余额 |
 |---|---|
@@ -177,7 +179,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   那个开关完全同一条路径），所以在线生效时机、保护规则、`restart` / `refresh`
   信号都与市场一致：
   - 引擎侧**立即生效**（市场用 loader 句柄在线切换，不需要重启）；
-  - 带**客户端半体**的插件（如模型用量与余量）禁用后，页面里已加载的那半不会
+  - 带**客户端半体**的插件（如模型余量）禁用后，页面里已加载的那半不会
     自己消失——市场为此返回 `refresh: true` 并提示「刷新后生效」，设置窗口同样会
     出现「**刷新页面**」按钮，点它就与引擎实际组合对齐；
   - 市场拒绝的情况原样上报（宿主基础设施禁止开关、市场自身不可关、未安装），
@@ -198,16 +200,16 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   额外 bundle。
 - **「修复 / 重试」按钮**：以当前已安装集合为目标再对账（补拉捆绑插件更新），
   只增不删，可作安装失败后的重试；同时对齐启用/禁用状态。
-- **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、最近会话恢复
-  （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode Go 增强
-  （dsh-opencode-go-path）、输入框快捷键（dsh-keys-setting）。设置窗口
+- **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、会话续接
+  （dsh-gui-last-session）、模型余量（dsh-model-surplus）、OpenCode Go 路由
+  （dsh-opencode-go-path）、按键设置（dsh-keys-setting）。设置窗口
   展示顺序即此顺序。**后四个自 v0.5.0 起是独立仓库 + npm 包**，全部从 registry
   安装，不再随本仓库打包（见下方「相关仓库」）。
 - **生效方式按插件标注**：安装/卸载改的是 profile 的 bundle 列表（引擎只在启动时组装），因此**需重启引擎**；
   启用/禁用写的是补丁层，由引擎**热重载即时生效**；含页面半边（`dsh.client`）的插件，那一半还需**刷新 Harness 页面**。
   这两条通用规则写在插件的段落说明里（每行重复只会把窗口撑大），**因插件而异的「含页面部分 · 需刷新页面」
   以小标签标在对应行上**——「是否含页面半边」由 GUI 读取插件 package.json 判定（未安装的 npm 条目无从判断时不标）。
-- **`dsh-opencode-go-path`（OpenCode Go 增强）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
+- **`dsh-opencode-go-path`（OpenCode Go 路由）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
   ① 给 `opencode-go` 路由声明 wire 协议（`api: openai-completions`），修掉目录外模型
   （如 `deepseek-v4.1-flash`）的 `needs an api` 报错与模型页保存被拒；② 引擎启动后若该路由存在
   且缺 `deepseek-v4.1-*`，自动补上 DeepSeek V4.1 模型（幂等，写在 `settings.yaml`）；③ 为发往
@@ -216,7 +218,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   `dsh-opencode-go-api`；包名由 `dsh-opencode-go` 改为 `dsh-opencode-go-path`
   （原名在 npm 上已被他人占用）**——
   升级时 GUI 会自动摘除旧包并装上新版（连"已禁用"的选择一起搬过去），不会新旧两版同时加载。
-- **`dsh-model-usage`（模型用量与余量）**：在会话标题右侧显示**当前模型**的用量/余量，
+- **`dsh-model-surplus`（模型余量）**：在会话标题右侧显示**当前模型**的用量/余量，
   按会话当前选中的模型路由分流（仅在使用对应模型时出现）：
   - OpenCode Go 模型（`opencode-go` / `opencode`）→ 套餐用量（滚动 / 周 / 月 百分比 + 重置时间），
     宿主侧经 `ctx.credentials` 取 `OPENCODE_GO_API_KEY` 调 `GET https://opencode.ai/zen/go/v1/usage`；

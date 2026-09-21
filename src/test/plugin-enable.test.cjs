@@ -91,7 +91,7 @@ function makeProfile({ bundles = [], deps = null, pkgPatchYml = null, state = nu
 
 const USAGE_PATCH = `- insert:
     - id: model-usage
-      name: dsh-model-usage
+      name: dsh-model-surplus
       config:
         enabled: true
 `;
@@ -100,14 +100,14 @@ console.log("plugin-enable:");
 
 ok("packageRowIds 从包的 cordis.patch.yml 取 insert 行 id", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
   });
   try {
-    const ids = pm.packageRowIds(dshHome, "dsh-model-usage");
+    const ids = pm.packageRowIds(dshHome, "dsh-model-surplus");
     assert.deepStrictEqual(ids, ["model-usage"]);
     // 补丁层为空 → 状态是启用
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.installed, true);
     assert.strictEqual(st.enabled, true);
     assert.strictEqual(st.disabledBy, null);
@@ -118,14 +118,14 @@ ok("packageRowIds 从包的 cordis.patch.yml 取 insert 行 id", () => {
 
 ok("禁用：写补丁层 `- id: X` + disabled: true（并把模板 [] 注释掉）", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
     state: { disabled: [], groups: {}, region: "china" },
   });
   try {
     const res = pm.setPluginEnabled({
       dshHome,
-      pkg: "dsh-model-usage",
+      pkg: "dsh-model-surplus",
       rowIds: ["model-usage"],
       enabled: false,
     });
@@ -136,12 +136,12 @@ ok("禁用：写补丁层 `- id: X` + disabled: true（并把模板 [] 注释掉
     assert.match(text, /^# \[\]$/m);
     assert.doesNotMatch(text, /^\[\]$/m);
     // 状态变成禁用，且来源是补丁层
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.enabled, false);
     assert.strictEqual(st.patchDisabled, true);
     // 市场 state.json 同步记下包名
     const state = JSON.parse(fs.readFileSync(path.join(profile, ".dsh-market", "state.json"), "utf8"));
-    assert.deepStrictEqual(state.disabled, ["dsh-model-usage"]);
+    assert.deepStrictEqual(state.disabled, ["dsh-model-surplus"]);
     assert.strictEqual(state.region, "china", "写入时应保留 state.json 的其余键");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -150,15 +150,15 @@ ok("禁用：写补丁层 `- id: X` + disabled: true（并把模板 [] 注释掉
 
 ok("禁用幂等：重复禁用不重复追加行", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
     state: { disabled: [] },
   });
   try {
     const rowIds = ["model-usage"];
-    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-usage", rowIds, enabled: false });
+    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-surplus", rowIds, enabled: false });
     const first = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
-    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-usage", rowIds, enabled: false });
+    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-surplus", rowIds, enabled: false });
     const second = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
     assert.strictEqual(second, first);
     assert.strictEqual((second.match(/- id: model-usage/g) || []).length, 1);
@@ -169,19 +169,19 @@ ok("禁用幂等：重复禁用不重复追加行", () => {
 
 ok("启用：删掉禁用行，并把 [] 占位还原（否则 profile 无法启动）", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
     state: { disabled: [] },
   });
   try {
     const rowIds = ["model-usage"];
-    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-usage", rowIds, enabled: false });
-    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-usage", rowIds, enabled: true });
+    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-surplus", rowIds, enabled: false });
+    pm.setPluginEnabled({ dshHome, pkg: "dsh-model-surplus", rowIds, enabled: true });
     const text = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
     // 关键：不能剩一个纯注释文件，必须还原顶层 []
     assert.doesNotMatch(text, /- id: model-usage/);
     assert.match(text, /^\[\]$/m);
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.enabled, true);
     assert.strictEqual(st.disabledBy, null);
     const state = JSON.parse(fs.readFileSync(path.join(profile, ".dsh-market", "state.json"), "utf8"));
@@ -193,12 +193,12 @@ ok("启用：删掉禁用行，并把 [] 占位还原（否则 profile 无法启
 
 ok("市场上禁用（state.json 有、补丁层没有）→ 状态为禁用且来源是 market", () => {
   const { root, dshHome } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
-    state: { disabled: ["dsh-model-usage"], groups: {} },
+    state: { disabled: ["dsh-model-surplus"], groups: {} },
   });
   try {
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.enabled, false, "市场禁用了就必须显示为禁用");
     assert.strictEqual(st.marketDisabled, true);
     assert.strictEqual(st.patchDisabled, false, "补丁层还没落下 → 引擎其实仍会加载它（漂移）");
@@ -210,17 +210,17 @@ ok("市场上禁用（state.json 有、补丁层没有）→ 状态为禁用且�
 
 ok("reconcilePluginEnabled 把「市场禁用但补丁层没写」补实", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
-    state: { disabled: ["dsh-model-usage"] },
+    state: { disabled: ["dsh-model-surplus"] },
   });
   try {
     const res = pm.reconcilePluginEnabled({ dshHome });
-    assert.deepStrictEqual(res.healed, ["dsh-model-usage"]);
+    assert.deepStrictEqual(res.healed, ["dsh-model-surplus"]);
     assert.strictEqual(res.changed, true);
     const text = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
     assert.match(text, /^- id: model-usage\n {2}disabled: true\n/m);
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.patchDisabled, true, "对账后补丁层也禁用了 → 真正不加载");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -229,9 +229,9 @@ ok("reconcilePluginEnabled 把「市场禁用但补丁层没写」补实", () =>
 
 ok("对账尊重补丁层的 disabled: false（显式要它开着时不覆盖）", () => {
   const { root, dshHome } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
-    state: { disabled: ["dsh-model-usage"] },
+    state: { disabled: ["dsh-model-surplus"] },
     patch: `- id: model-usage\n  disabled: false\n`,
   });
   try {
@@ -245,7 +245,7 @@ ok("对账尊重补丁层的 disabled: false（显式要它开着时不覆盖）
 
 ok("补丁层坏成顶层流式结构时拒绝写入（绝不把 YAML 弄得更坏）", () => {
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
     state: { disabled: [] },
     patch: "[1, 2]\n",
@@ -254,7 +254,7 @@ ok("补丁层坏成顶层流式结构时拒绝写入（绝不把 YAML 弄得更�
     const before = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
     const res = pm.setPluginEnabled({
       dshHome,
-      pkg: "dsh-model-usage",
+      pkg: "dsh-model-surplus",
       rowIds: ["model-usage"],
       enabled: false,
     });
@@ -268,10 +268,10 @@ ok("补丁层坏成顶层流式结构时拒绝写入（绝不把 YAML 弄得更�
 ok("未安装的插件不会因为市场 state.json 而报成已装", () => {
   const { root, dshHome } = makeProfile({
     bundles: [],
-    state: { disabled: ["dsh-model-usage"] },
+    state: { disabled: ["dsh-model-surplus"] },
   });
   try {
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.installed, false);
     assert.strictEqual(st.bundle, false);
   } finally {
@@ -285,7 +285,7 @@ ok("补丁层带 UTF-8 BOM 时仍能写入禁用行（真实 profile 就是这�
   // 匹配不到，`[]` 占位既认不出来、又被最后一行判成流式结构 → 市场直接拒绝写入。
   // 这正是「市场 state.json 记了 disabled、补丁层却始终是空的」的根因。
   const { root, dshHome, profile } = makeProfile({
-    bundles: ["dsh-model-usage"],
+    bundles: ["dsh-model-surplus"],
     pkgPatchYml: USAGE_PATCH,
     state: { disabled: [] },
     patch: "\uFEFF" + TEMPLATE_PATCH,
@@ -295,7 +295,7 @@ ok("补丁层带 UTF-8 BOM 时仍能写入禁用行（真实 profile 就是这�
     assert.strictEqual(fs.readFileSync(patchFile)[0], 0xef, "前置条件：文件确实带 BOM");
     const res = pm.setPluginEnabled({
       dshHome,
-      pkg: "dsh-model-usage",
+      pkg: "dsh-model-surplus",
       rowIds: ["model-usage"],
       enabled: false,
     });
@@ -304,7 +304,7 @@ ok("补丁层带 UTF-8 BOM 时仍能写入禁用行（真实 profile 就是这�
     assert.match(text, /^- id: model-usage\n {2}disabled: true\n/m);
     // 写回时不带 BOM：顺带把文件修好，市场的开关之后也能正常写
     assert.strictEqual(fs.readFileSync(patchFile)[0] === 0xef, false, "写回不应再带 BOM");
-    const st = pm.catalogStatus(dshHome)["dsh-model-usage"];
+    const st = pm.catalogStatus(dshHome)["dsh-model-surplus"];
     assert.strictEqual(st.patchDisabled, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

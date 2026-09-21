@@ -18,7 +18,7 @@
  *     启动崩溃，如 dsh-agent-teams 0.1.15 ↔ dsh 0.1.2-rc.1）；非 GUI 勾选的
  *     已装插件保留不动，交给“启动失败诊断”弹窗由用户决定，避免误清理。
  *
- * 四个随附插件（最近会话恢复 / 模型用量 / OpenCode Go 增强 / 输入框快捷键）自
+ * 四个随附插件（会话续接 / 模型余量 / OpenCode Go 路由 / 按键设置）自
  * v0.5.0 起**已拆成各自独立的仓库并发布到 npm**，本仓库不再携带 `plugins/` 源码，
  * 也不再需要「把捆绑插件 staging 成真实目录再装」那套绕开 app.asar 的机制——它们
  * 现在和 dsh-market 一样，是一条普通的 registry 条目。
@@ -37,8 +37,8 @@ const { createRequire } = require("node:module");
 const semver = require("semver");
 
 /** 候选目录：id 用于设置持久化；pkg 是 npm 安装名（需与目录核实一致）。
- *  顺序 = 设置窗口里的展示顺序（插件市场 → 最近会话恢复 → OpenCode Go 用量
- *  → OpenCode Go 增强 → 输入框快捷键），改这里即可调整界面次序。 */
+ *  顺序 = 设置窗口里的展示顺序（插件市场 → 会话续接 → 模型余量
+ *  → OpenCode Go 路由 → 按键设置），改这里即可调整界面次序。 */
 const CATALOG = [
   {
     id: "dsh-market",
@@ -84,15 +84,15 @@ const CATALOG = [
     //  这个插件最坏情况只是「没恢复会话」，不会影响引擎启动。）
     pkg: "dsh-gui-last-session",
     client: true,
-    zh: "最近会话恢复（dsh-gui-last-session）",
-    en: "Reopen last session (dsh-gui-last-session)",
+    zh: "会话续接（dsh-gui-last-session）",
+    en: "Session resume (dsh-gui-last-session)",
     zhDesc: "启动后自动回到最近一次对话，不再修改引擎文件（引擎更新不会让功能失效）。",
     enDesc: "Reopens the conversation you were last in after a restart, without patching engine files (engine updates can't break it).",
     url: "",
   },
   {
-    id: "dsh-model-usage",
-    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-model-usage）。
+    id: "dsh-model-surplus",
+    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-model-surplus）。
     //
     // 在会话标题右侧、打开功能按钮左侧显示**模型用量 / 账户余额**，按该会话当前
     // 选中的模型路由分流（仅在使用对应模型时显示）：
@@ -116,10 +116,10 @@ const CATALOG = [
     // 注意 dsh.client 里**不要**声明 inject：实测把已加载的包名写进去会让整批
     // 客户端 bundle 被重复执行（duplicate factory registration），进而拖垮页面。
     // 本插件不需要额外的加载顺序约束（页内用 ctx.slots.inject 自行等待 slot）。
-    pkg: "dsh-model-usage",
+    pkg: "dsh-model-surplus",
     client: true,
-    zh: "模型用量与余量（dsh-model-usage）",
-    en: "Model usage & balance (dsh-model-usage)",
+    zh: "模型余量（dsh-model-surplus）",
+    en: "Model surplus (dsh-model-surplus)",
     zhDesc: "在会话标题右侧显示当前模型的用量/余量：OpenCode Go 显示套餐用量与选中模型月上限，DeepSeek 显示账户余额。仅在使用对应模型时出现。",
     enDesc: "Shows usage/balance for the active model right of the session title: OpenCode Go plan usage and the selected model's monthly cap, plus DeepSeek account balance, only for the matching model.",
     url: "",
@@ -149,14 +149,14 @@ const CATALOG = [
     //   3) 为发往 OpenCode / OpenCode Go 的请求附加按会话 x-opencode-session
     //      头（修复 400 MissingSessionID；默认用不透明 UUID，绝不发内部会话 ID）。
     //
-    // 与 dsh-gui-last-session / dsh-model-usage 同样**不设 engineRange**：依赖的是
+    // 与 dsh-gui-last-session / dsh-model-surplus 同样**不设 engineRange**：依赖的是
     // 引擎装配层、settings 服务与 llm 事件的公开契约（bundle patch 按 row id 合并
     // + llm-pi-ai 的 profile schema 接受 route 级 `api` 字段 + ctx.settings
     // update/section/describe + llm/stream 瀑布），不是引擎版本号。
     pkg: "dsh-opencode-go-path",
     client: false,
-    zh: "OpenCode Go 增强（dsh-opencode-go-path）",
-    en: "OpenCode Go toolkit (dsh-opencode-go-path)",
+    zh: "OpenCode Go 路由（dsh-opencode-go-path）",
+    en: "OpenCode Go routes (dsh-opencode-go-path)",
     zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头，修复 400 MissingSessionID。",
     enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID.",
     url: "",
@@ -171,7 +171,7 @@ const CATALOG = [
     // 市场 state.json 的开关、settings.yaml 里保存的键位都记在那个名字下，改包名
     // 不该让用户的键位设置或启用/禁用选择失效。
     //
-    // 输入框快捷键：Enter / Shift+Enter / Ctrl+Enter 各自可设为「发送」或「换行」，
+    // 按键设置：Enter / Shift+Enter / Ctrl+Enter 各自可设为「发送」或「换行」，
     // 设置行注册在 DSH 设置窗口的**通用**页（settings.general.item，紧挨引擎自带的
     // composer-enter 行）。
     //
@@ -188,8 +188,8 @@ const CATALOG = [
     // settings.general.item 槽位的公开契约，不是引擎版本号。
     pkg: "dsh-keys-setting",
     client: true,
-    zh: "输入框快捷键（dsh-keys-setting）",
-    en: "Composer shortcuts (dsh-keys-setting)",
+    zh: "按键设置（dsh-keys-setting）",
+    en: "Key bindings (dsh-keys-setting)",
     zhDesc: "在设置窗口的通用页配置 Enter / Shift+Enter / Ctrl+Enter 是发送消息还是换行。",
     enDesc: "Configure in Settings → General whether Enter / Shift+Enter / Ctrl+Enter sends the message or inserts a line break.",
     url: "",
@@ -402,9 +402,9 @@ function profileDependencySpec(dshHome, pkg) {
  *     解析不到这个依赖而**启动失败**。
  * 因此启动维护把 `file:` 安装换成 registry 版本。
  *
- * 名字变了的两个（`dsh-opencode-go` / `dsh-composer-keys`）由 LEGACY_PLUGIN_PKGS
- * 先处理，走不到这里；这里管的是**名字没变**的 `dsh-model-usage` 与
- * `dsh-gui-last-session`——它们的包名一样，只有安装来源变了。
+ * 名字变了的（`dsh-opencode-go` / `dsh-composer-keys` / `dsh-model-usage`）由
+ * LEGACY_PLUGIN_PKGS 先处理，走不到这里；这里管的是**名字没变**的
+ * `dsh-gui-last-session`——包名一样，只有安装来源从 `file:` 变成了 registry。
  */
 function isFileInstall(dshHome, pkg) {
   return (profileDependencySpec(dshHome, pkg) ?? "").startsWith("file:");
@@ -1266,7 +1266,7 @@ const LEGACY_PLUGIN_PKGS = [
   {
     pkg: "dsh-opencode-go-usage",
     rowIds: ["opencode-go-usage"],
-    replacedBy: "dsh-model-usage",
+    replacedBy: "dsh-model-surplus",
   },
   // 两个 OpenCode Go 插件合并为 dsh-opencode-go（协议声明 + V4.1 模型 + 会话头）。
   // 旧包各自带着自己的 row id，两者都要清——否则补丁层会留下指向不存在行的
@@ -1281,10 +1281,10 @@ const LEGACY_PLUGIN_PKGS = [
     rowIds: ["opencode-go-api"],
     replacedBy: "dsh-opencode-go-path",
   },
-  // v0.4.1 及更早的版本把下面两个插件**随壳捆绑**在 plugins/ 下，用 `file:` 装进
-  // profile——它们当时从未发布到 npm。拆仓后改为从 registry 安装，而 npm 上的同名包
-  // 已被别人占用，所以各加了一个后缀。旧包名仍留在老用户的 profile 里（bundles 登记
-  // + package.json 的 file: 依赖），必须清掉，否则新旧两份会被引擎同时加载。
+  // v0.4.0/v0.4.1 把三个插件**随壳捆绑**在 plugins/ 下，用 `file:` 装进 profile——
+  // 它们当时都从未发布到 npm。拆仓后改为从 registry 安装，而其中两个在 npm 上的
+  // 同名包已被别人占用，于是各换了名字。旧包名仍留在老用户的 profile 里（bundles
+  // 登记 + package.json 的 file: 依赖），必须清掉，否则新旧两份会被引擎同时加载。
   {
     pkg: "dsh-opencode-go",
     rowIds: ["opencode-go"],
@@ -1294,6 +1294,16 @@ const LEGACY_PLUGIN_PKGS = [
     pkg: "dsh-composer-keys",
     rowIds: ["composer-keys"],
     replacedBy: "dsh-keys-setting",
+  },
+  // `dsh-model-usage` 是每一个 v0.4.x 用户都装着的那个名字（随壳捆绑）。npm 上
+  // 那个名字本身是空的，但 GitHub 上已经有三个别人的同名仓库、其中两个的
+  // package.json 也写着这个名字——谁先 publish 谁拿到，所以拆仓时直接换成了
+  // `dsh-model-surplus`。补丁层行 id 仍是 `model-usage`（新包也用同一个），
+  // 因此禁用行不会失配。
+  {
+    pkg: "dsh-model-usage",
+    rowIds: ["model-usage"],
+    replacedBy: "dsh-model-surplus",
   },
   // `dsh-composer-keys-setting` 只是一个短暂的中间名——它从未发布到 npm，v0.5.0 也
   // 没随壳发过。留着这条是为了兜住开发机/本地 `file:` 装过它的环境：这个包一旦残留在

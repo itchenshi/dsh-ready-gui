@@ -15,10 +15,10 @@
 
 | 插件 | npm 包名 | 仓库 |
 |---|---|---|
-| 模型用量与余量 | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
-| 最近会话恢复 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
-| OpenCode Go 增强 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
-| 输入框快捷键 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
+| 模型余量 | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
+| 会话续接 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
+| OpenCode Go 路由 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
+| 按键设置 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
 ### 为什么
 
@@ -30,7 +30,7 @@
   与插件市场收录。
 - **一个仓库一个条目**：注册表按 `owner/repo` 收录，插件埋在 monorepo 里无法上架。
 
-### 两个包名换掉了（重要）
+### 三个包名换掉了（重要）
 
 **npm 上的 `dsh-opencode-go` 与 `dsh-composer-keys` 已被其他作者占用**，无法使用：
 
@@ -38,13 +38,18 @@
 - `dsh-opencode-go-plus` → **[yumusb/dsh-opencode-go-plus](https://github.com/yumusb/dsh-opencode-go-plus)**
 - `dsh-composer-keys` → **[zlqd123/dsh-composer-keys](https://github.com/zlqd123/dsh-composer-keys)**
 
-因此本项目的包名为 **`dsh-opencode-go-path`** 与 **`dsh-keys-setting`**。
-（输入框快捷键曾短暂用过 `dsh-composer-keys-setting` 这个中间名，后改为更短的
-`dsh-keys-setting`；该中间名从未发布到 npm，v0.5.0 也没随壳发过，但迁移表里仍留着
-一条兜底清理——见下文。）
+而 `dsh-model-usage` 虽然 npm 上还是空的，但 **GitHub 上已经有三个别人的同名仓库**
+（`ZSN12/DSH-model-usage` 10★、`Timmononon/dsh-model-usage`、`niushuanan/dsh-model-usage`），
+其中前两个的 `package.json` 里 `name` 也写着 `dsh-model-usage`——也就是说谁先 `npm publish`
+谁拿到这个名字。与其竞速，拆仓时直接换掉了。
 
-**补丁层的行 id 与设置命名空间保持 `composer-keys` 不变**，这是刻意的：禁用行、
-市场 `state.json` 的开关、`settings.yaml` 里保存的键位都记在那个名字下。包名只是
+因此本项目的包名为 **`dsh-opencode-go-path`**、**`dsh-keys-setting`**、
+**`dsh-model-surplus`**。（输入框快捷键曾短暂用过 `dsh-composer-keys-setting` 这个中间名，
+后改为更短的 `dsh-keys-setting`；该中间名从未发布到 npm，v0.5.0 也没随壳发过，但迁移表里
+仍留着一条兜底清理。）
+
+**补丁层的行 id 与设置命名空间保持原样**（`composer-keys` / `model-usage`），这是刻意的：
+禁用行、市场 `state.json` 的开关、`settings.yaml` 里保存的键位都记在那些名字下。包名只是
 安装标识，改它不该让用户的键位设置或启用/禁用选择失效。
 **这不影响功能**，只影响 `dsh plugin add` 里写的包名。
 
@@ -60,16 +65,18 @@ GUI 启动维护会把两个旧包名一次性清理掉，逻辑与既有的改�
 
 失败自动恢复、插件市场双向同步等既有能力不受影响。
 
-### `file:` 安装也要迁移（两个名字没变的插件）
+### `file:` 安装也要迁移（名字没变的那个插件）
 
-`dsh-model-usage` 与 `dsh-gui-last-session` 的**包名没变**，所以不在改名迁移表里——但
-v0.4.1 及更早是把它们 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
+`dsh-gui-last-session` 的**包名没变**，所以不在改名迁移表里——但
+v0.4.1 及更早是把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
 profile 的（profile 的 `dependencies` 里能看到 `file:C:/…/.dsh-gui/bundled-plugins/…`）。
-那两份拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码写入，于是：
+那份拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码写入，于是：
 
-- 留着它 = 这两个插件**永远拿不到 npm 上的更新**（GUI 只按 `dsh.profile.bundles` 判断「已装」）；
+- 留着它 = 这个插件**永远拿不到 npm 上的更新**（GUI 只按 `dsh.profile.bundles` 判断「已装」）；
 - 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为解析不到
   这个依赖而**启动失败**。
+
+（另外三个插件的包名都变了，由上面那条改名迁移处理，走不到这条路径。）
 
 现在启动维护会识别这种「装是装了、但来源是本地路径」的条目（`isFileInstall`：读 profile
 `dependencies` 里那条 spec 是否 `file:` 开头）并换成 registry 版本。

@@ -34,7 +34,7 @@ $ErrorActionPreference = "Stop"
 $root = "D:\AI\WorkBook\DeepSeekHarnessGUI"
 $liveUd = "C:\Users\31352\AppData\Roaming\DSH GUI"
 
-$PLUGIN = "dsh-model-usage"
+$PLUGIN = "dsh-model-surplus"
 $ROWID = "model-usage"
 # The pre-rename package the migration must replace (see LEGACY_PLUGIN_PKGS).
 $LEGACY_PLUGIN = "dsh-opencode-go-usage"
@@ -365,7 +365,7 @@ try {
   # ------------------------------------------------------------------ seed --
   # Reproduce the two production conditions at once, deterministically:
   #   1. a pre-rename install (old package registered + materialised), which the
-  #      boot migration must replace with dsh-model-usage while carrying the
+  #      boot migration must replace with dsh-model-surplus while carrying the
   #      disabled intent across;
   #   2. an EMPTY, BOM'd patch layer + a market state.json that already lists the
   #      OLD package as disabled. Without the BOM fix the disable row can never

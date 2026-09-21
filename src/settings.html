@@ -518,7 +518,7 @@
             (blocked || busy ? " disabled" : "") +
             ' style="margin-top:3px;accent-color:#4d6bfe;" />' +
             "<span>" +
-            // 标题已经带上包名时（如「输入框快捷键（dsh-keys-setting）」）不再重复追加一次，省一行宽度。
+            // 标题已经带上包名时（如「按键设置（dsh-keys-setting）」）不再重复追加一次，省一行宽度。
             '<span class="plg-title">' + esc(title) +
             (title.includes(entry.pkg) ? "" : " — <code style=\"opacity:.7\">" + esc(entry.pkg) + "</code>") +
             "</span><br/>" +

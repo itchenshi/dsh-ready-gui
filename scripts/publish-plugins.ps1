@@ -1,7 +1,7 @@
 # publish-plugins.ps1 -- first/next release of the four split-out plugins to npm.
 #
 # The four plugins live in their own repositories, siblings of this one:
-#   ../dsh-model-usage  ../dsh-gui-last-session
+#   ../dsh-model-surplus  ../dsh-gui-last-session
 #   ../dsh-opencode-go-path  ../dsh-keys-setting
 #
 # WHY --registry IS FORCED EVERYWHERE:
@@ -17,7 +17,7 @@
 # Usage:
 #   powershell -File scripts/publish-plugins.ps1                 # publish all four
 #   powershell -File scripts/publish-plugins.ps1 -DryRun         # check only
-#   powershell -File scripts/publish-plugins.ps1 -Only dsh-model-usage
+#   powershell -File scripts/publish-plugins.ps1 -Only dsh-model-surplus
 #
 # Prerequisites:
 #   npm login --registry=https://registry.npmjs.org
@@ -44,7 +44,7 @@ $Parent = Split-Path $RepoRoot -Parent
 
 # Display order = the order the DSH GUI lists them in (see src/plugin-manager.js).
 $Packages = @(
-  'dsh-model-usage',
+  'dsh-model-surplus',
   'dsh-gui-last-session',
   'dsh-opencode-go-path',
   'dsh-keys-setting'

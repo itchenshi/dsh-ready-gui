@@ -244,7 +244,7 @@ function checkDisableRefusals() {
       mine: { declaresPatch: true, patchYml: "- insert:\n    - id: my-row\n" },
       "other-bundle": { declaresPatch: true, patchYml: "- insert:\n  - id: shared-row\n" },
       // A CATALOG entry that is installed but declares the other CATALOG entry's row.
-      "dsh-model-usage": { patchYml: "- insert:\n    - id: model-usage\n" },
+      "dsh-model-surplus": { patchYml: "- insert:\n    - id: model-usage\n" },
       "dsh-keys-setting": { patchYml: "- insert:\n    - id: model-usage\n" },
     },
     state: { disabled: [], region: "china" },
@@ -266,7 +266,7 @@ function checkDisableRefusals() {
 
     const catalogClash = pm.setPluginEnabled({
       dshHome: t.dshHome,
-      pkg: "dsh-model-usage",
+      pkg: "dsh-model-surplus",
       rowIds: ["model-usage"],
       enabled: false,
     });
@@ -364,14 +364,14 @@ function checkFileInstallDetection() {
     );
   try {
     write({
-      "dsh-model-usage": "file:C:/Users/x/.dsh-gui/bundled-plugins/dsh-model-usage",
+      "dsh-model-surplus": "file:C:/Users/x/.dsh-gui/bundled-plugins/dsh-model-surplus",
       "dsh-gui-last-session": "file:../bundled/dsh-gui-last-session",
       "dsh-opencode-go-path": "^1.0.0",
       dshmarket: "latest",
     });
 
     assert.strictEqual(
-      pm.isFileInstall(home, "dsh-model-usage"),
+      pm.isFileInstall(home, "dsh-model-surplus"),
       true,
       "an absolute file: spec is a legacy local install",
     );
@@ -395,7 +395,7 @@ function checkFileInstallDetection() {
 
     // Boot maintenance runs before the profile necessarily exists: must answer, not throw.
     assert.strictEqual(
-      pm.isFileInstall(path.join(root, "no-such-home"), "dsh-model-usage"),
+      pm.isFileInstall(path.join(root, "no-such-home"), "dsh-model-surplus"),
       false,
       "a missing profile answers false instead of throwing",
     );

@@ -43,40 +43,43 @@ client, `dsh web` or the CLI — or one-click from the
 
 | Plugin | npm package | Repository |
 |---|---|---|
-| Model usage & balance | `dsh-model-usage` | https://github.com/itchenshi/dsh-model-usage |
-| Reopen last session | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
-| OpenCode Go toolkit | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
-| Composer shortcuts | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
+| Model surplus | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
+| Session resume | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
+| OpenCode Go routes | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
+| Key bindings | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
 ```bash
-dsh plugin --profile web add dsh-model-usage
+dsh plugin --profile web add dsh-model-surplus
 ```
 
-> **A few names carry a suffix**: `dsh-opencode-go`, `dsh-opencode-go-plus` and
-> `dsh-composer-keys` were already taken on npm by other authors, so the OpenCode Go toolkit uses
-> `-path` and the composer-shortcuts plugin is **`dsh-keys-setting`**. This is purely about the
-> install name — the features are unchanged.
+> **A few packages were renamed**: `dsh-opencode-go` (and `dsh-opencode-go-plus`) and
+> `dsh-composer-keys` were already taken on npm by other authors, and `dsh-model-usage` — though free
+> — already had three same-named GitHub repositories by others. The final names are
+> **`dsh-opencode-go-path`**, **`dsh-keys-setting`** and **`dsh-model-surplus`**. This is purely about
+> the install name — the features are unchanged.
 
 ## 🆕 What's new in v0.5.0
 
-- **📦 Plugins split out and published to npm**: the four bundled plugins (model usage & balance,
-  reopen last session, OpenCode Go toolkit, composer shortcuts) are **no longer packaged with this
+- **📦 Plugins split out and published to npm**: the four bundled plugins (model surplus,
+  session resume, OpenCode Go routes, key bindings) are **no longer packaged with this
   repository**. Each is its own repository and an npm package, and DSH GUI now installs them from the
   registry like `dsh-market` does. Plugin updates no longer wait for a shell release, and the plugins
   work in any DSH host.
-- **⚠️ Two package names changed** because the originals were taken on npm:
-  `dsh-opencode-go` → **`dsh-opencode-go-path`**, `dsh-composer-keys` → **`dsh-keys-setting`**
-  (briefly `dsh-composer-keys-setting` in between).
+- **⚠️ Three package names changed**: `dsh-opencode-go` → **`dsh-opencode-go-path`** and
+  `dsh-composer-keys` → **`dsh-keys-setting`** (both were taken on npm by other authors), plus
+  `dsh-model-usage` → **`dsh-model-surplus`** (the npm name was free, but three other GitHub
+  repositories already used it — two of them declaring it in their own package.json — so the name was
+  changed before the first publish rather than racing for it).
   No manual work for existing users: boot maintenance removes the old package names once (unregisters
   the bundle, clears stale patch rows, carries the disabled choice over), so the old and new copies
-  never load side by side. **The patch-layer row id and the settings namespace stay `composer-keys`**,
-  so saved keybindings and the enable/disable choice survive the rename.
+  never load side by side. **The patch-layer row ids and settings namespaces are unchanged**
+  (`composer-keys` / `model-usage`), so saved keybindings and the enable/disable choice survive the rename.
 - **🔁 Old `file:` installs are converted to registry installs**: v0.4.1 staged the plugins into
-  `<home>\.dsh-gui\bundled-plugins` and installed them with a `file:` spec, so `dsh-model-usage` and
-  `dsh-gui-last-session` (**whose names did not change**) would also stay frozen on the old copy and
+  `<home>\.dsh-gui\bundled-plugins` and installed them with a `file:` spec, so `dsh-gui-last-session`
+  (**the one whose name did not change**) would also stay frozen on the old copy and
   never get updates — and a cleaned-up staging directory would make the profile fail to boot. Boot
   maintenance now detects those entries (a `file:` spec in the profile's `dependencies`) and replaces
-  them with the npm package.
+  them with the npm package; the three renamed ones go through the rename migration instead.
 - **🧹 The app.asar staging machinery is gone**: it existed only because a child pnpm cannot read
   inside app.asar. With every entry coming from the registry, nothing needs a `file:` install.
 
@@ -85,7 +88,7 @@ dsh plugin --profile web add dsh-model-usage
 - **🔐 Security fixes (everyone should upgrade)**: the three plugins' **browser routes had no authentication at all** — a request with no credentials returned your **account usage and DeepSeek balance**, and even wrote settings (a forged `Host` worked too, the DNS-rebinding shape). This release also adds the **navigation fence** (the engine page could previously walk the window — preload bridge included — onto a remote origin), a **permission fence** (microphone/camera/geolocation/notifications were auto-granted), **sender checks on every privileged IPC channel**, and closes "any third-party plugin can disable the engine's own rows".
 - **🛠 Reliability**: patch-layer writes now use a **cross-process lock + atomic write + post-write verify** (3 concurrent processes × 40 rows used to **silently lose 17–28 rows while reporting success**; now 120/120 survive). A failed write no longer flips the market state, a plugin that is registered but missing on disk is actually reinstalled, and a bundled plugin only replaces an installed one when it is genuinely newer (no more unattended downgrades).
 - **🔄 DSH GUI now checks for its own updates**: after launch, automatically, notifying when a newer version exists and staying silent when offline — **nothing to configure**. The check **handles mainland and international networks automatically**: Gitee → GitCode → GitHub on a mainland network and the reverse elsewhere, per-source timeout with fallback and the last working source remembered (measured here: Gitee answered on the first try in 251 ms).
-- **⌨️ New plugin "Composer shortcuts"** (`dsh-keys-setting`): configure whether Enter / Shift+Enter / Ctrl+Enter **send** or **insert a line break**, from the settings window's General page. Defaults match the engine, so nothing about your habits changes.
+- **⌨️ New plugin "Key bindings"** (`dsh-keys-setting`): configure whether Enter / Shift+Enter / Ctrl+Enter **send** or **insert a line break**, from the settings window's General page. Defaults match the engine, so nothing about your habits changes.
 
 Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md).
 
@@ -138,13 +141,13 @@ A plugin has **two orthogonal states**. The settings window gives each its own c
 - **Disagreements self-heal**: if the market disabled a plugin but the disable row never made it into the profile patch layer (in which case the engine is in fact still loading it), boot maintenance and "Repair / retry" write the real disable, and the settings window says why in the meantime.
 - **Boot maintenance** (installed catalog entries only): bundled plugins are reinstalled when their bundled code was updated; installed entries whose `engineRange` is incompatible with the current engine (these can crash the profile) are removed before spawn; user-installed extra bundles are never touched. Renamed/merged catalog entries are also migrated here: the old package is unregistered and its replacement installed, carrying the enabled/disabled choice over.
 - **"Repair / retry" button**: reconciles against the currently installed set (pulls bundled-plugin updates), additive only — safe to use as a retry after a failed install; it also aligns the enabled/disabled state and runs the same rename migration.
-- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Reopen last session (dsh-gui-last-session) · **Model usage & balance (dsh-model-usage)** · OpenCode Go toolkit (dsh-opencode-go-path) · Composer shortcuts (dsh-keys-setting). The settings order is exactly this order. **The last four are separate repositories and npm packages since v0.5.0** — all installed from the registry, no longer packaged here.
+- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Session resume (dsh-gui-last-session) · **Model surplus (dsh-model-surplus)** · OpenCode Go routes (dsh-opencode-go-path) · Key bindings (dsh-keys-setting). The settings order is exactly this order. **The last four are separate repositories and npm packages since v0.5.0** — all installed from the registry, no longer packaged here.
 - **How each change takes effect is stated per plugin**: install/uninstall edits the profile's bundle list, which the engine assembles only at boot, so it **needs an engine restart**; enable/disable writes the patch layer, which the engine **hot-reloads live**; a plugin with a page half (`dsh.client`) additionally needs a **Harness page reload** for that half. The two general rules live in the section note (repeating them on every row only made the window taller); the **per-plugin difference — “page half · reload page” — is a small tag on that row**. The GUI detects the page half from the plugin's package.json (an uninstalled npm entry cannot be inspected, so nothing is tagged).
 - **`dsh-opencode-go-path`** handles the OpenCode / OpenCode Go routes end to end: (1) it declares the route wire protocol (`api: openai-completions`), fixing the `needs an api` error and the refused save for models the installed catalog does not describe (e.g. `deepseek-v4.1-flash`); (2) after boot it appends the DeepSeek V4.1 models to the route's model list whenever the route exists and they are missing (idempotent, written to `settings.yaml`); (3) it attaches a stable per-conversation `x-opencode-session` header to OpenCode requests (fixes 400 MissingSessionID; defaults to an opaque UUID and never sends the internal session id). **It merges the former `dsh-opencode-go-session` and `dsh-opencode-go-api`, and was renamed from `dsh-opencode-go` to `dsh-opencode-go-path`** (the original name was taken on npm) — on upgrade the GUI unregisters the old packages and installs this one (carrying the disabled choice across), so old and new never load side by side.
-- **`dsh-model-usage`** shows **the active model's** usage / balance right of the session title, split by the session's current model route (each half appears only for its own models):
+- **`dsh-model-surplus`** shows **the active model's** usage / balance right of the session title, split by the session's current model route (each half appears only for its own models):
   - OpenCode Go models (`opencode-go` / `opencode`) → plan usage (rolling / weekly / monthly percentages + reset time). The host resolves `OPENCODE_GO_API_KEY` through `ctx.credentials` and calls `GET https://opencode.ai/zen/go/v1/usage`.
   - DeepSeek models (route `deepseek-official`) → **account balance** (total / granted / topped-up; `is_available:false` renders as "insufficient"). The host resolves `DEEPSEEK_API_KEY` and calls `GET https://api.deepseek.com/user/balance`.
-  Both upstreams run in the host half, so no key ever reaches the browser; the page half only decides *which* section to show from `ctx.modelDirectories`' `current.provider`. **This plugin used to be `dsh-opencode-go-usage` (OpenCode Go only) and was renamed when DeepSeek balance was added** — on upgrade the GUI unregisters the old package and installs the new one (carrying the disabled choice across), so the two never load side by side.
+  Both upstreams run in the host half, so no key ever reaches the browser; the page half only decides *which* section to show from `ctx.modelDirectories`' `current.provider`. **This plugin used to be `dsh-opencode-go-usage` (OpenCode Go only), then `dsh-model-usage`, and is now `dsh-model-surplus`** — on upgrade the GUI unregisters the old package and installs the new one (carrying the disabled choice across), so the two never load side by side.
 - **Uninstall**: uncheck in Settings, or use dsh-market / `dsh plugin remove` (all the same mechanism).
 - **Security note (from the settings page)**: third-party plugins run third-party code with your permissions — off by default; review their source before enabling.
 
