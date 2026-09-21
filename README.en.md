@@ -34,14 +34,14 @@ The three repositories are mirrors of each other; installers are published on [G
 | Gitee (mirror) | https://gitee.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitee.com/itchenshi/DeepSeekHarnessGUI.git` |
 | GitCode (mirror) | https://gitcode.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitcode.com/itchenshi/DeepSeekHarnessGUI.git` |
 
-## 🆕 What's new in v0.4.0
+## 🆕 What's new in v0.4.1
 
-- **🔧 The two OpenCode plugins merged into "OpenCode Go toolkit"** (`dsh-opencode-go`): one plugin now **declares the `opencode-go` route protocol** (fixes the `needs an api` error for catalog-unknown models), **auto-adds the DeepSeek V4.1 models** (e.g. `deepseek-v4.1-flash`), and **attaches the per-conversation `x-opencode-session` header** (fixes 400 MissingSessionID). Existing installs migrate automatically on first launch.
-- **📊 The usage plugin shows the selected model's monthly cap**: a `cap $60`-style tag follows the rolling / weekly / monthly percentages in the session header, with the model's 5-hour / weekly / monthly tiers on hover. There is no API for these caps, so the plugin **auto-refreshes its table from the official docs page** (public page, no key needed) and falls back cache → built-in table.
-- **⚠️ Reaching the monthly cap is flagged in red** (the upstream reports `rate-limited`) together with its reset time.
-- **🎛 A tidier plugin list in the settings window**: single-line titles, descriptions clamped to two lines, and every plugin description trimmed to one sentence.
+- **🔐 Security fixes (everyone should upgrade)**: the three plugins' **browser routes had no authentication at all** — a request with no credentials returned your **account usage and DeepSeek balance**, and even wrote settings (a forged `Host` worked too, the DNS-rebinding shape). This release also adds the **navigation fence** (the engine page could previously walk the window — preload bridge included — onto a remote origin), a **permission fence** (microphone/camera/geolocation/notifications were auto-granted), **sender checks on every privileged IPC channel**, and closes "any third-party plugin can disable the engine's own rows".
+- **🛠 Reliability**: patch-layer writes now use a **cross-process lock + atomic write + post-write verify** (3 concurrent processes × 40 rows used to **silently lose 17–28 rows while reporting success**; now 120/120 survive). A failed write no longer flips the market state, a plugin that is registered but missing on disk is actually reinstalled, and a bundled plugin only replaces an installed one when it is genuinely newer (no more unattended downgrades).
+- **🔄 DSH GUI now checks for its own updates**: after launch, automatically, notifying when a newer version exists and staying silent when offline — **nothing to configure**. The check **handles mainland and international networks automatically**: Gitee → GitCode → GitHub on a mainland network and the reverse elsewhere, per-source timeout with fallback and the last working source remembered (measured here: Gitee answered on the first try in 251 ms).
+- **⌨️ New plugin "Composer shortcuts"** (`dsh-composer-keys`): configure whether Enter / Shift+Enter / Ctrl+Enter **send** or **insert a line break**, from the settings window's General page. Defaults match the engine, so nothing about your habits changes.
 
-Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.0.md](RELEASE-NOTES-v0.4.0.md).
+Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md).
 
 ## 📸 Screenshots
 

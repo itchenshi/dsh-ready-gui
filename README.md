@@ -36,18 +36,23 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 
 三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/DeepSeekHarnessGUI/releases) 为准。
 
-## 🆕 v0.4.0 亮点
+## 🆕 v0.4.1 亮点
 
-- **🔧 两个 OpenCode 插件合并为「OpenCode Go 增强」**（`dsh-opencode-go`）：一个插件同时**声明 `opencode-go` 路由协议**
-  （修掉目录外模型的 `needs an api` 报错）、**自动补 DeepSeek V4.1 模型**（如 `deepseek-v4.1-flash`）、
-  并**附加按会话 `x-opencode-session` 头**（修复 400 MissingSessionID）。装过旧插件的用户首次启动自动迁移。
-- **📊 用量插件显示选中模型的每月额度上限**：会话标题右侧在「滚动 / 周 / 月」后显示 `上限 $60` 一类的标签，
-  悬停可看该模型的 5 小时 / 周 / 每月三段额度。官方没有额度接口，插件会**自动抓取官方文档页更新额度表**
-  （公开页、无需密钥），失败回退缓存 → 内建表。
-- **⚠️ 达到每月上限会标红提示**（上游返回 `rate-limited` 时），并给出重置时间。
-- **🎛 设置窗口的插件区更清爽**：标题成行、描述最多两行省略，全部插件描述精简为一句。
+- **🔐 安全修复（建议所有用户升级）**：三个插件的**浏览器路由此前完全没有鉴权** —— 实测不带任何
+  凭据就能读到**账户用量与 DeepSeek 余额**、甚至写入设置（带伪造 `Host` 也一样，DNS rebinding 形状）。
+  同时补上**主窗口导航围栏**（此前引擎页可把带 preload 桥的窗口导航到外部页面）、
+  **权限围栏**（此前麦克风/摄像头/定位/通知默认全放行）、**全部特权 IPC 的发送方校验**，
+  以及「任意第三方插件可禁用引擎自己的行」的封堵。
+- **🛠 可靠性修复**：补丁层写入改为**跨进程锁 + 原子 + 写后校验**（实测 3 进程并发写 40 行此前会
+  **丢掉 17–28 行却报成功**，修复后 120/120 全部保留）；写失败不再翻转市场状态；登记在案但文件已丢
+  的插件会真的重装；随包版本比已装旧时才重装（不再无人值守降级）。
+- **🔄 自动检查 DSH GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
+  **自动兼顾国内外网络** —— 国内先试 Gitee → GitCode → GitHub，国外反之，逐源限时回退并记住上次
+  可用的源（实测本机 Gitee 首次尝试 251ms 命中）。
+- **⌨️ 新插件「输入框快捷键」**（`dsh-composer-keys`）：在设置窗口「通用」页配置
+  Enter / Shift+Enter / Ctrl+Enter 是**发送消息**还是**换行**；默认即引擎默认，不改动任何现有习惯。
 
-完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.0.md](RELEASE-NOTES-v0.4.0.md)。
+完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md)。
 
 ## 📸 界面预览
 
