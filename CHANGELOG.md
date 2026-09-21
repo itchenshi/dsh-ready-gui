@@ -53,6 +53,30 @@ GUI 启动维护会把两个旧包名一次性清理掉，逻辑与既有的改�
 
 失败自动恢复、插件市场双向同步等既有能力不受影响。
 
+### `file:` 安装也要迁移（两个名字没变的插件）
+
+`dsh-model-usage` 与 `dsh-gui-last-session` 的**包名没变**，所以不在改名迁移表里——但
+v0.4.1 及更早是把它们 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
+profile 的（profile 的 `dependencies` 里能看到 `file:C:/…/.dsh-gui/bundled-plugins/…`）。
+那两份拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码写入，于是：
+
+- 留着它 = 这两个插件**永远拿不到 npm 上的更新**（GUI 只按 `dsh.profile.bundles` 判断「已装」）；
+- 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为解析不到
+  这个依赖而**启动失败**。
+
+现在启动维护会识别这种「装是装了、但来源是本地路径」的条目（`isFileInstall`：读 profile
+`dependencies` 里那条 spec 是否 `file:` 开头）并换成 registry 版本。
+
+**实现上有个实测得出的坑**：不能指望 `dsh plugin add <name>` 原地改写那条 spec。在引擎
+0.1.5-rc.2 / pnpm 12 上实测——对一个已登记进 bundles 的包执行 `dsh plugin add <name>` 会
+exit 0、pnpm 也确实跑了一遍，但它打印的是 *Lockfile is up to date, resolution step is
+skipped*，`package.json` 里的 `file:` spec **原样保留**，等于什么都没做。所以走的是与改名
+迁移完全相同的已验证路径：**remove → prune 残留登记 → 从 registry 装回来**。prune 不能省：
+只 remove 的话，残留的 `dependencies` 会被引擎的 reconcile 重新登记回 bundles。
+
+装失败不会留下半残状态：该包此时已从 bundles/dependencies 摘掉，下一次启动维护（`has`
+为 false）会再试一次。
+
 ## 🧹 顺带：删掉不再需要的 app.asar staging 机制
 
 原先「捆绑插件」不能按 app.asar 内路径安装（子进程 pnpm 会把 app.asar 当普通文件，
@@ -69,6 +93,12 @@ registry 之后**没有任何目录条目需要 `file:` 安装**，这套机制�
 `pluginHasClientHalf` 改为「已装读真实 manifest、未装用目录条目的 `client` 声明」——
 拆仓后本地没有源码可读，而「是否含页面半边」决定启用/禁用后要不要刷新页面，必须
 在安装前就能显示。目录条目因此新增 `client: true|false` 字段。
+
+> 注：`<home>\.dsh-gui\bundled-plugins` 目录本身**不会被自动删除**。它与旧版 profile 的
+> `file:` 依赖一一对应，而同一台机器上可能存在多个 DSH_HOME（本 GUI 的 `dsh-home` 与
+> 系统 `~/.dsh`），删掉它可能让某个还没迁移过的 profile 直接启动失败。迁移完成后它只是
+> 占几 MB 空间，可以自行清理。
+
 
 ---
 

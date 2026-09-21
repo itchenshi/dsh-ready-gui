@@ -69,6 +69,11 @@ dsh plugin --profile web add dsh-model-usage
   `dsh-composer-keys` → **`dsh-composer-keys-setting`**。老用户无需手动操作：
   GUI 启动维护会把旧包名一次性清理掉（摘 bundles 登记 + 清补丁层残留行 +
   把「已禁用」的选择搬到新包上），不会出现新旧两份同时加载。
+- **🔁 旧版留下的 `file:` 安装也会自动转成 registry 版本**：v0.4.1 是把插件 staging
+  到 `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile 的，所以
+  `dsh-model-usage` 与 `dsh-gui-last-session`（**包名没变**）也会停在旧副本上、拿不到
+  更新，而且 staging 目录一旦被清就会让 profile 启动失败。启动维护会识别这类条目
+  （profile 的 `dependencies` 里是 `file:` spec）并换成 npm 版本。
 - **🧹 移除 app.asar 内的插件 staging 机制**：该机制存在的唯一理由是子进程 pnpm
   读不到 app.asar 内部路径；插件走 registry 之后没有任何条目需要 `file:` 安装，
   相关代码（staging 目录、递归复制、8.3 短路径处理）整体删除。

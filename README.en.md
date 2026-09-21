@@ -68,6 +68,12 @@ dsh plugin --profile web add dsh-model-usage
   No manual work for existing users: boot maintenance removes the old package names once (unregisters
   the bundle, clears stale patch rows, carries the disabled choice over), so the old and new copies
   never load side by side.
+- **🔁 Old `file:` installs are converted to registry installs**: v0.4.1 staged the plugins into
+  `<home>\.dsh-gui\bundled-plugins` and installed them with a `file:` spec, so `dsh-model-usage` and
+  `dsh-gui-last-session` (**whose names did not change**) would also stay frozen on the old copy and
+  never get updates — and a cleaned-up staging directory would make the profile fail to boot. Boot
+  maintenance now detects those entries (a `file:` spec in the profile's `dependencies`) and replaces
+  them with the npm package.
 - **🧹 The app.asar staging machinery is gone**: it existed only because a child pnpm cannot read
   inside app.asar. With every entry coming from the registry, nothing needs a `file:` install.
 

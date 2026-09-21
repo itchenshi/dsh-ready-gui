@@ -335,11 +335,82 @@ function checkAtomicPatchWrite() {
   }
 }
 
+/**
+ * v0.4.1 and earlier staged the bundled plugins into <home>\.dsh-gui\bundled-plugins
+ * and installed them with a `file:` spec. Those copies are frozen at the version
+ * that release shipped, and v0.5.0 no longer writes that staging directory at all —
+ * so leaving them means never getting npm updates, and a broken profile once the
+ * directory is cleaned up. Boot maintenance must recognise them and reinstall from
+ * the registry.
+ *
+ * The negative cases matter just as much: a normal semver range or dist-tag must NOT
+ * be reported as a legacy install, or every boot would tear down and reinstall the
+ * plugin.
+ */
+function checkFileInstallDetection() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-fileinstall-"));
+  const home = path.join(root, "home");
+  const profile = path.join(home, "profiles", "web");
+  fs.mkdirSync(profile, { recursive: true });
+  const write = (deps) =>
+    fs.writeFileSync(
+      path.join(profile, "package.json"),
+      JSON.stringify({
+        name: "dsh-profile-web",
+        private: true,
+        dsh: { profile: { bundles: [] } },
+        dependencies: deps,
+      }),
+    );
+  try {
+    write({
+      "dsh-model-usage": "file:C:/Users/x/.dsh-gui/bundled-plugins/dsh-model-usage",
+      "dsh-gui-last-session": "file:../bundled/dsh-gui-last-session",
+      "dsh-opencode-go-path": "^1.0.0",
+      dshmarket: "latest",
+    });
+
+    assert.strictEqual(
+      pm.isFileInstall(home, "dsh-model-usage"),
+      true,
+      "an absolute file: spec is a legacy local install",
+    );
+    assert.strictEqual(
+      pm.isFileInstall(home, "dsh-gui-last-session"),
+      true,
+      "a relative file: spec counts too",
+    );
+    assert.strictEqual(
+      pm.isFileInstall(home, "dsh-opencode-go-path"),
+      false,
+      "a semver range is a registry install",
+    );
+    assert.strictEqual(pm.isFileInstall(home, "dshmarket"), false, "a dist-tag is a registry install");
+    assert.strictEqual(
+      pm.isFileInstall(home, "not-in-dependencies"),
+      false,
+      "an undeclared package is not a file: install",
+    );
+    assert.strictEqual(pm.profileDependencySpec(home, "dsh-opencode-go-path"), "^1.0.0");
+
+    // Boot maintenance runs before the profile necessarily exists: must answer, not throw.
+    assert.strictEqual(
+      pm.isFileInstall(path.join(root, "no-such-home"), "dsh-model-usage"),
+      false,
+      "a missing profile answers false instead of throwing",
+    );
+    console.log("ok - file: installs from v0.4.1 staging are detected; registry specs are left alone");
+  } finally {
+    cleanup(root);
+  }
+}
+
 run()
   .then(checkClientHalf)
   .then(checkRowIdScan)
   .then(checkDisableRefusals)
   .then(checkAtomicPatchWrite)
+  .then(checkFileInstallDetection)
   .then(
     () => console.log("plugin-manager: all checks passed"),
     (e) => {

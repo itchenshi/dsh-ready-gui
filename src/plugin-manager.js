@@ -379,6 +379,33 @@ function installedBundles(dshHome) {
   return Array.isArray(bundles) ? bundles : [];
 }
 
+/** profile `dependencies[<pkg>]` 的声明值（未声明返回 null）。 */
+function profileDependencySpec(dshHome, pkg) {
+  const deps = readProfileManifest(dshHome)?.dependencies;
+  if (!deps || typeof deps !== "object") return null;
+  const value = deps[pkg];
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * 这个包是否是从**本地路径**（而不是 registry）装进来的？
+ *
+ * v0.4.1 及更早的版本把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用
+ * `file:` 装进 profile。那些拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录
+ * 不再被任何代码写入，所以：
+ *   - 留着它 = 这个插件永远拿不到 npm 上的更新（GUI 只按 bundles 判断「已装」）；
+ *   - 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为
+ *     解析不到这个依赖而**启动失败**。
+ * 因此启动维护把 `file:` 安装换成 registry 版本。
+ *
+ * 名字变了的两个（`dsh-opencode-go` / `dsh-composer-keys`）由 LEGACY_PLUGIN_PKGS
+ * 先处理，走不到这里；这里管的是**名字没变**的 `dsh-model-usage` 与
+ * `dsh-gui-last-session`——它们的包名一样，只有安装来源变了。
+ */
+function isFileInstall(dshHome, pkg) {
+  return (profileDependencySpec(dshHome, pkg) ?? "").startsWith("file:");
+}
+
 // ---------------------------------------------------------------------------
 // 启用 / 禁用（与 dshmarket 共用同一套官方机制）
 // ---------------------------------------------------------------------------
@@ -1147,7 +1174,9 @@ function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = ()
   });
 }
 
-/** 安装单个包（幂等：已在 bundles **且确实落地**则跳过）。`pkg` 是给 pnpm 的安装 spec。 */
+/**
+ * 安装单个包（幂等：已在 bundles **且确实落地**则跳过）。`pkg` 是给 pnpm 的安装 spec。
+ */
 async function installPlugin({ engineDir, dshHome, pnpmBinDir, pkg, name, nodeExec, log = () => {} }) {
   const target = name ?? pkg;
   if (installedBundles(dshHome).includes(target)) {
@@ -1690,14 +1719,40 @@ async function syncEnabledPlugins({
       continue;
     }
 
-    // 已装且被勾选 → 什么都不做。升级交给 dsh-market / `dsh plugin update`：
-    // 本目录的条目都是普通 registry 包，GUI 不再凭空比较「随包版本」去重装
-    // （拆仓前那套逻辑只服务于 `file:` 安装的捆绑插件）。
-    if (has) continue;
+    // 已装且被勾选 → 通常什么都不做：升级交给 dsh-market / `dsh plugin update`。
+    // 唯一的例外是 v0.4.1 及更早留下的 `file:` 安装（见 isFileInstall）——那些必须
+    // 换成 registry 版本，否则会永远停在随旧版发布的副本上。
+    if (has && !isFileInstall(dshHome, name)) continue;
+    if (has) log("replacing a file: install with the registry package:", name);
     try {
-      // 按目录声明的 version 固定（未声明则跟随 latest），失败时不至于先拆了旧的。
-      const spec = registrySpec(entry);
-      const res = await installPlugin({ engineDir, dshHome, pnpmBinDir, pkg: spec, name, nodeExec, log });
+      if (has) {
+        // 必须**显式 remove**，不能指望 `add` 原地改写那条 spec。实测（引擎
+        // 0.1.5-rc.2 / pnpm 12）：对一个已登记进 bundles 的包执行
+        // `dsh plugin add <name>` 会 exit 0、pnpm 也确实跑了一遍，但打印的是
+        // "Lockfile is up to date, resolution step is skipped"，package.json 里的
+        // `file:` spec **原样保留**——包不会重解析，等于什么都没做。
+        // 所以走与 LEGACY_PLUGIN_PKGS 完全相同的已验证路径：remove → prune → add。
+        const rm = await removePlugin({ engineDir, dshHome, pnpmBinDir, pkg: name, nodeExec, log });
+        if (!rm.ok) log("file: install removal did not succeed, pruning the registration:", name);
+        // 只 remove 不够：残留的 dependencies 会被引擎的 reconcile 重新登记回
+        // bundles（实测过），旧的 `file:` 副本于是照旧生效。
+        try {
+          pruneProfilePackages(dshHome, [name]);
+        } catch (error) {
+          log("file: install prune failed:", name, (error && error.message) || error);
+        }
+      }
+      // 装失败不会有半残状态：这个包已经从 bundles/dependencies 里摘掉了，下一次
+      // 启动维护（此时 isFileInstall 已是 false、has 也是 false）会再试一次。
+      const res = await installPlugin({
+        engineDir,
+        dshHome,
+        pnpmBinDir,
+        pkg: registrySpec(entry),
+        name,
+        nodeExec,
+        log,
+      });
       if (res.ok) {
         result.installed.push(entry.id);
         result.changed = true;
@@ -1765,6 +1820,8 @@ module.exports = {
   readProfileManifest,
   writeProfileManifest,
   installedBundles,
+  profileDependencySpec,
+  isFileInstall,
   catalogStatus,
   pluginHasClientHalf,
   setPluginEnabled,
