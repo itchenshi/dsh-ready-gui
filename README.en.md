@@ -34,14 +34,14 @@ The three repositories are mirrors of each other; installers are published on [G
 | Gitee (mirror) | https://gitee.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitee.com/itchenshi/DeepSeekHarnessGUI.git` |
 | GitCode (mirror) | https://gitcode.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitcode.com/itchenshi/DeepSeekHarnessGUI.git` |
 
-## 🆕 What's new in v0.3.0
+## 🆕 What's new in v0.4.0
 
-- **📊 The usage plugin now shows your DeepSeek balance**: `dsh-opencode-go-usage` → **`dsh-model-usage`**. OpenCode Go models show plan usage (rolling / weekly / monthly); DeepSeek models show the **account balance** (total / granted / topped-up). The two feeds are independent — a missing key only disables its own half.
-- **✅ "Install" and "Enable" are two separate states now**: the checkbox installs/uninstalls, the "Enabled" toggle loads/disables — and both stay in **two-way live sync** with the Harness plugin market (the toggle calls the market's own endpoint, so it applies live).
-- **🎨 App icon now has a white background**: a white rounded square with the brand-blue glyph, so it stands out on the desktop and shortcuts.
-- **⚡ Much faster packaging**: the Node and Electron release archives are cached locally, so repeat builds download nothing and even work offline.
+- **🔧 The two OpenCode plugins merged into "OpenCode Go toolkit"** (`dsh-opencode-go`): one plugin now **declares the `opencode-go` route protocol** (fixes the `needs an api` error for catalog-unknown models), **auto-adds the DeepSeek V4.1 models** (e.g. `deepseek-v4.1-flash`), and **attaches the per-conversation `x-opencode-session` header** (fixes 400 MissingSessionID). Existing installs migrate automatically on first launch.
+- **📊 The usage plugin shows the selected model's monthly cap**: a `cap $60`-style tag follows the rolling / weekly / monthly percentages in the session header, with the model's 5-hour / weekly / monthly tiers on hover. There is no API for these caps, so the plugin **auto-refreshes its table from the official docs page** (public page, no key needed) and falls back cache → built-in table.
+- **⚠️ Reaching the monthly cap is flagged in red** (the upstream reports `rate-limited`) together with its reset time.
+- **🎛 A tidier plugin list in the settings window**: single-line titles, descriptions clamped to two lines, and every plugin description trimmed to one sentence.
 
-Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.3.0.md](RELEASE-NOTES-v0.3.0.md).
+Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.0.md](RELEASE-NOTES-v0.4.0.md).
 
 ## 📸 Screenshots
 
@@ -92,7 +92,8 @@ A plugin has **two orthogonal states**. The settings window gives each its own c
 - **Disagreements self-heal**: if the market disabled a plugin but the disable row never made it into the profile patch layer (in which case the engine is in fact still loading it), boot maintenance and "Repair / retry" write the real disable, and the settings window says why in the meantime.
 - **Boot maintenance** (installed catalog entries only): bundled plugins are reinstalled when their bundled code was updated; installed entries whose `engineRange` is incompatible with the current engine (these can crash the profile) are removed before spawn; user-installed extra bundles are never touched. Renamed/merged catalog entries are also migrated here: the old package is unregistered and its replacement installed, carrying the enabled/disabled choice over.
 - **"Repair / retry" button**: reconciles against the currently installed set (pulls bundled-plugin updates), additive only — safe to use as a retry after a failed install; it also aligns the enabled/disabled state and runs the same rename migration.
-- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Reopen last session (dsh-gui-last-session) · **Model usage & balance (dsh-model-usage)** · OpenCode session header (dsh-opencode-go-session, hardened). The settings order is exactly this order.
+- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Reopen last session (dsh-gui-last-session) · **Model usage & balance (dsh-model-usage)** · OpenCode Go toolkit (dsh-opencode-go). The settings order is exactly this order.
+- **`dsh-opencode-go`** handles the OpenCode / OpenCode Go routes end to end: (1) it declares the route wire protocol (`api: openai-completions`), fixing the `needs an api` error and the refused save for models the installed catalog does not describe (e.g. `deepseek-v4.1-flash`); (2) after boot it appends the DeepSeek V4.1 models to the route's model list whenever the route exists and they are missing (idempotent, written to `settings.yaml`); (3) it attaches a stable per-conversation `x-opencode-session` header to OpenCode requests (fixes 400 MissingSessionID; defaults to an opaque UUID and never sends the internal session id). **It merges the former `dsh-opencode-go-session` and `dsh-opencode-go-api`** — on upgrade the GUI unregisters the old packages and installs this one (carrying the disabled choice across), so old and new never load side by side.
 - **`dsh-model-usage`** shows **the active model's** usage / balance right of the session title, split by the session's current model route (each half appears only for its own models):
   - OpenCode Go models (`opencode-go` / `opencode`) → plan usage (rolling / weekly / monthly percentages + reset time). The host resolves `OPENCODE_GO_API_KEY` through `ctx.credentials` and calls `GET https://opencode.ai/zen/go/v1/usage`.
   - DeepSeek models (route `deepseek-official`) → **account balance** (total / granted / topped-up; `is_available:false` renders as "insufficient"). The host resolves `DEEPSEEK_API_KEY` and calls `GET https://api.deepseek.com/user/balance`.
@@ -215,7 +216,7 @@ All DeepSeek Harness user data lives under `$DSH_HOME` (default `~/.dsh`):
 ├─ plugins/               # repo-bundled local plugins (shipped inside app.asar)
 │  ├─ dsh-model-usage/           # model usage & balance (OpenCode Go usage + DeepSeek balance)
 │  ├─ dsh-gui-last-session/      # reopen the last conversation on launch
-│  └─ dsh-opencode-go-session/   # OpenCode session header (hardened, local install)
+│  └─ dsh-opencode-go/           # OpenCode Go toolkit (protocol + V4.1 models + session header)
 ├─ scripts/               # build & test scripts
 │  ├─ make-icons.mjs      # official favicon → icons at all sizes + win hybrid icon.ico
 │  ├─ ico-info.cjs        # inspect any .ico's frames and length consistency

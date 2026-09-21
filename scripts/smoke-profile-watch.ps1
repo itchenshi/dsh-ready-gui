@@ -238,13 +238,14 @@ try {
   )
 
   # The smoke run needs exactly these: the engine, the web profile manifest,
-  # and the four catalog packages resolved inside profiles/web/node_modules.
+  # and the catalog packages resolved inside profiles/web/node_modules.
   Assert-Paths @(
     (Join-Path $ud "dsh-engine\node_modules\@deepseek-ai\dsh\package.json"),
     (Join-Path $homeDir "profiles\web\package.json"),
     (Join-Path $homeDir "profiles\web\node_modules\dshmarket\package.json"),
     (Join-Path $homeDir "profiles\web\node_modules\dsh-gui-last-session\package.json"),
-    (Join-Path $homeDir "profiles\web\node_modules\dsh-opencode-go-session\package.json")
+    # Renamed: dsh-opencode-go-session + dsh-opencode-go-api merged into dsh-opencode-go.
+    (Join-Path $homeDir "profiles\web\node_modules\dsh-opencode-go\package.json")
   )
   Write-Host "isolated copy verified"
 

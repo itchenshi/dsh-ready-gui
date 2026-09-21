@@ -1,7 +1,7 @@
 {
-  "name": "dsh-opencode-go-session",
+  "name": "dsh-opencode-go",
   "version": "0.1.0",
-  "description": "Hardened DeepSeek Harness plugin: attaches a stable per-conversation x-opencode-session header to OpenCode / OpenCode Go provider requests (fixes 400 MissingSessionID, keeps session affinity / prompt-cache routing) WITHOUT leaking the internal DSH session id to third parties.",
+  "description": "DeepSeek Harness plugin for the OpenCode / OpenCode Go routes: declares the route wire protocol, auto-adds DeepSeek V4.1 models, and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -27,15 +27,15 @@
     "opencode",
     "opencode-go",
     "opencode-zen",
+    "llm-pi-ai",
     "x-opencode-session",
     "missing-session-id",
     "session-affinity",
-    "prompt-cache",
-    "llm"
+    "prompt-cache"
   ],
   "license": "MIT",
   "author": {
-    "name": "dsh-opencode-go-session contributors"
+    "name": "DSH GUI contributors"
   },
   "dsh": {
     "bundle": {

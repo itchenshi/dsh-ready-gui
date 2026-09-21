@@ -5,14 +5,14 @@ session header, gated on the session's **active model selection**:
 
 | Active model route | Widget shows | Source |
 |---|---|---|
-| `opencode-go` / `opencode` | OpenCode Go plan usage — rolling / weekly / monthly **percentages** + reset time | `GET https://opencode.ai/zen/go/v1/usage` |
+| `opencode-go` / `opencode` | OpenCode Go plan usage — rolling / weekly / monthly **percentages** + reset time, plus the **selected model's monthly cap** (`上限 $60`) | `GET https://opencode.ai/zen/go/v1/usage` + per-model limits table (see below) |
 | `deepseek-official` | DeepSeek account **balance** — total / granted / topped-up | `GET https://api.deepseek.com/user/balance` |
 
 ```
-┌─ session header ─────────────────────────────────────────────────────┐
-│  My conversation title  [OpenCode Go ┄⑃ 滚动 18% 周 82% 月 42%]  打开功能 ▾ │
-│  Another conversation   [DeepSeek ¥110.00]                        打开功能 ▾ │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ session header ─────────────────────────────────────────────────────────┐
+│  My conversation title  [OpenCode Go 滚动 18% 周 82% 月 42% 上限 $60] 打开功能 ▾ │
+│  Another conversation   [DeepSeek ¥110.00]                           打开功能 ▾ │
+└──────────────────────────────────────────────────────────────────────────┘
         slot: conversation.session.header.actions
 ```
 
@@ -66,7 +66,9 @@ GET /model-usage
     "deepseek":    { "providers": ["deepseek-official"],    "keyRef": "DEEPSEEK_API_KEY" }
   },
   "opencode-go": { "ok": true, "usage":   { "rolling": {…}, "weekly": {…}, "monthly": {…} }, "fetchedAt": 1700000000000 },
-  "deepseek":    { "ok": true, "balance": { "isAvailable": true, "infos": [ { "currency":"CNY", "total":"110.00", "granted":"10.00", "toppedUp":"100.00" } ] }, "fetchedAt": 1700000000000 }
+  "deepseek":    { "ok": true, "balance": { "isAvailable": true, "infos": [ { "currency":"CNY", "total":"110.00", "granted":"10.00", "toppedUp":"100.00" } ] }, "fetchedAt": 1700000000000 },
+  "limits": { "deepseek-v4.1-flash": { "hours5": 12, "weekly": 30, "monthly": 60 }, … },
+  "limitsMeta": { "source": "docs|cache|builtin", "updatedAt": "2026-09-20T…" }
 }
 ```
 
@@ -102,6 +104,30 @@ The host normalizes and clamps the usage payload (percent 0–100) and normalize
 the balance amounts (the upstream sends decimal **strings**; finite numbers are
 accepted too). Each section is cached for 60s and re-polled after failures no
 sooner than 30s.
+
+## Per-model monthly limits (opencode-go)
+
+OpenCode Go's usage endpoint is **account-wide** — it ignores per-model params,
+and there is **no API** for the per-model monthly caps documented under
+["使用限制"](https://opencode.ai/docs/zh-cn/go/#%E4%BD%BF%E7%94%A8%E9%99%90%E5%88%B6)
+(e.g. DeepSeek V4.1 Flash $60/mo, DeepSeek V4 Pro $15/mo). So the plugin:
+
+1. **ships a built-in table** (`BUILTIN_MODEL_LIMITS`, last synced 2026-09-20),
+2. **auto-refreshes** by fetching the public docs page
+   (`https://opencode.ai/docs/zh-cn/go/` — server-rendered, no JS, **no API
+   key**) and parsing the limits + model-id tables into `model id → monthly $`,
+3. **caches** the parsed result at `$DSH_HOME/logs/model-usage-limits.json`,
+4. **falls back** cache → built-in on any fetch/parse failure.
+
+Refresh schedule: at plugin start (background), then every 24h. The widget shows
+the **selected model's** monthly cap (`上限 $60`) next to the account-level
+percent bars, and its tooltip lists the derived caps (5h = 20% · week = 50% ·
+month = 100%), the data source (`OpenCode Go 文档（9/20）` / `本地缓存` /
+`内置表`), and a note that the percentages are account-wide while the cap is
+per model. A `rate-limited` bucket is shown in red with its reset time.
+
+The derived tiers are computed host-side (`deriveLimitTiers`); the client just
+looks up `limits[modelId]`.
 
 ## Install (local, no npm publication)
 

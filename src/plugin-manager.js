@@ -39,20 +39,20 @@ const semver = require("semver");
 
 /** 候选目录：id 用于设置持久化；pkg 是 npm 安装名（需与目录核实一致）。
  *  顺序 = 设置窗口里的展示顺序（插件市场 → 最近会话恢复 → OpenCode Go 用量
- *  → OpenCode 会话头），改这里即可调整界面次序。 */
+ *  → OpenCode Go 增强），改这里即可调整界面次序。 */
 const CATALOG = [
   {
     id: "dsh-market",
     pkg: "dshmarket",
     zh: "插件市场（dsh-market）",
     en: "Plugin marketplace (dsh-market)",
-    zhDesc: "Harness 内置的可视化插件市场：浏览、搜索、一键安装社区插件。",
-    enDesc: "A visual plugin market inside DeepSeek Harness — browse, search, and one-click install community plugins.",
+    zhDesc: "内置的可视化插件市场：浏览、搜索、一键安装社区插件。",
+    enDesc: "Visual plugin market inside DeepSeek Harness: browse, search, and one-click install community plugins.",
     url: "https://github.com/dsh-market/dsh-market",
   },
   {
     id: "dsh-gui-last-session",
-    // Local source install, same mechanism as dsh-opencode-go-session below:
+    // Local source install, same mechanism as dsh-opencode-go below:
     // distributed in this repository under plugins/<localSource>, staged to a
     // real directory before pnpm installs it (see stageBundledPlugin).
     //
@@ -86,13 +86,13 @@ const CATALOG = [
     localSource: "dsh-gui-last-session",
     zh: "最近会话恢复（dsh-gui-last-session）",
     en: "Reopen last session (dsh-gui-last-session)",
-    zhDesc: "启动后自动回到最近一次对话。以插件实现（宿主侧持久化指针 + 页内按 ctx.sessions 记录/重开），不再修改引擎自身文件——引擎更新不会再让功能失效。",
-    enDesc: "Reopens the conversation you were last in after a restart. Implemented as a plugin (host half persists the pointer, client half records and reopens via ctx.sessions) instead of patching engine files, so engine updates no longer disable it.",
+    zhDesc: "启动后自动回到最近一次对话，不再修改引擎文件（引擎更新不会让功能失效）。",
+    enDesc: "Reopens the conversation you were last in after a restart, without patching engine files (engine updates can't break it).",
     url: "",
   },
   {
     id: "dsh-model-usage",
-    // Local source install，与 dsh-opencode-go-session / dsh-gui-last-session 同一机制。
+    // Local source install，与 dsh-opencode-go / dsh-gui-last-session 同一机制。
     //
     // 在会话标题右侧、打开功能按钮左侧显示**模型用量 / 账户余额**，按该会话当前
     // 选中的模型路由分流（仅在使用对应模型时显示）：
@@ -120,12 +120,12 @@ const CATALOG = [
     localSource: "dsh-model-usage",
     zh: "模型用量与余量（dsh-model-usage）",
     en: "Model usage & balance (dsh-model-usage)",
-    zhDesc: "在会话标题右侧显示当前模型的用量/余量：OpenCode Go 模型显示套餐用量（滚动 / 周 / 月 百分比与重置时间），DeepSeek 模型显示账户余额（总/赠送/充值）。仅在使用对应模型时出现。",
-    enDesc: "Shows usage/balance for the active model right of the session title: OpenCode Go plan usage (rolling / weekly / monthly percentages and reset times) for OpenCode Go models, and account balance (total / granted / topped-up) for DeepSeek models.",
+    zhDesc: "在会话标题右侧显示当前模型的用量/余量：OpenCode Go 显示套餐用量与选中模型月上限，DeepSeek 显示账户余额。仅在使用对应模型时出现。",
+    enDesc: "Shows usage/balance for the active model right of the session title: OpenCode Go plan usage and the selected model's monthly cap, plus DeepSeek account balance, only for the matching model.",
     url: "",
   },
   {
-    id: "dsh-opencode-go-session",
+    id: "dsh-opencode-go",
     // Local source install: this plugin is distributed in this repository under
     // plugins/<localSource> and is never fetched from the npm registry.
     // `pkg` is the TRUE package name (the key used in the profile bundles
@@ -134,12 +134,32 @@ const CATALOG = [
     // inside app.asar, which a child pnpm process cannot read (app.asar looks
     // like a plain file to it). plugin-manager therefore stages a real copy
     // under the pnpm tools dir first and installs that (see stageBundledPlugin).
-    pkg: "dsh-opencode-go-session",
-    localSource: "dsh-opencode-go-session",
-    zh: "OpenCode 会话头（dsh-opencode-go-session）",
-    en: "OpenCode session header (dsh-opencode-go-session)",
-    zhDesc: "为发往 OpenCode / OpenCode Go 的模型请求自动附加稳定的按会话 x-opencode-session 头，修复 400 MissingSessionID。加固版：默认以不透明 UUID 替代内部会话 ID，杜绝内部标识泄露。",
-    enDesc: "Attaches a stable per-conversation x-opencode-session header to OpenCode / OpenCode Go model requests — fixes 400 MissingSessionID. Hardened: defaults to an opaque UUID instead of the internal session id, so no internal identifier is sent to third parties.",
+    //
+    // 合并自原 dsh-opencode-go-session + dsh-opencode-go-api（两者在
+    // LEGACY_PLUGIN_PKGS 里做一次性迁移）。三件事：
+    //   1) cordis.patch.yml（配置层）：给引擎装配层的 `llm-pi-ai` row 补
+    //      providers.opencode-go.api: openai-completions。修的是
+    //        llm-pi-ai: provider "opencode-go" model "<目录外模型>" needs an api; ...
+    //      这类报错——opencode-go 目录内模型横跨三种协议（anthropic-messages /
+    //      openai-completions / openai-responses），引擎无法从目录推断共享协议，
+    //      目录外模型就必须由路由显式声明 api。补上后，GUI 模型页「添加模型」的
+    //      严格校验（保存路径）也能通过。
+    //   2) lib/index.js（运行时）：引擎启动后检查模型列表——若存在 opencode-go
+    //      路由且 models 里还没有 deepseek-v4.1-*，就自动追加（走与 GUI 模型页
+    //      相同的 settings.update 写入路径，幂等）。
+    //   3) 为发往 OpenCode / OpenCode Go 的请求附加按会话 x-opencode-session
+    //      头（修复 400 MissingSessionID；默认用不透明 UUID，绝不发内部会话 ID）。
+    //
+    // 与 dsh-gui-last-session / dsh-model-usage 同样**不设 engineRange**：依赖的是
+    // 引擎装配层、settings 服务与 llm 事件的公开契约（bundle patch 按 row id 合并
+    // + llm-pi-ai 的 profile schema 接受 route 级 `api` 字段 + ctx.settings
+    // update/section/describe + llm/stream 瀑布），不是引擎版本号。
+    pkg: "dsh-opencode-go",
+    localSource: "dsh-opencode-go",
+    zh: "OpenCode Go 增强（dsh-opencode-go）",
+    en: "OpenCode Go toolkit (dsh-opencode-go)",
+    zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头，修复 400 MissingSessionID。",
+    enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID.",
     url: "",
   },
 ];
@@ -849,6 +869,19 @@ const LEGACY_PLUGIN_PKGS = [
     pkg: "dsh-opencode-go-usage",
     rowIds: ["opencode-go-usage"],
     replacedBy: "dsh-model-usage",
+  },
+  // 两个 OpenCode Go 插件合并为 dsh-opencode-go（协议声明 + V4.1 模型 + 会话头）。
+  // 旧包各自带着自己的 row id，两者都要清——否则补丁层会留下指向不存在行的
+  // `disabled: true`（启动期 orphan），而且旧包登记不摘掉会与新包同时加载。
+  {
+    pkg: "dsh-opencode-go-session",
+    rowIds: ["opencode-go-session-header"],
+    replacedBy: "dsh-opencode-go",
+  },
+  {
+    pkg: "dsh-opencode-go-api",
+    rowIds: ["opencode-go-api"],
+    replacedBy: "dsh-opencode-go",
   },
 ];
 

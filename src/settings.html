@@ -73,6 +73,16 @@
       margin: 0 0 5px;
     }
     [data-theme="light"] .hint { color: #9aa0a6; }
+    /* 第三方插件行：标题成行、描述最多两行省略、状态更紧凑。 */
+    #pluginList .plg-title { font-weight: 600; }
+    #pluginList .plg-desc {
+      margin: 0 0 1px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    #pluginList .plg-row { margin: 6px 0 2px; padding-bottom: 4px; }
     #checkRow { display: flex; align-items: center; gap: 10px; margin-top: 3px; flex-wrap: wrap; }
     button.dsh-btn {
       font: inherit;
@@ -412,18 +422,18 @@
               "</span></label>"
             : "";
           return (
-            '<div class="plg-row" style="margin:5px 0;padding-bottom:4px;">' +
+            '<div class="plg-row">' +
             '<label class="plg" style="display:flex;gap:7px;align-items:flex-start;cursor:' + (blocked ? "not-allowed" : "pointer") + ';">' +
             '<input type="checkbox" class="plg-check" data-id="' + esc(entry.id) + '" ' + (installed ? "checked" : "") +
             (blocked || busy ? " disabled" : "") +
             ' style="margin-top:3px;accent-color:#4d6bfe;" />' +
             "<span>" +
             '<span class="plg-title">' + esc(title) + " — <code style=\"opacity:.7\">" + esc(entry.pkg) + "</code></span><br/>" +
-            '<span class="hint" style="margin:0;display:block;">' + esc(desc) + "</span>" +
+            '<span class="hint plg-desc">' + esc(desc) + "</span>" +
             (blocked && engineHint
               ? '<span class="hint" style="margin:0;display:block;color:#e8806b;">⚠ ' + esc(engineHint) + "</span>"
               : "") +
-            '<span class="plg-state hint" style="margin:0;display:block;color:' + (blocked ? "#e8806b" : "#4d9fff") + ';">' +
+            '<span class="plg-state hint" style="margin:1px 0 0;display:block;color:' + (blocked ? "#e8806b" : "#4d9fff") + ';">' +
             esc(state) +
             (installed
               ? ' · <span class="plg-enable-state" style="color:' + (enabled ? "#3fb950" : "#e8806b") + ';">' +

@@ -12,6 +12,17 @@ import {
   resolveSections,
   fetchUsage,
   fetchBalance,
+  fetchDocsLimits,
+  BUILTIN_MODEL_LIMITS,
+  normalizeLimitName,
+  parseLimitsTable,
+  parseModelIdTable,
+  parseDocsLimits,
+  deriveLimitTiers,
+  deriveLimits,
+  limitsCachePath,
+  readLimitsCache,
+  writeLimitsCache,
 } from '../lib/index.js'
 
 // --- load the client bundle exactly the way the engine does -----------------
@@ -51,7 +62,18 @@ for (const svc of ['slots', 'locale', 'modelDirectories']) {
 }
 assert.equal(typeof clientExports.apply, 'function', 'factory must export apply')
 
-const { pickSection, isTracked, percentColor, currencySymbol, formatAmount, formatReset, createUsageStore } = clientExports
+const {
+  pickSection,
+  isTracked,
+  percentColor,
+  currencySymbol,
+  formatAmount,
+  formatReset,
+  createUsageStore,
+  findLimit,
+  limitSourceLabel,
+  limitTooltip,
+} = clientExports
 
 let passed = 0
 async function check(label, fn) {
@@ -263,6 +285,128 @@ await check('resolveSections applies defaults and validates providers', () => {
   assert.equal(defaults.deepseek.tracked.has('deepseek-official'), true)
 })
 
+console.log('\n--- host half: per-model monthly limits (docs) ---')
+
+await check('BUILTIN_MODEL_LIMITS is a sane, non-empty table', () => {
+  const entries = Object.entries(BUILTIN_MODEL_LIMITS)
+  assert.ok(entries.length >= 20, `expected a substantial table, got ${entries.length}`)
+  const ids = new Set()
+  for (const [id, monthly] of entries) {
+    assert.match(id, /^[a-z0-9][a-z0-9.-]*$/, `bad model id ${id}`)
+    assert.ok(!ids.has(id), `duplicate id ${id}`)
+    ids.add(id)
+    assert.ok(Number.isFinite(monthly) && monthly > 0, `bad limit for ${id}: ${monthly}`)
+  }
+  // Spot checks from the docs table (2026-09-20).
+  assert.equal(BUILTIN_MODEL_LIMITS['deepseek-v4.1-flash'], 60)
+  assert.equal(BUILTIN_MODEL_LIMITS['deepseek-v4-pro'], 15)
+  assert.equal(BUILTIN_MODEL_LIMITS['deepseek-v4-flash'], 30)
+  assert.equal(BUILTIN_MODEL_LIMITS['deepseek-v4-flash-vision-exp'], 15)
+})
+
+await check('normalizeLimitName makes the two docs tables joinable', () => {
+  assert.equal(normalizeLimitName('MiMo V2.5'), normalizeLimitName('MiMo-V2.5'))
+  assert.equal(normalizeLimitName('DeepSeek V4.1 Flash (Off-Peak)'), normalizeLimitName('DeepSeek V4.1 Flash'))
+  assert.equal(normalizeLimitName('GPT 5.6 Luna (≤ 272K tokens)'), normalizeLimitName('GPT 5.6 Luna'))
+  assert.equal(normalizeLimitName('Kimi K2.7 Code'), 'kimik27code')
+})
+
+await check('parseLimitsTable reads the docs table incl. promo strikethrough', () => {
+  const html = `<table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读取</th><th>缓存写入</th><th>每月限制</th></tr></thead><tbody>
+    <tr><td>GLM-5.3-Flash</td><td>$0.15</td><td>$0.50</td><td>$0.03</td><td>-</td><td><strong>$60</strong></td></tr>
+    <tr><td>DeepSeek V4.1 Flash (Off-Peak)</td><td>$0.15</td><td>$0.60</td><td>$0.003</td><td>-</td><td><del>$15</del> <strong>$60</strong> 4x · 9 月 20 日结束</td></tr>
+    <tr><td>DeepSeek V4.1 Flash (Peak)</td><td>$0.30</td><td>$1.20</td><td>$0.006</td><td>-</td><td><del>$15</del> <strong>$60</strong></td></tr>
+  </tbody></table>`
+  const out = parseLimitsTable(html)
+  assert.equal(out.get(normalizeLimitName('GLM-5.3-Flash')), 60)
+  // Promo cell: the LAST $ is the effective limit; peak/off-peak collapse to one.
+  assert.equal(out.get(normalizeLimitName('DeepSeek V4.1 Flash')), 60)
+  assert.equal(out.size, 2)
+})
+
+await check('parseModelIdTable maps display names to model ids', () => {
+  const html = `<table><thead><tr><th>模型</th><th>模型 ID</th><th>端点</th><th>AI SDK 包</th></tr></thead><tbody>
+    <tr><td>DeepSeek V4.1 Flash</td><td>deepseek-v4.1-flash</td><td><code dir="auto">https://opencode.ai/zen/go/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr>
+    <tr><td>MiMo-V2.5</td><td>mimo-v2.5</td><td><code dir="auto">https://opencode.ai/zen/go/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr>
+  </tbody></table>`
+  const out = parseModelIdTable(html)
+  assert.equal(out.get(normalizeLimitName('DeepSeek V4.1 Flash')), 'deepseek-v4.1-flash')
+  assert.equal(out.get(normalizeLimitName('MiMo V2.5')), 'mimo-v2.5')
+})
+
+await check('parseDocsLimits joins both tables into modelId -> monthly', () => {
+  const html = `<table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读取</th><th>缓存写入</th><th>每月限制</th></tr></thead><tbody>
+    <tr><td>DeepSeek V4.1 Flash</td><td>$0.15</td><td>$0.60</td><td>$0.003</td><td>-</td><td><strong>$60</strong></td></tr>
+    <tr><td>MiMo V2.5</td><td>$0.14</td><td>$0.28</td><td>$0.0028</td><td>-</td><td><strong>$60</strong></td></tr>
+  </tbody></table>
+  <table><thead><tr><th>模型</th><th>模型 ID</th><th>端点</th><th>AI SDK 包</th></tr></thead><tbody>
+    <tr><td>DeepSeek V4.1 Flash</td><td>deepseek-v4.1-flash</td><td><code dir="auto">https://opencode.ai/zen/go/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr>
+    <tr><td>MiMo-V2.5</td><td>mimo-v2.5</td><td><code dir="auto">https://opencode.ai/zen/go/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr>
+  </tbody></table>`
+  const parsed = parseDocsLimits(html)
+  assert.equal(parsed.limits['deepseek-v4.1-flash'], 60)
+  assert.equal(parsed.limits['mimo-v2.5'], 60)
+  assert.ok(typeof parsed.fetchedAt === 'string' && parsed.fetchedAt.length > 0)
+  // Unusable page -> null (the caller falls back to cache/built-in).
+  assert.equal(parseDocsLimits('<html><body>no tables here</body></html>'), null)
+})
+
+await check('deriveLimitTiers applies the docs 20%/50%/100% rule', () => {
+  assert.deepEqual(deriveLimitTiers(60), { hours5: 12, weekly: 30, monthly: 60 })
+  assert.deepEqual(deriveLimitTiers(15), { hours5: 3, weekly: 7.5, monthly: 15 })
+  assert.deepEqual(deriveLimitTiers(30), { hours5: 6, weekly: 15, monthly: 30 })
+  assert.deepEqual(deriveLimits({ 'deepseek-v4.1-flash': 60 }), {
+    'deepseek-v4.1-flash': { hours5: 12, weekly: 30, monthly: 60 },
+  })
+  // Non-finite/zero entries are dropped.
+  assert.deepEqual(deriveLimits({ a: 60, b: 0, c: Number.NaN }), { a: { hours5: 12, weekly: 30, monthly: 60 } })
+})
+
+await check('limits cache round-trips and survives bad input', async () => {
+  const os = await import('node:os')
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mu-limits-'))
+  try {
+    const dshHome = path.join(dir, 'home')
+    const payload = { limits: { 'deepseek-v4.1-flash': 60 }, fetchedAt: '2026-09-20T00:00:00.000Z' }
+    assert.equal(await writeLimitsCache(dshHome, payload), true)
+    assert.ok(fs.existsSync(limitsCachePath(dshHome)))
+    const back = await readLimitsCache(dshHome)
+    assert.deepEqual(back, payload)
+    // A corrupt cache degrades to null, never throws.
+    fs.rmSync(limitsCachePath(dshHome), { force: true })
+    fs.mkdirSync(limitsCachePath(dshHome), { recursive: true }) // a directory is not a file
+    assert.equal(await readLimitsCache(dshHome), null)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('fetchDocsLimits: 200 parses, non-200/bad body classify', async () => {
+  const okHtml = `<table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读取</th><th>缓存写入</th><th>每月限制</th></tr></thead><tbody>
+    <tr><td>GLM-5.3-Flash</td><td>$0.15</td><td>$0.50</td><td>$0.03</td><td>-</td><td><strong>$60</strong></td></tr>
+  </tbody></table>
+  <table><thead><tr><th>模型</th><th>模型 ID</th><th>端点</th><th>AI SDK 包</th></tr></thead><tbody>
+    <tr><td>GLM-5.3-Flash</td><td>glm-5.3-flash</td><td><code dir="auto">https://opencode.ai/zen/go/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr>
+  </tbody></table>`
+  const ok = await fetchDocsLimits({ fetchImpl: async () => ({ ok: true, text: async () => okHtml }) })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.limits['glm-5.3-flash'], 60)
+
+  const http = await fetchDocsLimits({ fetchImpl: async () => ({ ok: false, status: 500 }) })
+  assert.equal(http.ok, false)
+  assert.equal(http.reason, 'upstream')
+
+  const bad = await fetchDocsLimits({ fetchImpl: async () => ({ ok: true, text: async () => '<html>nope</html>' }) })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.reason, 'bad-payload')
+
+  const net = await fetchDocsLimits({ fetchImpl: async () => { throw new Error('boom') } })
+  assert.equal(net.ok, false)
+  assert.equal(net.reason, 'network')
+})
+
 console.log('\n--- client half (pure helpers) ---')
 
 await check('pickSection routes the active provider to its section', () => {
@@ -319,6 +463,37 @@ await check('formatReset renders a relative string for near dates', () => {
   assert.ok(!formatReset(far, true).includes('小时'))
   // Invalid input degrades to empty, never throws.
   assert.equal(formatReset('not-a-date', true), '')
+})
+
+await check('findLimit looks up the selected model cap', () => {
+  const limits = { 'deepseek-v4.1-flash': { hours5: 12, weekly: 30, monthly: 60 } }
+  assert.deepEqual(findLimit(limits, 'deepseek-v4.1-flash'), { hours5: 12, weekly: 30, monthly: 60 })
+  assert.equal(findLimit(limits, 'deepseek-v4-pro'), undefined)
+  assert.equal(findLimit(limits, ''), undefined)
+  assert.equal(findLimit(limits, undefined), undefined)
+  assert.equal(findLimit(null, 'deepseek-v4.1-flash'), undefined)
+})
+
+await check('limitSourceLabel localizes the table source', () => {
+  const t = (k) => ({ sourceDocs: 'OpenCode Go 文档', sourceCache: '本地缓存', sourceBuiltin: '内置表' })[k] ?? k
+  const zh = true
+  assert.equal(limitSourceLabel({ source: 'docs', updatedAt: '2026-09-20T00:00:00Z' }, t, zh), 'OpenCode Go 文档（9/20）')
+  assert.equal(limitSourceLabel({ source: 'cache', updatedAt: '2026-09-19T00:00:00Z' }, t, zh), '本地缓存（9/19）')
+  assert.equal(limitSourceLabel({ source: 'builtin' }, t, zh), '内置表')
+  assert.equal(limitSourceLabel(null, t, zh), '内置表')
+})
+
+await check('limitTooltip assembles the cap + source + account-note lines', () => {
+  const t = (k) => k
+  const meta = { source: 'docs', updatedAt: '2026-09-20T00:00:00Z' }
+  const tip = limitTooltip('deepseek-v4.1-flash', { hours5: 12, weekly: 30, monthly: 60 }, meta, t, true, 'base title')
+  assert.ok(tip.startsWith('base title'))
+  assert.ok(tip.includes('deepseek-v4.1-flash'))
+  assert.ok(tip.includes('$60'))
+  assert.ok(tip.includes('sourceDocs'))
+  assert.ok(tip.includes('accountNote'))
+  // No entry -> only the base title.
+  assert.equal(limitTooltip('x', undefined, meta, t, true, 'only'), 'only')
 })
 
 await check('usage store notifies subscribers and replaces state', () => {

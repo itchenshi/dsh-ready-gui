@@ -36,17 +36,18 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 
 三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/DeepSeekHarnessGUI/releases) 为准。
 
-## 🆕 v0.3.0 亮点
+## 🆕 v0.4.0 亮点
 
-- **📊 用量插件加入 DeepSeek 余额**：`dsh-opencode-go-usage` → **`dsh-model-usage`（模型用量与余量）**。
-  用 OpenCode Go 模型时显示套餐用量（滚动 / 周 / 月），用 DeepSeek 模型时显示**账户余额**（总 / 赠送 / 充值），
-  两段各自独立取数、缺哪个密钥只影响哪一半。
-- **✅ 插件的「安装」与「启用」拆成两个状态**：勾选框管安装/卸载，「启用」开关管加载/禁用；
-  两者都与 Harness 页面的插件市场**双向实时同步**（「启用」开关走市场自己的接口，在线生效）。
-- **🎨 应用图标改为白色底**：白色圆角方块 + 品牌蓝字形，桌面/快捷方式上更醒目。
-- **⚡ 打包提速**：Node 与 Electron 发行包本地缓存复用，重复打包 0 下载、断网也能构建。
+- **🔧 两个 OpenCode 插件合并为「OpenCode Go 增强」**（`dsh-opencode-go`）：一个插件同时**声明 `opencode-go` 路由协议**
+  （修掉目录外模型的 `needs an api` 报错）、**自动补 DeepSeek V4.1 模型**（如 `deepseek-v4.1-flash`）、
+  并**附加按会话 `x-opencode-session` 头**（修复 400 MissingSessionID）。装过旧插件的用户首次启动自动迁移。
+- **📊 用量插件显示选中模型的每月额度上限**：会话标题右侧在「滚动 / 周 / 月」后显示 `上限 $60` 一类的标签，
+  悬停可看该模型的 5 小时 / 周 / 每月三段额度。官方没有额度接口，插件会**自动抓取官方文档页更新额度表**
+  （公开页、无需密钥），失败回退缓存 → 内建表。
+- **⚠️ 达到每月上限会标红提示**（上游返回 `rate-limited` 时），并给出重置时间。
+- **🎛 设置窗口的插件区更清爽**：标题成行、描述最多两行省略，全部插件描述精简为一句。
 
-完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.3.0.md](RELEASE-NOTES-v0.3.0.md)。
+完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.4.0.md](RELEASE-NOTES-v0.4.0.md)。
 
 ## 📸 界面预览
 
@@ -128,8 +129,15 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 - **「修复 / 重试」按钮**：以当前已安装集合为目标再对账（补拉捆绑插件更新），
   只增不删，可作安装失败后的重试；同时对齐启用/禁用状态。
 - **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、最近会话恢复
-  （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode 会话头
-  （dsh-opencode-go-session，加固版）。设置窗口展示顺序即此顺序。
+  （dsh-gui-last-session）、模型用量与余量（dsh-model-usage）、OpenCode Go 增强
+  （dsh-opencode-go）。设置窗口展示顺序即此顺序。
+- **`dsh-opencode-go`（OpenCode Go 增强）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
+  ① 给 `opencode-go` 路由声明 wire 协议（`api: openai-completions`），修掉目录外模型
+  （如 `deepseek-v4.1-flash`）的 `needs an api` 报错与模型页保存被拒；② 引擎启动后若该路由存在
+  且缺 `deepseek-v4.1-*`，自动补上 DeepSeek V4.1 模型（幂等，写在 `settings.yaml`）；③ 为发往
+  OpenCode 的请求附加稳定的按会话 `x-opencode-session` 头（修复 400 MissingSessionID，默认不透明
+  UUID，绝不发内部会话 ID）。**该插件合并自原 `dsh-opencode-go-session` 与 `dsh-opencode-go-api`**——
+  升级时 GUI 会自动摘除旧包并装上新版（连"已禁用"的选择一起搬过去），不会新旧两版同时加载。
 - **`dsh-model-usage`（模型用量与余量）**：在会话标题右侧显示**当前模型**的用量/余量，
   按会话当前选中的模型路由分流（仅在使用对应模型时出现）：
   - OpenCode Go 模型（`opencode-go` / `opencode`）→ 套餐用量（滚动 / 周 / 月 百分比 + 重置时间），
@@ -273,7 +281,7 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 ├─ plugins/               # 仓库内置的本地插件（打包进 app.asar）
 │  ├─ dsh-model-usage/           # 模型用量与余量（OpenCode Go 用量 + DeepSeek 余额）
 │  ├─ dsh-gui-last-session/      # 启动后回到最近一次对话
-│  └─ dsh-opencode-go-session/   # OpenCode 会话头（加固版，本地 file 安装）
+│  └─ dsh-opencode-go/           # OpenCode Go 增强（协议声明 + V4.1 模型 + 会话头）
 ├─ scripts/               # 构建与测试脚本
 │  ├─ make-icons.mjs      # 官网 favicon → 各尺寸图标 + win 用的混合帧 icon.ico
 │  ├─ ico-info.cjs        # 检查任意 .ico 的帧构成与长度自洽性

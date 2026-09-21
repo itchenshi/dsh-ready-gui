@@ -1,57 +1,52 @@
-// dsh-opencode-go-session
+// dsh-opencode-go
 //
-// Hardened host plugin: attach a stable `x-opencode-session` header to model
-// requests routed to an OpenCode / OpenCode Go provider.
+// One plugin for the OpenCode / OpenCode Go routes, three jobs:
 //
-// OpenCode's relay pins every request sharing the same `x-opencode-session`
-// value to the same upstream backend, keeping its prompt cache warm across the
-// turns of one conversation. The value only has to be opaque and stable per
-// conversation.
+//   1. DECLARE THE ROUTE PROTOCOL (cordis.patch.yml): the engine's `llm-pi-ai`
+//      row is patched with providers.opencode-go.api = openai-completions. The
+//      adapter resolves each route's models with
+//        api = route.api ?? catalogModel.api ?? sharedCatalogApi(route)
+//      opencode-go's catalog spans anthropic-messages / openai-completions /
+//      openai-responses, so the shared fallback is undefined; catalog-unknown
+//      models therefore need the route-level `api`.
 //
-// This plugin is a security-hardened rewrite of `dsh-opencode-session`. The
-// changes that address the review findings:
+//   2. AUTO-ADD THE DEEPSEEK V4.1 MODELS (this file, settings half): once the
+//      `llm-pi-ai` settings namespace is registered, checks whether the user's
+//      model list carries an opencode-go route; if it does and no
+//      `deepseek-v4.1-*` model is listed yet, appends the known DeepSeek V4.1
+//      models via settings.update (the same write path the Models page uses, so
+//      the change lands in settings.yaml and re-runs the engine's strict
+//      validation — which passes because `api` is present on the base layer).
 //
-//   1. DEFAULT MODE IS 'uuid', NOT 'session-id'.
-//      Empirically verified class of issue: the original shipped with
-//      `mode: 'session-id'` as default, which sends the *internal DSH session
-//      id* verbatim to a third-party OpenCode upstream. That leaks an internal
-//      identifier that can be used for session correlation / probing. We now
-//      derive an opaque random UUID per DSH session and only ever send that.
-//      `session-id` is still available explicitly for users who specifically
-//      want it, but it is no longer the default.
+//   3. ATTACH `x-opencode-session` (this file, header half): OpenCode's relay
+//      pins every request sharing the same `x-opencode-session` value to the
+//      same upstream backend, keeping its prompt cache warm across the turns of
+//      one conversation. Fixes 400 MissingSessionID. The value only has to be
+//      opaque and stable per conversation, so the DEFAULT derives a random UUID
+//      per DSH session and never sends the internal DSH session id to third
+//      parties (`mode: 'session-id'` is strictly opt-in).
 //
-//   2. Header VALUE sanitisation.
-//      A session id passing through `Headers.set` is validated by the runtime,
-//      but we additionally reject control characters / non-visible ASCII up
-//      front so a hostile session id can never be abused to smuggle header
-//      syntax into the outbound request.
-//
-//   3. fetch patch is minimally scoped and safely restored.
-//      The global `globalThis.fetch` patch is only *active* while an
-//      OpenCode stream is being driven inside our AsyncLocalStorage store, and
-//      restoration guards against clobbering a patch installed by a
-//      concurrently-loaded plugin (we only restore when we are still the
-//      current patch).
-//
-//   4. debugFile is constrained and redacted.
-//      The optional debug log accepts only an absolute path under an
-//      allow-listed directory, and the logged "session" field is a HMAC-free
-//      one-way SHA-256 hash, never the raw DSH session id.
-//
-//   5. Bounded uuid table.
-//      The in-memory session->uuid map is capped to avoid unbounded growth on
-//      long-running processes with many one-shot sessions.
+// The two runtime halves are independent: the header half activates as soon as
+// the `llm` service exists, the settings half only once `settings` does — a
+// profile without settings still gets the header fix.
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFile } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
-export const name = 'opencode-go-session-header'
+export const name = 'opencode-go'
 
 // Activate only after the abstract `llm` service exists, so the waterfall
-// event we listen on is already registered by its provider.
+// event the header half listens on is already registered by its provider.
+// `settings` is injected lazily below (see apply), because the header half must
+// not depend on a profile that mounts a settings provider.
 export const inject = ['llm']
+
+// ---------------------------------------------------------------------------
+// x-opencode-session header half
+// ---------------------------------------------------------------------------
 
 const SESSION_HEADER = 'x-opencode-session'
 const HEADER_VALUE_RE = /^[\x21-\x7e\x80-\u10ffff]+$/u
@@ -215,14 +210,21 @@ export function patchFetch(original, als) {
   }
 }
 
-export function apply(ctx, config) {
+/** Fire-and-forget append of one debug record; failures only log a warning. */
+function recordDebug(ctx, file, entry) {
+  appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8').catch((error) => {
+    ctx.logger.warn('[opencode-go] debugFile write failed: %s', error?.message ?? String(error))
+  })
+}
+
+function installSessionHeader(ctx, config) {
   const { providers, mode, debug, debugFile } = resolveConfig(config)
   const als = new AsyncLocalStorage()
   const uuidBySession = new Map()
 
   const originalFetch = globalThis.fetch
   if (typeof originalFetch !== 'function') {
-    ctx.logger.warn('[opencode-go-session-header] globalThis.fetch is unavailable; cannot inject x-opencode-session')
+    ctx.logger.warn('[opencode-go] globalThis.fetch is unavailable; cannot inject x-opencode-session')
     return
   }
 
@@ -231,7 +233,7 @@ export function apply(ctx, config) {
   ctx.effect(() => {
     globalThis.fetch = patched
     ctx.logger.info(
-      '[opencode-go-session-header] active for providers [%s] with mode %s (debug=%s)',
+      '[opencode-go] active for providers [%s] with mode %s (debug=%s)',
       [...providers].join(', '),
       mode,
       debug ? 'on' : 'off',
@@ -241,7 +243,7 @@ export function apply(ctx, config) {
       // installed later by a concurrently-loaded plugin.
       if (globalThis.fetch === patched) globalThis.fetch = originalFetch
     }
-  }, 'opencode-go-session-header.fetch-patch')
+  }, 'opencode-go.fetch-patch')
 
   ctx.on('llm/stream', (options, next) => {
     if (options === undefined || options === null || typeof options !== 'object') return next()
@@ -279,7 +281,7 @@ export function apply(ctx, config) {
       }
       if (debug) {
         ctx.logger.info(
-          '[opencode-go-session-header] streaming provider "%s" mode=%s with %s=%s',
+          '[opencode-go] streaming provider "%s" mode=%s with %s=%s',
           options.provider,
           mode,
           SESSION_HEADER,
@@ -291,11 +293,127 @@ export function apply(ctx, config) {
   }, { prepend: true })
 }
 
-/** Fire-and-forget append of one debug record; failures only log a warning. */
-function recordDebug(ctx, file, entry) {
-  appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8').catch((error) => {
-    ctx.logger.warn('[opencode-go-session-header] debugFile write failed: %s', error?.message ?? String(error))
-  })
+// ---------------------------------------------------------------------------
+// DeepSeek V4.1 auto-add half
+// ---------------------------------------------------------------------------
+
+const NS = 'llm-pi-ai'
+const PROVIDER = 'opencode-go'
+
+// DeepSeek V4.1* models OpenCode Go serves (probed upstream: 37 models, one
+// v4.1 today). Extend this list when upstream adds more.
+export const V4_1_MODELS = [
+  {
+    id: 'deepseek-v4.1-flash',
+    name: 'DeepSeek V4.1 Flash',
+    contextWindow: 1000000,
+    maxTokens: 384000,
+  },
+]
+
+// The `llm-pi-ai` namespace is registered by the engine adapter itself; wait
+// for it (it appears moments after boot) before touching settings.
+const NS_WAIT_TIMEOUT_MS = 10000
+const NS_WAIT_STEP_MS = 100
+
+/** True when the given model id looks like a DeepSeek V4.1 model. */
+export function isV41(id) {
+  return typeof id === 'string' && id.startsWith('deepseek-v4.1')
+}
+
+/**
+ * The next models array with the DeepSeek V4.1 models appended.
+ * @returns {Array|null} null when a v4.1 model is already listed (nothing to do).
+ */
+export function appendV41Models(existing) {
+  const models = Array.isArray(existing) ? existing : []
+  if (models.some((m) => isV41(m?.id))) return null
+  return [...models, ...V4_1_MODELS.map((m) => ({ ...m }))]
+}
+
+async function waitForNamespace(settings) {
+  const deadline = Date.now() + NS_WAIT_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    try {
+      const desc = settings.describe?.()
+      if (Array.isArray(desc) && desc.some((d) => d.ns === NS)) return true
+    } catch {
+      // not yet readable; keep polling
+    }
+    await sleep(NS_WAIT_STEP_MS)
+  }
+  return false
+}
+
+/**
+ * Ensure the opencode-go route lists the DeepSeek V4.1 models. No-ops when the
+ * route is absent (only touch it when opencode-go exists) or when a v4.1 model
+ * is already listed.
+ */
+async function ensureV41Models(ctx, settings) {
+  let resolved
+  try {
+    resolved = settings.get(NS)
+  } catch {
+    return
+  }
+  const profile = resolved?.providers?.[PROVIDER]
+  if (!profile) return // no opencode-go route configured
+
+  let userSection
+  try {
+    userSection = settings.section(NS)
+  } catch {
+    userSection = undefined
+  }
+  const next = appendV41Models(userSection?.providers?.[PROVIDER]?.models)
+  if (next === null) return // already has a DeepSeek V4.1
+
+  ctx.logger.info('[opencode-go] route exists; adding DeepSeek V4.1 models: %s', V4_1_MODELS.map((m) => m.id).join(', '))
+  await settings.update(NS, { providers: { [PROVIDER]: { models: next } } })
+}
+
+function installAutoModels(ctx) {
+  const settings = ctx.settings
+  let ensureChain = Promise.resolve()
+
+  const ensure = () => {
+    ensureChain = ensureChain
+      .then(() => ensureV41Models(ctx, settings))
+      .catch((error) => {
+        ctx.logger?.warn('[opencode-go] auto-add failed: %s', error?.message ?? String(error))
+      })
+  }
+
+  ctx.effect(() => {
+    const started = (async () => {
+      const ready = await waitForNamespace(settings)
+      if (!ready) {
+        ctx.logger?.warn('[opencode-go] llm-pi-ai settings namespace not seen within %dms; skipping auto-add', NS_WAIT_TIMEOUT_MS)
+        return
+      }
+      ensure()
+    })()
+
+    // Re-run whenever the user edits the llm-pi-ai settings (Models page or
+    // file). Idempotent: once a v4.1 model is present, later calls no-op.
+    const off = ctx.on('settings/document-updated', (ns) => {
+      if (ns === NS) ensure()
+    })
+
+    return async () => {
+      off()
+      await started
+      await ensureChain
+    }
+  }, 'opencode-go.ensure-models')
+}
+
+export function apply(ctx, config) {
+  installSessionHeader(ctx, config)
+  // Lazy: keeps the header half working in profiles that mount no settings
+  // provider (and whose `ctx.settings` would never resolve).
+  ctx.inject(['settings'], (settingsCtx) => installAutoModels(settingsCtx))
 }
 
 export default { name, inject, apply }

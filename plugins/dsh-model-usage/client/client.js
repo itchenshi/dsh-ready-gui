@@ -187,6 +187,51 @@ window.__ModuleLoader__.load({
       return zh ? bucket.zh : bucket.en
     }
 
+    /** The limit entry for one model id (`{ hours5, weekly, monthly }` or undefined). */
+    function findLimit(limits, modelId) {
+      if (!limits || typeof limits !== 'object') return undefined
+      return typeof modelId === 'string' && modelId !== '' ? limits[modelId] : undefined
+    }
+
+    /** "2026-09-20" -> "9/20" style short date. */
+    function shortDate(iso, zh) {
+      try {
+        const d = new Date(iso)
+        if (Number.isNaN(d.getTime())) return ''
+        return d.toLocaleDateString(zh ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' })
+      } catch {
+        return ''
+      }
+    }
+
+    /** Source label: "来自 OpenCode Go 文档（9/20）" / "来自本地缓存（…）" / "内置表". */
+    function limitSourceLabel(meta, t, zh) {
+      const source = meta && meta.source
+      if (source === 'docs') {
+        const when = meta.updatedAt ? shortDate(meta.updatedAt, zh) : ''
+        return zh ? `${t('sourceDocs')}${when ? `（${when}）` : ''}` : `${t('sourceDocs')}${when ? ` (${when})` : ''}`
+      }
+      if (source === 'cache') {
+        const when = meta.updatedAt ? shortDate(meta.updatedAt, zh) : ''
+        return zh ? `${t('sourceCache')}${when ? `（${when}）` : ''}` : `${t('sourceCache')}${when ? ` (${when})` : ''}`
+      }
+      return t('sourceBuiltin')
+    }
+
+    /** Multi-line tooltip for the opencode-go widget, incl. the model cap. */
+    function limitTooltip(modelId, entry, meta, t, zh, baseTitle) {
+      const lines = [baseTitle]
+      if (entry) {
+        const tier = zh
+          ? `${t('tier5h')} $${entry.hours5} · ${t('tierWeek')} $${entry.weekly} · ${t('limitTitle')} $${entry.monthly}`
+          : `${t('tier5h')} $${entry.hours5} · ${t('tierWeek')} $${entry.weekly} · ${t('limitTitle')} $${entry.monthly}`
+        lines.push(zh ? `${modelId}：${tier}` : `${modelId}: ${tier}`)
+        lines.push(zh ? `来自 ${limitSourceLabel(meta, t, zh)}` : `from ${limitSourceLabel(meta, t, zh)}`)
+        lines.push(t('accountNote'))
+      }
+      return lines.join('\n')
+    }
+
     // styles
     const S_WRAP = {
       display: 'inline-flex',
@@ -223,6 +268,17 @@ window.__ModuleLoader__.load({
       granted: '赠送',
       toppedUp: '充值',
       insufficientHint: '余额不足，API 调用可能失败',
+      limitLabel: '上限',
+      limitTitle: '每月上限',
+      tier5h: '5 小时',
+      tierWeek: '周',
+      sourceDocs: 'OpenCode Go 文档',
+      sourceCache: '本地缓存',
+      sourceBuiltin: '内置表',
+      sourceUpdated: '更新于 {0}',
+      accountNote: '百分比为账户整体用量；上限按当前选中模型',
+      rateLimited: '已达每月上限',
+      resetAt: '重置于 {0}',
     }
     const enDict = {
       __lang: 'en-US',
@@ -240,6 +296,17 @@ window.__ModuleLoader__.load({
       granted: 'granted',
       toppedUp: 'topped up',
       insufficientHint: 'Balance is insufficient; API calls may fail',
+      limitLabel: 'cap',
+      limitTitle: 'Monthly cap',
+      tier5h: '5h',
+      tierWeek: 'wk',
+      sourceDocs: 'OpenCode Go docs',
+      sourceCache: 'local cache',
+      sourceBuiltin: 'built-in table',
+      sourceUpdated: 'updated {0}',
+      accountNote: 'Percentages are account-wide; the cap is for the selected model',
+      rateLimited: 'monthly cap reached',
+      resetAt: 'resets {0}',
     }
 
     // --- component ---------------------------------------------------------
@@ -255,15 +322,17 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** OpenCode Go: rolling / weekly / monthly percentages. */
-    function renderOpenCodeGo(section, t, zh) {
+    /** OpenCode Go: rolling / weekly / monthly percentages + selected-model cap. */
+    function renderOpenCodeGo(section, t, zh, modelId, limits, limitsMeta) {
       if (!section || section.ok !== true || !section.usage) {
         return renderUnavailable(t, section?.reason, t('titleOcUnavailable'))
       }
       const parts = []
+      let rateLimited = false
       for (const bucket of BUCKETS) {
         const b = section.usage[bucket.key]
         if (!b) continue
+        if (b.status === 'rate-limited') rateLimited = true
         const tip =
           `${zh ? bucket.titleZh : bucket.titleEn} · ${b.percent}%` +
           (b.resetsAt ? ` · ${formatReset(b.resetsAt, zh)}` : '')
@@ -284,9 +353,38 @@ window.__ModuleLoader__.load({
         )
       }
       if (parts.length === 0) return renderUnavailable(t, 'bad-payload', t('titleOcUnavailable'))
+
+      // The selected model's monthly cap, when the table knows it.
+      const entry = findLimit(limits, modelId)
+      if (entry) {
+        parts.push(
+          jsx.jsxs(
+            'span',
+            {
+              key: 'cap',
+              title: `${t('limitTitle')} $${entry.monthly}`,
+              style: S_BUCKET,
+              children: [
+                jsx.jsx('span', { style: S_DIM, children: t('limitLabel') }),
+                jsx.jsx('span', { style: { color: rateLimited ? '#e5534b' : '#4d9fff', fontWeight: 600 }, children: `$${entry.monthly}` }),
+              ],
+            },
+            'cap',
+          ),
+        )
+      }
+
+      let title = limitTooltip(modelId, entry, limitsMeta, t, zh, t('titleOcUsage'))
+      if (rateLimited) {
+        const reset = section.usage.monthly && section.usage.monthly.resetsAt
+          ? ` · ${t('resetAt').replace('{0}', shortDate(section.usage.monthly.resetsAt, zh))}`
+          : ''
+        title += `\n⚠ ${t('rateLimited')}${reset}`
+      }
+
       return jsx.jsxs('span', {
         className: 'model-usage',
-        title: t('titleOcUsage'),
+        title,
         style: S_WRAP,
         children: [jsx.jsx('span', { style: S_DIM, children: t('labelOc') }), ...parts],
       })
@@ -398,7 +496,8 @@ window.__ModuleLoader__.load({
       if (state.status !== 'ready' && state.status !== 'error') return null
 
       if (sectionKey === 'deepseek') return renderDeepSeek(section, t, zh)
-      return renderOpenCodeGo(section, t, zh)
+      const modelId = modelSnapshot && modelSnapshot.current ? modelSnapshot.current.model : undefined
+      return renderOpenCodeGo(section, t, zh, modelId, payload && payload.limits, payload && payload.limitsMeta)
     }
 
     // --- plugin face -------------------------------------------------------
@@ -450,6 +549,9 @@ window.__ModuleLoader__.load({
       formatAmount,
       formatReset,
       createUsageStore,
+      findLimit,
+      limitSourceLabel,
+      limitTooltip,
     }
   },
 })

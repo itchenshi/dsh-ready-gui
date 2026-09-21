@@ -28,16 +28,16 @@ function makeTree() {
   });
   // profile project: one in-box bundle, one declared dep, and one stale
   // registration that is neither resolvable nor declared.
-  writeJson(path.join(profile, "node_modules", "dsh-opencode-go-session", "package.json"), {
-    name: "dsh-opencode-go-session",
+  writeJson(path.join(profile, "node_modules", "dsh-opencode-go", "package.json"), {
+    name: "dsh-opencode-go",
     version: "0.1.0",
     dsh: { bundle: { patch: "./cordis.patch.yml" } },
   });
   writeJson(path.join(profile, "package.json"), {
     name: "web",
     version: "1.0.0",
-    dependencies: { "dsh-opencode-go-session": "file:./node_modules/dsh-opencode-go-session" },
-    dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "dsh-opencode-go-session", "dshmarket-stale"], patchReload: "live" } },
+    dependencies: { "dsh-opencode-go": "file:./node_modules/dsh-opencode-go" },
+    dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "dsh-opencode-go", "dshmarket-stale"], patchReload: "live" } },
   });
   return { root, engineDir, dshHome, profile };
 }
@@ -56,8 +56,8 @@ function run() {
       path.join(t.engineDir, "node_modules", "@deepseek-ai", "dsh-base"),
     );
     assert.strictEqual(
-      pm.bundleResolveDir(t.engineDir, t.dshHome, "dsh-opencode-go-session"),
-      path.join(t.profile, "node_modules", "dsh-opencode-go-session"),
+      pm.bundleResolveDir(t.engineDir, t.dshHome, "dsh-opencode-go"),
+      path.join(t.profile, "node_modules", "dsh-opencode-go"),
     );
     assert.strictEqual(pm.bundleResolveDir(t.engineDir, t.dshHome, "dshmarket-stale"), null);
     console.log("ok - bundleResolveDir mirrors engine resolution (install anchor -> profile)");
@@ -73,7 +73,7 @@ function run() {
       assert.strictEqual(r.changed, true);
       const manifest = pm.readProfileManifest(t.dshHome);
       assert.ok(manifest, "manifest should parse after heal");
-      assert.deepStrictEqual(manifest.dsh.profile.bundles, ["@deepseek-ai/dsh-base", "dsh-opencode-go-session"]);
+      assert.deepStrictEqual(manifest.dsh.profile.bundles, ["@deepseek-ai/dsh-base", "dsh-opencode-go"]);
       console.log("ok - heal prunes stale unresolvable bundle, keeps healthy ones");
 
       // idempotent: second run is a no-op.
@@ -83,9 +83,9 @@ function run() {
         console.log("ok - heal is idempotent");
 
         // pruneProfileBundles is a direct remove that returns what it pruned.
-        const pruned = pm.pruneProfileBundles(t.dshHome, ["dsh-opencode-go-session"]);
-        assert.deepStrictEqual(pruned, ["dsh-opencode-go-session"]);
-        assert.strictEqual(pm.pruneProfileBundles(t.dshHome, ["dsh-opencode-go-session"]).length, 0);
+        const pruned = pm.pruneProfileBundles(t.dshHome, ["dsh-opencode-go"]);
+        assert.deepStrictEqual(pruned, ["dsh-opencode-go"]);
+        assert.strictEqual(pm.pruneProfileBundles(t.dshHome, ["dsh-opencode-go"]).length, 0);
         console.log("ok - pruneProfileBundles removes and is idempotent");
 
         // atomic write leaves a parseable manifest, no temp residue.
