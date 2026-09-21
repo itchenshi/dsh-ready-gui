@@ -57,6 +57,18 @@ dsh plugin --profile web add dsh-model-usage
 > `dsh-composer-keys` 在 npm 上都已被其他作者占用，因此这里用了 `-path` 与
 > `-setting` 后缀。这与插件的功能无关，只影响安装时写的包名。
 
+四个插件的发布用 `scripts/publish-plugins.ps1` 一次完成（会强制走官方 registry、
+逐个校验 tarball 内容、发布后在官方 registry 上复核）：
+
+```powershell
+# 先登录到官方 registry —— 注意 --registry 不能省：
+# 本机 .npmrc 若指向国内镜像，不带这个参数会登到镜像上，token 对官方无效
+npm login --registry=https://registry.npmjs.org
+
+powershell -File scripts/publish-plugins.ps1 -DryRun   # 预检，不发布
+powershell -File scripts/publish-plugins.ps1           # 发布全部四个
+```
+
 ## 🆕 v0.5.0 亮点
 
 - **📦 插件拆仓 + 发布 npm**：四个随附插件（模型用量与余量、最近会话恢复、
