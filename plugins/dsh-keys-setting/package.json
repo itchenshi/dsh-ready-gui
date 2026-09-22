@@ -1,0 +1,69 @@
+{
+  "name": "dsh-keys-setting",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin: choose whether Enter, Shift+Enter and Ctrl/Cmd+Enter send the message or insert a line break, from the Settings window's General page.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "schemastery": "^3.18.0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis",
+    "composer",
+    "shortcut",
+    "keybinding",
+    "enter"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "itchenshi",
+    "url": "https://github.com/itchenshi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itchenshi/dsh-keys-setting.git"
+  },
+  "homepage": "https://github.com/itchenshi/dsh-keys-setting#readme",
+  "bugs": {
+    "url": "https://github.com/itchenshi/dsh-keys-setting/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "compatibility": {
+      "node": ">=20",
+      "dshReleases": {
+        "0.1.5-rc.2": "compatible"
+      }
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

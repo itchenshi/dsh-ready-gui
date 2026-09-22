@@ -1,0 +1,22 @@
+# dsh-gui-last-session layer.
+#
+# Reopens the conversation you were last in after a restart.
+#
+# Why this is a plugin: the previous implementation patched the engine's own
+# dsh-client-ui-conversation/lib/client.js with a text-anchor injection that was
+# pinned to one exact engine version. Every engine update replaced that file,
+# the version check failed, and the patch silently stopped applying — so
+# "reopen my last conversation" broke on nearly every upgrade. A plugin lives
+# in its own package and talks to the engine through its published service
+# contract, so an engine upgrade no longer deletes the feature.
+#
+# Configuration (row `config`, all optional):
+#   enabled: true|false   master switch. Default true.
+#   quiet: true|false     when true, the plugin logs nothing on activate.
+#                         Default false.
+- insert:
+    - id: gui-last-session
+      name: dsh-gui-last-session
+      config:
+        enabled: true
+        quiet: false

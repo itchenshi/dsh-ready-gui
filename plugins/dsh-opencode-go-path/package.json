@@ -1,0 +1,64 @@
+{
+  "name": "dsh-opencode-go-path",
+  "version": "0.1.1",
+  "description": "DeepSeek Harness plugin for the OpenCode / OpenCode Go routes: declares the route wire protocol, auto-adds DeepSeek V4.1 models, and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis",
+    "opencode",
+    "opencode-go",
+    "opencode-zen",
+    "llm-pi-ai",
+    "x-opencode-session",
+    "missing-session-id",
+    "session-affinity",
+    "prompt-cache"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "itchenshi",
+    "url": "https://github.com/itchenshi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itchenshi/dsh-opencode-go-path.git"
+  },
+  "homepage": "https://github.com/itchenshi/dsh-opencode-go-path#readme",
+  "bugs": {
+    "url": "https://github.com/itchenshi/dsh-opencode-go-path/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "compatibility": {
+      "node": ">=20",
+      "dshReleases": {
+        "0.1.5-rc.2": "compatible"
+      }
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

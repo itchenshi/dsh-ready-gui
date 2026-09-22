@@ -1,0 +1,69 @@
+{
+  "name": "dsh-gui-last-session",
+  "version": "0.1.1",
+  "description": "DeepSeek Harness plugin: remember the conversation you were last in and reopen it after a restart — implemented as a first-class plugin (host half persists the pointer, client half records and reopens) instead of patching engine files.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/manifest-contract.cjs && node tests/test.mjs && node tests/handoff.cjs",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis",
+    "session",
+    "last-session",
+    "auto-restore",
+    "resume"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "itchenshi",
+    "url": "https://github.com/itchenshi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itchenshi/dsh-gui-last-session.git"
+  },
+  "homepage": "https://github.com/itchenshi/dsh-gui-last-session#readme",
+  "bugs": {
+    "url": "https://github.com/itchenshi/dsh-gui-last-session/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "compatibility": {
+      "node": ">=20",
+      "dshReleases": {
+        "0.1.5-rc.2": "compatible"
+      }
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
+    }
+  }
+}

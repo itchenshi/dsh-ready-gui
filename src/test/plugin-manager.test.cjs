@@ -336,89 +336,88 @@ function checkAtomicPatchWrite() {
 }
 
 /**
- * v0.4.1 and earlier staged the bundled plugins into <home>\.dsh-gui\bundled-plugins
- * and installed them with a `file:` spec. Those copies are frozen at the version
- * that release shipped, and v0.5.0 no longer writes that staging directory at all —
- * so leaving them means never getting npm updates, and a broken profile once the
- * directory is cleaned up. Boot maintenance must recognise them and reinstall from
- * the registry.
+ * 四个内置插件必须能从**随包的那份拷贝**装上，完全不经过 registry。有三种情况会让
+ * 这件事静默失效：
  *
- * The negative cases matter just as much: a normal semver range or dist-tag must NOT
- * be reported as a legacy install, or every boot would tear down and reinstall the
- * plugin.
+ *   1. 某个 CATALOG 条目丢了 `localSource` —— 它会退回 npm 安装路径；
+ *   2. 仓库里的 `plugins/<localSource>` 丢了或改了名（构建产物就没有该插件）；
+ *   3. 「这条依赖是不是随包那份」的判定认不出 pnpm 真正写回来的 spec —— 于是每次启动
+ *      都误判成来源不对而反复重装，或者反过来永远修不回正确的来源。
+ *
+ * 这三条都在这里对着**真实的 CATALOG 与真实的 plugins/ 目录**检查。
  */
-function checkFileInstallDetection() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-fileinstall-"));
-  const home = path.join(root, "home");
-  const profile = path.join(home, "profiles", "web");
-  fs.mkdirSync(profile, { recursive: true });
-  const write = (deps) =>
-    fs.writeFileSync(
-      path.join(profile, "package.json"),
-      JSON.stringify({
-        name: "dsh-profile-web",
-        private: true,
-        dsh: { profile: { bundles: [] } },
-        dependencies: deps,
-      }),
-    );
-  try {
-    write({
-      // v0.4.1's staging directory — the ONLY shape the migration may touch.
-      "dsh-model-surplus": "file:C:/Users/x/.dsh-gui/bundled-plugins/dsh-model-surplus",
-      "dsh-gui-last-session": "file:C:\\Users\\x\\.dsh-gui\\bundled-plugins\\dsh-gui-last-session",
-      // A deliberate install from the user's own checkout: must be left alone.
-      "dsh-opencode-go-path": "file:D:/AI/WorkBook/dsh-opencode-go-path",
-      "dsh-keys-setting": "file:../somewhere/dsh-keys-setting",
-      dshmarket: "latest",
-      "some-plugin": "^1.0.0",
-    });
+function checkBuiltInInstallSource() {
+  const stagingRoot = "C:\\Users\\x\\.dsh-gui\\bundled-plugins";
+  const builtIns = pm.CATALOG.filter((entry) => entry.localSource);
+  assert.ok(builtIns.length >= 4, `expected at least 4 built-in entries, saw ${builtIns.length}`);
 
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "dsh-model-surplus"),
-      true,
-      "a forward-slash path into .dsh-gui/bundled-plugins is the v0.4.1 staged install",
+  for (const entry of builtIns) {
+    const sourceDir = pm.bundledSourceDir(entry);
+    const manifestPath = path.join(sourceDir, "package.json");
+    assert.ok(fs.existsSync(manifestPath), `${entry.pkg}: built-in source missing at ${sourceDir}`);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    assert.strictEqual(manifest.name, entry.pkg, `${entry.pkg}: plugins/ copy declares "${manifest.name}"`);
+    assert.ok(
+      typeof manifest.version === "string" && manifest.version !== "",
+      `${entry.pkg}: version is readable (the update comparison needs it)`,
     );
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "dsh-gui-last-session"),
-      true,
-      "a backslash path into .dsh-gui\\bundled-plugins counts too",
+    assert.ok(
+      fs.existsSync(path.join(sourceDir, "cordis.patch.yml")),
+      `${entry.pkg}: patch file is present in the shipped copy`,
     );
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "dsh-opencode-go-path"),
-      false,
-      "a checkout path is NOT the staged install (removing it would delete the plugin)",
-    );
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "dsh-keys-setting"),
-      false,
-      "a relative file: path outside the staging directory is NOT the staged install",
-    );
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "some-plugin"),
-      false,
-      "a semver range is a registry install",
-    );
-    assert.strictEqual(pm.isLegacyStagedInstall(home, "dshmarket"), false, "a dist-tag is a registry install");
-    assert.strictEqual(
-      pm.isLegacyStagedInstall(home, "not-in-dependencies"),
-      false,
-      "an undeclared package is not a staged install",
-    );
-    assert.strictEqual(pm.profileDependencySpec(home, "some-plugin"), "^1.0.0");
 
-    // Boot maintenance runs before the profile necessarily exists: must answer, not throw.
+    // The spec we write and the spec pnpm records back must be recognised as ours.
+    // `stagingRoot` comes from the main process and is computed the same way on every
+    // launch, so this comparison is stable — it must not depend on the app's own
+    // install directory (which changes on every update).
+    const spec = pm.bundledStagedSpec(entry, stagingRoot);
     assert.strictEqual(
-      pm.isLegacyStagedInstall(path.join(root, "no-such-home"), "dsh-model-surplus"),
-      false,
-      "a missing profile answers false instead of throwing",
+      spec,
+      `file:${stagingRoot.replace(/\\/gu, "/")}/${entry.pkg}`,
+      `${entry.pkg}: spec shape`,
     );
-    console.log(
-      "ok - only the v0.4.1 staging directory is migrated; deliberate local and registry installs are left alone",
+    assert.strictEqual(pm.isBundledStagedSpec(spec, entry, stagingRoot), true, `${entry.pkg}: own spec recognised`);
+    // pnpm normalises separators; Windows paths are case-insensitive.
+    assert.strictEqual(
+      pm.isBundledStagedSpec(spec.toUpperCase(), entry, stagingRoot),
+      true,
+      `${entry.pkg}: case-insensitive`,
     );
-  } finally {
-    cleanup(root);
+    assert.strictEqual(
+      pm.isBundledStagedSpec(spec.replace(/\//gu, "\\"), entry, stagingRoot),
+      true,
+      `${entry.pkg}: separator-insensitive`,
+    );
+    assert.strictEqual(
+      pm.bundledStagedSpec(entry, stagingRoot),
+      spec,
+      `${entry.pkg}: the same stagingRoot always yields the same spec`,
+    );
   }
+
+  // Anything that is not the shipped copy must be rejected, so boot maintenance
+  // repairs it: a development checkout, the staging dir under a different package
+  // name, a registry range, a dist-tag, and "not declared at all".
+  const sample = builtIns[0];
+  const foreign = [
+    `file:D:/AI/WorkBook/${sample.pkg}`,
+    "file:C:/Users/x/.dsh-gui/bundled-plugins/some-other-plugin",
+    "file:../elsewhere/" + sample.pkg,
+    "^1.0.0",
+    "latest",
+    "",
+    undefined,
+  ];
+  for (const spec of foreign) {
+    assert.strictEqual(
+      pm.isBundledStagedSpec(spec, sample, stagingRoot),
+      false,
+      `${sample.pkg}: not the shipped copy -> ${String(spec)}`,
+    );
+  }
+  console.log(
+    `ok - ${builtIns.length} built-in plugins resolve to the copy shipped in plugins/; foreign specs are rejected`,
+  );
 }
 
 run()
@@ -426,7 +425,7 @@ run()
   .then(checkRowIdScan)
   .then(checkDisableRefusals)
   .then(checkAtomicPatchWrite)
-  .then(checkFileInstallDetection)
+  .then(checkBuiltInInstallSource)
   .then(
     () => console.log("plugin-manager: all checks passed"),
     (e) => {

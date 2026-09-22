@@ -1,0 +1,49 @@
+# Publish to npm when a v* tag is pushed (or manually from the Actions tab).
+#
+# Requires the repository secret NPM_TOKEN: an npm access token with read+write
+# permission on this package. Without it the publish step fails with ENEEDAUTH.
+#
+# First release only: if the package does not exist on npm yet, publishing with a
+# token is the way to create it. Afterwards you can switch to npm "trusted
+# publishing" (OIDC, no long-lived token) in the package's settings on npmjs.com —
+# the `id-token: write` permission below is already what that needs.
+#
+# Provenance: the SLSA attestation is derived from the GitHub OIDC token, so it
+# links the tarball to this repository and commit. It is not required to publish.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # The suites are self-contained (no network, no engine, no DOM), so this is
+      # a real gate: a broken plugin must not reach the registry.
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

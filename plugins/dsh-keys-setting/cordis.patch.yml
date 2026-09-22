@@ -1,0 +1,22 @@
+# dsh-keys-setting layer.
+#
+# The row `id` stays `composer-keys` on purpose: it is the identity the profile's
+# patch layer and the marketplace state.json have recorded for the user's
+# enable/disable choice since the plugin shipped, and it is independent of the
+# package name. Renaming the package must not orphan that choice.
+#
+# Mounts this plugin's halves:
+#   - host  (lib/index.js):   owns the preference in the engine's settings
+#                             document (namespace `composer-keys`) and serves it
+#                             to the page over GET/POST /composer-keys.
+#   - client (client/client.js): remaps the composer's Enter gestures and adds
+#                             the settings row to Settings → General.
+#
+# Nothing else is patched: the engine's own keymap is left intact, and the page
+# half only intervenes when the user's choice differs from the engine default.
+# (In particular this row is NOT a `- id:` override of an engine row, so the
+# settings window's enable/disable switch can never silently unpatch something
+# else — `packageRowIds` only ever sees the inserted row below.)
+- insert:
+    - id: composer-keys
+      name: dsh-keys-setting

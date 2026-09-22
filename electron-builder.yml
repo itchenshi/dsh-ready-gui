@@ -13,12 +13,14 @@ directories:
 # engine lives in userData/dsh-engine at runtime (installed by the app
 # itself), so it is deliberately NOT packaged here.
 #
-# plugins/ is NOT packaged: since v0.5.0 the four bundled plugins live in their
-# own repositories and are installed from the npm registry like any other
-# catalog entry (see src/plugin-manager.js).
+# plugins/ ships the four built-in plugins inside app.asar. The GUI main process can
+# read them there (Electron's fs is asar-aware) and stages real on-disk copies under
+# <home>/.dsh-gui/bundled-plugins before installing them with pnpm — a child pnpm
+# cannot read inside app.asar (see src/plugin-manager.js).
 files:
   - src/**/*
   - package.json
+  - plugins/**/*
 
 # Do not run node-gyp rebuilds on the app's own deps (only semver, pure JS).
 npmRebuild: false

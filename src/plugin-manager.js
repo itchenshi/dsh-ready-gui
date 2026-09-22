@@ -18,10 +18,10 @@
  *     启动崩溃，如 dsh-agent-teams 0.1.15 ↔ dsh 0.1.2-rc.1）；非 GUI 勾选的
  *     已装插件保留不动，交给“启动失败诊断”弹窗由用户决定，避免误清理。
  *
- * 四个随附插件（会话续接 / 模型余量 / OpenCode Go 路由 / 按键设置）自
- * v0.5.0 起**已拆成各自独立的仓库并发布到 npm**，本仓库不再携带 `plugins/` 源码，
- * 也不再需要「把捆绑插件 staging 成真实目录再装」那套绕开 app.asar 的机制——它们
- * 现在和 dsh-market 一样，是一条普通的 registry 条目。
+ * 四个随附插件（会话续接 / 模型余量 / OpenCode Go 路由 / 按键设置）**内置随包发布**：
+ * 源码在 <repo>/plugins，安装前先 staging 成磁盘上的真实目录再交给 pnpm（子进程 pnpm
+ * 读不到 app.asar 内部，见 stageBundledPlugin）。它们**同时**发布为独立 npm 包，供
+ * 其它 DSH 宿主使用；本壳装的是随包那份，因此不依赖 registry 也能自包含。
  *
  * 安全说明：第三方插件=以你的权限在你的机器上运行的第三方代码。设置窗口勾选
  * 即安装、取消即卸载；默认全部关闭（未勾选一律不装）。列表只收录在官方目录
@@ -51,10 +51,10 @@ const CATALOG = [
   },
   {
     id: "dsh-gui-last-session",
-    // npm install: published as its own package
-    // (github.com/itchenshi/dsh-gui-last-session) and fetched from the registry
-    // like every other catalog entry. It used to ship inside this repo under
-    // plugins/<name> and be staged to a real directory first; that is gone.
+    // 内置：源码随本仓库走（plugins/<localSource>），安装前 staging 成磁盘上的真实
+    // 目录（见 stageBundledPlugin——子进程 pnpm 读不到 app.asar 内部）。它**同时**
+    // 发布为独立包（github.com/itchenshi/dsh-gui-last-session），供其它 DSH 宿主使用；
+    // 本壳装的是随包那份，因此不依赖 registry 也能自包含。
     //
     // This plugin replaces the old engine-file patch for "reopen the last
     // conversation" (src/engine-patch.js). That patch edited the engine's own
@@ -83,6 +83,7 @@ const CATALOG = [
     // （对比：dsh-agent-teams 那种「装上去直接把引擎打崩」的插件才需要 engineRange，
     //  这个插件最坏情况只是「没恢复会话」，不会影响引擎启动。）
     pkg: "dsh-gui-last-session",
+    localSource: "dsh-gui-last-session",
     client: true,
     zh: "会话续接（dsh-gui-last-session）",
     en: "Session resume (dsh-gui-last-session)",
@@ -92,7 +93,8 @@ const CATALOG = [
   },
   {
     id: "dsh-model-surplus",
-    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-model-surplus）。
+    // 内置：源码随本仓库走（plugins/<localSource>），staging 后安装；同时发布为独立包
+    // （github.com/itchenshi/dsh-model-surplus），本壳装的是随包那份。
     //
     // 在会话标题右侧、打开功能按钮左侧显示**模型用量 / 账户余额**，按该会话当前
     // 选中的模型路由分流（仅在使用对应模型时显示）：
@@ -117,6 +119,7 @@ const CATALOG = [
     // 客户端 bundle 被重复执行（duplicate factory registration），进而拖垮页面。
     // 本插件不需要额外的加载顺序约束（页内用 ctx.slots.inject 自行等待 slot）。
     pkg: "dsh-model-surplus",
+    localSource: "dsh-model-surplus",
     client: true,
     zh: "模型余量（dsh-model-surplus）",
     en: "Model surplus (dsh-model-surplus)",
@@ -126,7 +129,8 @@ const CATALOG = [
   },
   {
     id: "dsh-opencode-go-path",
-    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-opencode-go-path）。
+    // 内置：源码随本仓库走（plugins/<localSource>），staging 后安装；同时发布为独立包
+    // （github.com/itchenshi/dsh-opencode-go-path）。
     //
     // 包名必须带 `-path` 后缀：`dsh-opencode-go` 与 `dsh-opencode-go-plus` 都已
     // 被社区占用，无法在 npm 上使用（后者是同期另一个更强的独立实现，见
@@ -154,6 +158,7 @@ const CATALOG = [
     // + llm-pi-ai 的 profile schema 接受 route 级 `api` 字段 + ctx.settings
     // update/section/describe + llm/stream 瀑布），不是引擎版本号。
     pkg: "dsh-opencode-go-path",
+    localSource: "dsh-opencode-go-path",
     client: false,
     zh: "OpenCode Go 路由（dsh-opencode-go-path）",
     en: "OpenCode Go routes (dsh-opencode-go-path)",
@@ -163,7 +168,8 @@ const CATALOG = [
   },
   {
     id: "dsh-keys-setting",
-    // npm 安装：已拆为独立包（github.com/itchenshi/dsh-keys-setting）。
+    // 内置：源码随本仓库走（plugins/<localSource>），staging 后安装；同时发布为独立包
+    // （github.com/itchenshi/dsh-keys-setting）。
     // 名字换过两次：最初是 `dsh-composer-keys`（npm 上已被社区占用 —— 见
     // github.com/zlqd123/dsh-composer-keys，功能同名），临时用过
     // `dsh-composer-keys-setting`，最终定为 `dsh-keys-setting`。
@@ -187,6 +193,7 @@ const CATALOG = [
     // 与其它捆绑插件一样**不设 engineRange**：依赖的是 settings 服务与
     // settings.general.item 槽位的公开契约，不是引擎版本号。
     pkg: "dsh-keys-setting",
+    localSource: "dsh-keys-setting",
     client: true,
     zh: "按键设置（dsh-keys-setting）",
     en: "Key bindings (dsh-keys-setting)",
@@ -391,30 +398,124 @@ function profileDependencySpec(dshHome, pkg) {
   return typeof value === "string" ? value : null;
 }
 
+// ---------------------------------------------------------------------------
+// bundled (built-in) plugins
+// ---------------------------------------------------------------------------
+//
+// 打包版里 `plugins/` 随 src/ 一起打进 app.asar；子进程 pnpm 把 app.asar 当作一个
+// 普通文件，读不到里面的目录，所以 `pnpm add file:<app.asar 内路径>` 会报
+// “as it does not exist”。Electron 主进程的 fs 能透明读 asar 路径，因此这里先把内置
+// 插件复制成磁盘上的真实文件夹（staging），再装那份拷贝。开发模式（electron .）下
+// source 本身就在磁盘上，逻辑完全相同。
+//
+// staging 目录必须**稳定**：pnpm 会把 `file:` spec 原样写进 profile 的 dependencies，
+// 之后在那个 profile 里再跑 pnpm 仍要能解析到同一路径。主进程传进来的是
+// `<home>\.dsh-gui\bundled-plugins`（必要时 8.3 短化，见 main.js 的
+// pluginBundledPluginsDir）——它既不在 app 安装目录里（换版本、换安装位置都不变），
+// 也不含空格。
+
+/** 仓库内内置插件的根目录（开发=真实目录，打包=app.asar 内路径，都可读）。 */
+function bundledPluginsRoot() {
+  return path.join(__dirname, "..", "plugins");
+}
+
+/** 某个内置条目可读的源目录。 */
+function bundledSourceDir(entry) {
+  return path.join(bundledPluginsRoot(), entry.localSource ?? entry.pkg);
+}
+
+/** 递归复制目录（read/readdir/stat 均可被 Electron 的 asar fs 透明处理）。 */
+async function copyDirRecursive(src, dst) {
+  await fsp.mkdir(dst, { recursive: true });
+  const names = await fsp.readdir(src);
+  for (const name of names) {
+    const from = path.join(src, name);
+    const to = path.join(dst, name);
+    // lstat（不跟随链接）：`stat` 会把内置插件源码树里的 junction/软链指向的外部内容
+    // 一起拷进将要安装的包里（实测能把仓库外的文件复制进来）。链接一律跳过。
+    const st = await fsp.lstat(from);
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) await copyDirRecursive(from, to);
+    else await fsp.writeFile(to, await fsp.readFile(from));
+  }
+}
+
+/** 读取某目录 package.json 的 version（读不到返回 null）。 */
+function readPackageVersion(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读取某目录 package.json 的 name（读不到返回 null）。 */
+function readPackageName(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 已装插件在 profile node_modules 里的版本（未装/不可读返回 null）。 */
+function installedBundleVersion(dshHome, pkg) {
+  return readPackageVersion(path.join(profileDir(dshHome), "node_modules", pkg));
+}
+
+/** 某个内置条目 staging 后应被安装的绝对目录。 */
+function bundledStagedDir(entry, stagingRoot) {
+  return path.join(stagingRoot, entry.pkg);
+}
+
+/** 该条目应写进 profile 的安装 spec（与 pnpm 记录的写法一致：正斜杠 + file: 前缀）。 */
+function bundledStagedSpec(entry, stagingRoot) {
+  return `file:${bundledStagedDir(entry, stagingRoot).replace(/\\/gu, "/")}`;
+}
+
 /**
- * 这个包的安装来源是否是 v0.4.1 及更早的**随壳 staging 目录**？
+ * profile 里那条依赖是不是「我们 staging 出来的那份」？
  *
- * v0.4.1 把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
- * profile。那些拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码
- * 写入，所以：
- *   - 留着它 = 这个插件永远拿不到 npm 上的更新（GUI 只按 bundles 判断「已装」）；
- *   - 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为
- *     解析不到这个依赖而**启动失败**。
- * 因此启动维护把这种安装换成 registry 版本。
+ * 内置插件的安装来源由应用自己管理：指向别处（开发用的 checkout、旧版 staging、npm
+ * 安装、git 安装）都说明当前装着的不是随包那一份，应当换回来——否则应用就不再是
+ * 自包含的。
  *
- * **只认那一个 staging 目录，不认任意 `file:` 安装。** 从自己的 checkout 装（开发时，
- * 或者 registry 上还没发布时的本地安装）是有意为之；把它当旧版残留去 remove+add，而
- * registry 上又还没有这个包时，插件会被删掉且装不回来——实测过（引擎 0.1.5-rc.2）。
- *
- * 名字变了的（`dsh-opencode-go` / `dsh-composer-keys` / `dsh-model-usage`）由
- * LEGACY_PLUGIN_PKGS 先处理，走不到这里；这里管的是**名字没变**的
- * `dsh-gui-last-session`——包名一样，只有安装来源从 staging 目录变成了 registry。
+ * 比较用**同一台机器上每次都相同**的 stagingRoot 拼出来的字符串，不做模糊匹配：
+ * stagingRoot 由主进程每次以同样方式计算（含必要的 8.3 短化），因此短路径形式也稳定，
+ * 不会出现「每次启动都误判成来源不对」而反复重装。
  */
-function isLegacyStagedInstall(dshHome, pkg) {
-  const spec = profileDependencySpec(dshHome, pkg) ?? "";
-  if (!spec.startsWith("file:")) return false;
-  // profile 里存的是 pnpm 规范化过的正斜杠路径，两种分隔符都判，大小写不敏感。
-  return /[/\\]\.dsh-gui[/\\]bundled-plugins[/\\]/iu.test(spec);
+function isBundledStagedSpec(spec, entry, stagingRoot) {
+  if (typeof spec !== "string") return false;
+  const norm = (s) => s.replace(/\\/gu, "/").toLowerCase();
+  return norm(spec) === norm(bundledStagedSpec(entry, stagingRoot));
+}
+
+/**
+ * 把内置插件 staging 成 <stagingRoot>/<pkg> 的真实目录并返回该目录。
+ * 每次安装前整目录刷新，保证装的是当前随应用发布的代码。
+ * @returns {Promise<string>} 真实 staging 目录
+ */
+async function stageBundledPlugin(entry, { stagingRoot, log = () => {} }) {
+  const name = entry.pkg;
+  const sourceDir = bundledSourceDir(entry);
+  if (!fs.existsSync(path.join(sourceDir, "package.json"))) {
+    throw new Error(`built-in plugin source missing: ${sourceDir}`);
+  }
+  const sourceName = readPackageName(sourceDir);
+  if (sourceName && sourceName !== name) {
+    throw new Error(`built-in plugin name mismatch: ${sourceDir} is "${sourceName}", expected "${name}"`);
+  }
+  const stagingDir = bundledStagedDir(entry, stagingRoot);
+  if (/[\s"&|^%!<>]/u.test(stagingDir)) {
+    throw new Error(
+      `built-in plugin staging path contains characters the engine's shell cannot carry (${stagingDir}); ` +
+        "pass a stagingRoot without spaces or cmd metacharacters",
+    );
+  }
+  await fsp.rm(stagingDir, { recursive: true, force: true });
+  await copyDirRecursive(sourceDir, stagingDir);
+  log("built-in plugin staged:", sourceDir, "->", stagingDir);
+  return stagingDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,9 +1769,15 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
  *  - 已装但未勾选：sync 模式按“未勾选”卸载；install 模式不静默清理，留给
  *    “启动失败诊断”弹窗由用户知情后处理。
  *
- * 其他：幂等（已装则跳过）。
+ * 其他：幂等（已装、来源正确且版本不落后时跳过）。内置插件随包代码更新、或安装来源
+ * 不是随包那一份时会先 remove 再 add，让 profile 里的拷贝跟上随包发布的代码；内置
+ * （localSource）插件从不直接指向 app.asar 内的源目录安装，先 staging 成真实目录
+ * （子进程 pnpm 读不到 app.asar 内部）再装那份。
  * @param {object} o
  * @param {"sync"|"install"} [o.mode] 默认 "install"（只增不删）。
+ * @param {string} [o.stagingRoot] 内置插件的 staging 根目录。默认取
+ *   <pnpmInstallDir>/bundled-plugins；主进程应传入**稳定且无空格**的路径（见 main.js 的
+ *   pluginBundledPluginsDir）——它会被原样写进 profile 的 dependencies。
  * @returns {Promise<{installed:string[], removed:string[], skipped:string[], errors:string[], changed:boolean}>}
  *   changed 表示已装集合真的变了（调用方据此提示“需重启引擎”）。
  */
@@ -1680,6 +1787,7 @@ async function syncEnabledPlugins({
   dshHome,
   nodeExec,
   pnpmInstallDir,
+  stagingRoot,
   mode = "install",
   log = () => {},
 }) {
@@ -1697,6 +1805,36 @@ async function syncEnabledPlugins({
     result.errors.push(`pnpm provisioning failed: ${(error && error.message) || error}`);
     log("pnpm provisioning failed:", error);
     return result;
+  }
+  // 内置插件的 staging 根目录（必须**稳定**：pnpm 会把 `file:` spec 原样写进 profile
+  // 的 dependencies，之后在那个 profile 里再跑 pnpm 仍要能解析到同一路径）。
+  const bundledStagingRoot = stagingRoot ?? path.join(pnpmInstallDir, "bundled-plugins");
+  // 内置条目的安装来源由应用自己管理。**先摘掉所有「即将安装、但来源不对」的登记，再
+  // 统一安装**：残留的 `file:` 依赖会被 pnpm 在下一次安装里一起重新解析，那条路径一旦
+  // 解析不了，就会让**别的**插件的安装一起失败——实测：修 A 时因为我们自己的 B 依赖
+  // 指向一个失效的 `file:` 路径而报 ENOENT，于是 A 也装不上，只能等下一轮启动才补上。
+  // 先清干净就没有这种交叉污染，一次启动全部修好。只动「已勾选」的条目：install 模式
+  // 承诺不动用户没勾选的东西。
+  const prunedSpecs = new Map();
+  const foreignEntries = [];
+  for (const entry of CATALOG) {
+    if (!entry.localSource || !enabled.has(entry.id)) continue;
+    if (!installedBundles(dshHome).includes(entry.pkg)) continue;
+    if (isBundledStagedSpec(profileDependencySpec(dshHome, entry.pkg), entry, bundledStagingRoot)) continue;
+    foreignEntries.push(entry);
+  }
+  if (foreignEntries.length > 0) {
+    log("pruning built-in plugins installed from elsewhere:", foreignEntries.map((e) => e.pkg).join(", "));
+    // 记下原 spec：万一随后装不上，还能把它装回去（见循环里的还原分支）。
+    for (const entry of foreignEntries) prunedSpecs.set(entry.pkg, profileDependencySpec(dshHome, entry.pkg));
+    // **先摘登记，再跑 pnpm**：摘登记是纯改文件，而只要 profile 里还留着任何一条解析
+    // 不了的 `file:` 依赖，接下来每一次 pnpm 调用都会整体失败——连累的正是我们想修的那
+    // 个插件。实测顺序颠倒时的后果：第一次 remove 就 ENOENT，修好的只有一半。
+    pruneProfilePackages(dshHome, foreignEntries.map((e) => e.pkg));
+    result.changed = true;
+    // 这里**不再**跑 `dsh plugin remove`：登记已经摘掉，那一步只剩 ERR_PNPM_CANNOT_REMOVE_
+    // MISSING_DEPS（没依赖可删），而 node_modules 里那份旧的会被随后按新 spec 的 `add`
+    // 重新链接；装不上时还有下面的还原分支兜底。
   }
   const engineVersion = readEngineVersion(engineDir);
   for (const entry of CATALOG) {
@@ -1749,14 +1887,46 @@ async function syncEnabledPlugins({
       continue;
     }
 
-    // 已装且被勾选 → 通常什么都不做：升级交给 dsh-market / `dsh plugin update`。
-    // 唯一的例外是 v0.4.1 及更早留下的 **staging 目录** 安装（见 isLegacyStagedInstall）
-    // ——那些必须换成 registry 版本，否则会永远停在随旧版发布的副本上。
-    // 注意只认那一个目录：从本地 checkout 有意安装的不动。
-    if (has && !isLegacyStagedInstall(dshHome, name)) continue;
-    const previousSpec = has ? profileDependencySpec(dshHome, name) : null;
-    if (has) log("replacing the v0.4.1 staged install with the registry package:", name, previousSpec);
+    // 已装且被勾选：判断要不要重装。
+    //
+    // 内置条目（带 localSource）的安装来源由应用自己管理——profile 里那条依赖必须是
+    // **我们 staging 出来的那份**。指向别处（开发用的 checkout、旧版 staging、npm 或
+    // git 安装）都说明当前装着的不是随包那一份，要换回来；否则应用就不再是自包含的：
+    // 实测过后果——依赖指向某个 checkout，那个目录一没了应用就装不上插件。
+    // 随包代码更新（bundled 版本更新）时同样重装；但绝不因为「已装版本更高」而降级。
+    let wantsUpdate = false;
+    if (has && entry.localSource) {
+      const currentSpec = profileDependencySpec(dshHome, name);
+      if (!isBundledStagedSpec(currentSpec, entry, bundledStagingRoot)) {
+        wantsUpdate = true;
+        log("plugin is installed from somewhere other than the bundled copy; reinstalling:", name, currentSpec);
+      } else {
+        const sourceVersion = readPackageVersion(bundledSourceDir(entry));
+        const installedVersion = installedBundleVersion(dshHome, name);
+        if (sourceVersion && installedVersion) {
+          // 只在**随包版本更新**时重装。`!==` 会让「已装版本比随包新」也触发 remove+add ——
+          // 那是一次无人值守的**降级**（应用回滚过、市场侧更新过、或手工换过更新的副本时
+          // 都会发生）。版本号不可解析时才退回不等式。
+          const bothValid = semver.valid(sourceVersion) !== null && semver.valid(installedVersion) !== null;
+          wantsUpdate = bothValid ? semver.gt(sourceVersion, installedVersion) : sourceVersion !== installedVersion;
+          if (wantsUpdate) {
+            log("bundled plugin is newer:", name, installedVersion, "->", sourceVersion);
+          } else if (installedVersion !== sourceVersion) {
+            log("keeping the newer installed plugin:", name, installedVersion, "(bundled " + sourceVersion + ")");
+          }
+        }
+      }
+    }
+    if (has && !wantsUpdate) continue;
+    // 预清理阶段摘掉的那些条目此时已不在 bundles 里（has === false），但它们原本装着
+    // 一份（来源不对的）拷贝——装不回去时用它还原，别让插件凭空消失。
+    const previousSpec = has ? profileDependencySpec(dshHome, name) : prunedSpecs.get(name) ?? null;
     try {
+      // 先把要装的 spec 准备好再做 remove/add：内置插件先 staging 成真实目录（子进程
+      // pnpm 读不到 app.asar 内部路径），staging 失败就抛——此时还没动现有安装。
+      const spec = entry.localSource
+        ? `file:${await stageBundledPlugin(entry, { stagingRoot: bundledStagingRoot, log })}`
+        : registrySpec(entry);
       if (has) {
         // 必须**显式 remove**，不能指望 `add` 原地改写那条 spec。实测（引擎
         // 0.1.5-rc.2 / pnpm 12）：对一个已登记进 bundles 的包执行
@@ -1765,20 +1935,20 @@ async function syncEnabledPlugins({
         // `file:` spec **原样保留**——包不会重解析，等于什么都没做。
         // 所以走与 LEGACY_PLUGIN_PKGS 完全相同的已验证路径：remove → prune → add。
         const rm = await removePlugin({ engineDir, dshHome, pnpmBinDir, pkg: name, nodeExec, log });
-        if (!rm.ok) log("staged install removal did not succeed, pruning the registration:", name);
+        if (!rm.ok) log("plugin removal did not succeed, pruning the registration:", name);
         // 只 remove 不够：残留的 dependencies 会被引擎的 reconcile 重新登记回
-        // bundles（实测过），旧的 `file:` 副本于是照旧生效。
+        // bundles（实测过），旧的那份于是照旧生效。
         try {
           pruneProfilePackages(dshHome, [name]);
         } catch (error) {
-          log("staged install prune failed:", name, (error && error.message) || error);
+          log("plugin prune failed:", name, (error && error.message) || error);
         }
       }
       const res = await installPlugin({
         engineDir,
         dshHome,
         pnpmBinDir,
-        pkg: registrySpec(entry),
+        pkg: spec,
         name,
         nodeExec,
         log,
@@ -1787,10 +1957,8 @@ async function syncEnabledPlugins({
         result.installed.push(entry.id);
         result.changed = true;
       } else {
-        // 换不成 registry 版本时**把原来那份装回去**。走到这里最常见的原因是
-        // registry 上还没有这个包（npm 发布尚未完成、或本机连不上 registry）——
-        // 那时旧副本虽然陈旧，但比「插件凭空消失」好得多。实测过没有这一步的后果：
-        // remove + prune 成功、add 404，插件直接从 bundles 里没了。
+        // 重装失败时**把原来那份装回去**，绝不让插件凭空消失。实测过没有这一步的后果：
+        // remove + prune 成功、add 失败，插件直接从 dsh.profile.bundles 里没了。
         result.errors.push(`${name}: ${res.output.slice(-200)}`);
         if (previousSpec) {
           try {
@@ -1805,8 +1973,8 @@ async function syncEnabledPlugins({
             });
             log(
               back.ok
-                ? "registry install failed; restored the previous staged install:"
-                : "registry install failed AND the previous install could not be restored:",
+                ? "reinstall failed; restored the previous install:"
+                : "reinstall failed AND the previous install could not be restored:",
               name,
             );
           } catch (error) {
@@ -1878,7 +2046,10 @@ module.exports = {
   writeProfileManifest,
   installedBundles,
   profileDependencySpec,
-  isLegacyStagedInstall,
+  bundledSourceDir,
+  bundledStagedSpec,
+  isBundledStagedSpec,
+  stageBundledPlugin,
   catalogStatus,
   pluginHasClientHalf,
   setPluginEnabled,

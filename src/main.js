@@ -976,6 +976,60 @@ function nodeVersionOf(nodeExec) {
 }
 
 // ---------------------------------------------------------------------------
+// built-in plugin staging root (space-free path required by pnpm install)
+// ---------------------------------------------------------------------------
+
+/**
+ * 8.3 短路径：仅当路径含空格且系统能给出短路径时缩短，否则原样返回。
+ * 引擎用 shell 转发参数给 pnpm（Node 26 起 shell:true 不再转义参数），
+ * file: spec 里出现空格会被 cmd 拆词，所以含空格的路径必须先做短化。
+ */
+function shortPathIfSpaced(p) {
+  if (!/\s/u.test(p)) return p;
+  // 路径来自 <os.homedir()>（即 USERPROFILE）。被插进下面这条 cmd 命令里：含 `"` 会闭合
+  // 引号，`&`/`|`/`^`/`%` 会被 cmd 解释 —— 与其尝试转义，不如直接拒绝这类路径，回退到
+  // 「不短化」的保守分支（上层只过滤空白，同样会拒绝它）。
+  if (/["&|^%!<>]/u.test(p)) {
+    err("refusing to shorten a path with cmd metacharacters");
+    return p;
+  }
+  try {
+    const probe = spawnSync(
+      "cmd",
+      ["/d", "/s", "/c", `for %I in ("${p}") do @echo %~sI`],
+      { encoding: "utf8", windowsHide: true },
+    );
+    const short = probe.status === 0 ? String(probe.stdout ?? "").trim() : "";
+    if (short && !/\s/u.test(short) && fs.existsSync(short)) return short;
+  } catch {
+    /* keep long path */
+  }
+  return p;
+}
+
+/**
+ * 内置插件（随应用发布、源码在 app.asar/plugins 里）安装前的 staging 根目录。
+ * 必须是「稳定 + 无空格」的绝对路径：
+ *  - 稳定：pnpm 把 `file:` spec 原样写进 profile 的 dependencies，之后在那个 profile
+ *    里再跑 pnpm 仍要能解析到同一份拷贝。app 安装目录换个版本、换个安装位置都会变，
+ *    所以不能用它；
+ *  - 无空格：userData 通常是 "...\DSH Ready GUI\..."（含空格），经引擎 shell 转发给
+ *    pnpm 会被拆词。取 <home>\.dsh-gui\bundled-plugins，必要时 8.3 短化。
+ *
+ * 注：`.dsh-gui` 这个目录名 v0.4.1 就在用，**刻意不跟着应用改名** —— 已有 profile 里的
+ * `file:` 依赖原样指向它，改掉会让那些依赖失效（见 CHANGELOG「刻意没有改的东西」）。
+ */
+function pluginBundledPluginsDir() {
+  const dir = path.join(os.homedir(), ".dsh-gui", "bundled-plugins");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    err("plugin staging dir create failed:", error.message);
+  }
+  return shortPathIfSpaced(dir);
+}
+
+// ---------------------------------------------------------------------------
 // pnpm spec for the current profile
 // ---------------------------------------------------------------------------
 
@@ -2997,6 +3051,7 @@ async function startEngine(nodeExec) {
         dshHome: effectiveHomePath(),
         nodeExec,
         pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+        stagingRoot: pluginBundledPluginsDir(),
         mode: "install",
         log,
       });
@@ -3269,6 +3324,7 @@ async function runPluginInstallUninstall(entry, action) {
       dshHome: effectiveHomePath(),
       nodeExec: resolveNodeExecutable(),
       pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+      stagingRoot: pluginBundledPluginsDir(),
       log: progressLog,
     };
     let result;
@@ -3603,6 +3659,7 @@ function registerIpc() {
         dshHome: effectiveHomePath(),
         nodeExec: resolveNodeExecutable(),
         pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+        stagingRoot: pluginBundledPluginsDir(),
         mode: "install",
         log: progressLog,
       });

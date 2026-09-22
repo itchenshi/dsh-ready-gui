@@ -1,0 +1,61 @@
+# dsh-opencode-go-path layer.
+#
+# One plugin for the OpenCode / OpenCode Go routes, three jobs:
+#
+#   1. Declare the wire protocol for the `opencode-go` route (the `llm-pi-ai`
+#      patch below). The engine resolves each route's models with
+#        api = route.api ?? catalogModel.api ?? sharedCatalogApi(route)
+#      opencode-go's catalog spans anthropic-messages / openai-completions /
+#      openai-responses, so the shared fallback is undefined; catalog-unknown
+#      models (e.g. deepseek-v4.1-flash, which upstream already serves) then
+#      need the route-level `api`. OpenCode Go speaks OpenAI-compatible
+#      protocol at https://opencode.ai/zen/go/v1, so `openai-completions` is
+#      correct (the same choice the user settings document makes for
+#      bailian-tpp).
+#
+#   2. Mount this plugin's host half (lib/index.js), which auto-adds the
+#      DeepSeek V4.1 models to the route's models list when the route exists.
+#
+#   3. Attach `x-opencode-session` to model requests routed to an OpenCode /
+#      OpenCode Go provider profile (see the row config below).
+#
+# Row config (all optional):
+#   providers: [string]  provider route keys to attach the header to.
+#                        Defaults to the pi-ai catalog ids ['opencode', 'opencode-go'].
+#                        Add your own route key when the OpenCode endpoint is
+#                        served under a custom provider name.
+#   mode: 'uuid' | 'session-id'   header value derivation.
+#                        'uuid' (secure DEFAULT): a random opaque UUID per DSH
+#                        session — the internal DSH session id is NEVER sent to
+#                        third parties.
+#                        'session-id': opt-in only; reuses the DSH session id
+#                        (the same identity the official adapter sends as
+#                        x-deepseek-harness-session-id). Only choose this if you
+#                        fully trust the OpenCode upstream with your internal id.
+#   debug: true|false    log every streamed call that receives the header.
+#   debugFile: path      optional: append one JSON line per streamed call to the
+#                        given file. ONLY a path under $DSH_HOME/logs or the OS
+#                        temp dir is honored; anything else is ignored. The
+#                        logged "session" field is a one-way SHA-256 hash (redacted),
+#                        never the raw DSH session id.
+#
+# The `llm-pi-ai` entry below patches an existing engine row (mounted by
+# @deepseek-ai/dsh-base) rather than inserting a new one — cordis merges patch
+# layers by row id, so this layer supplies the missing `api` without touching
+# the rest. It is deliberately NOT under `insert`, so the settings window's
+# enable/disable writes (which target the inserted row ids only) can never
+# disable the protocol declaration and break catalog-unknown models.
+- insert:
+    - id: opencode-go
+      name: dsh-opencode-go-path
+      config:
+        providers:
+          - opencode
+          - opencode-go
+        mode: uuid
+        debug: false
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode-go:
+        api: openai-completions
