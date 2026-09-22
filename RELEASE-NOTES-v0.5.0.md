@@ -110,6 +110,13 @@ compat 开关都保留。单测 27 项全过，另在真实引擎 + 隔离数据
 
 ## 📦 下载
 
-- GitHub（安装包在这里）：https://github.com/itchenshi/dsh-ready-gui/releases/latest
-- Gitee（国内推荐）：https://gitee.com/itchenshi/dsh-ready-gui/releases
-- GitCode（国内备用）：https://gitcode.com/itchenshi/dsh-ready-gui/releases
+- **GitHub（安装包只在这里）**：https://github.com/itchenshi/dsh-ready-gui/releases/latest
+- Gitee / GitCode 是**代码镜像**（源码、Issue 都能用），但**不发布安装包**，请从上面的 GitHub
+  Releases 下载：
+  - https://gitee.com/itchenshi/dsh-ready-gui
+  - https://gitcode.com/itchenshi/dsh-ready-gui
+
+> 为什么只有 GitHub 出安装包：本项目要同时产出 Windows 安装包、macOS（x64 + arm64）的 .dmg 和
+> Linux 的 AppImage，只有 GitHub Actions 能一次提供 Windows / macOS / Linux 三种 runner 做矩阵
+> 构建（Gitee Go 的云端构建只有 Linux 容器，Node 版本也只到 15，够不上本项目要求的 Node ≥ 23）。
+> 国内网络下载慢的话，可以用镜像加速或代理，安装包本身与源码是同一份。
