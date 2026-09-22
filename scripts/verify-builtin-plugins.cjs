@@ -18,6 +18,8 @@
 // path). Seeding a path that is gone keeps this a regression test for that.
 //
 // Checks:
+//   0. a staging failure leaves the profile completely untouched (nothing may be
+//      pruned before the bundled copy has actually been staged)
 //   1. the foreign specs are repaired to the copy shipped in plugins/
 //   2. the missing one installs (the path the settings-window checkbox takes)
 //   3. a second pass is a no-op (no reinstall churn on every boot)
@@ -99,14 +101,14 @@ fs.writeFileSync(
 const readDeps = () => JSON.parse(fs.readFileSync(path.join(profile, "package.json"), "utf8")).dependencies ?? {};
 const materialised = (name) => fs.existsSync(path.join(profile, "node_modules", name, "package.json"));
 const entryOf = (pkg) => pm.CATALOG.find((entry) => entry.pkg === pkg);
-const sync = (enabledIds, log) =>
+const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   pm.syncEnabledPlugins({
     enabledIds,
     engineDir: ENGINE_DIR,
     dshHome: home,
     nodeExec: NODE_EXEC,
     pnpmInstallDir,
-    stagingRoot,
+    stagingRoot: useStagingRoot,
     mode: "install",
     log: log ?? (() => {}),
   });
@@ -119,7 +121,23 @@ const sync = (enabledIds, log) =>
   const pnpmBinDir = await pm.ensurePnpm({ installDir: pnpmInstallDir, pnpmSpec: "pnpm@10", nodeExec: NODE_EXEC, log: () => {} });
   if (!pnpmBinDir) throw new Error("pnpm provisioning failed");
 
-  console.log("1) repair the entries registered from a checkout that is gone");
+  // Before the repair itself: prove the repair cannot make things worse. A staging
+  // root with a space in it is rejected by stageBundledPlugin outright (the engine's
+  // shell cannot carry such a path), which is a deterministic way to make staging
+  // fail. The profile must then be left exactly as it was — the earlier ordering
+  // ("prune the registration first, install after") lost the plugins in this case.
+  console.log("0) a staging failure must leave the profile untouched");
+  const blockedStagingRoot = path.join(root, "with space");
+  const guarded = await sync(FOREIGN, () => {}, blockedStagingRoot);
+  check(guarded.changed === false, "nothing was pruned while staging was impossible");
+  check(FOREIGN.every((name) => pm.installedBundles(home).includes(name)), "the three registrations are intact");
+  check(
+    FOREIGN.every((name) => String(readDeps()[name] ?? "").includes("deleted-checkout")),
+    "the original dependencies are intact",
+  );
+  check(guarded.errors.length === FOREIGN.length, `the failure is reported (${guarded.errors.length} error(s))`);
+
+  console.log("\n1) repair the entries registered from a checkout that is gone");
   const first = await sync(FOREIGN, (...a) => console.log("      [pm]", ...a));
   console.log(`      installed=${JSON.stringify(first.installed)} errors=${JSON.stringify(first.errors)}`);
   const deps1 = readDeps();

@@ -1827,11 +1827,26 @@ async function syncEnabledPlugins({
     log("pruning built-in plugins installed from elsewhere:", foreignEntries.map((e) => e.pkg).join(", "));
     // 记下原 spec：万一随后装不上，还能把它装回去（见循环里的还原分支）。
     for (const entry of foreignEntries) prunedSpecs.set(entry.pkg, profileDependencySpec(dshHome, entry.pkg));
-    // **先摘登记，再跑 pnpm**：摘登记是纯改文件，而只要 profile 里还留着任何一条解析
-    // 不了的 `file:` 依赖，接下来每一次 pnpm 调用都会整体失败——连累的正是我们想修的那
-    // 个插件。实测顺序颠倒时的后果：第一次 remove 就 ENOENT，修好的只有一半。
-    pruneProfilePackages(dshHome, foreignEntries.map((e) => e.pkg));
-    result.changed = true;
+    // **staging 成功过才摘登记**。staging 只是复制文件——不跑 pnpm、不需要网络——所以它
+    // 失败只可能是磁盘/权限问题，而这时唯一正确的做法是**什么都不动**：保留 profile 里
+    // 原来那份（下面的循环再试一次 staging，同样会在动 profile 之前就抛错退出）。
+    // 少了这一步，「先摘登记再装」在 staging 失败时会把已经装好的插件摘没。
+    const stageable = [];
+    for (const entry of foreignEntries) {
+      try {
+        await stageBundledPlugin(entry, { stagingRoot: bundledStagingRoot, log });
+        stageable.push(entry);
+      } catch (error) {
+        log("cannot stage the bundled copy, leaving the existing install alone:", entry.pkg, (error && error.message) || error);
+      }
+    }
+    if (stageable.length > 0) {
+      // **先摘登记，再跑 pnpm**：摘登记是纯改文件，而只要 profile 里还留着任何一条解析
+      // 不了的 `file:` 依赖，接下来每一次 pnpm 调用都会整体失败——连累的正是我们想修的那
+      // 个插件。实测顺序颠倒时的后果：第一个插件的 `remove` 就 ENOENT，四个里只修好两个。
+      pruneProfilePackages(dshHome, stageable.map((e) => e.pkg));
+      result.changed = true;
+    }
     // 这里**不再**跑 `dsh plugin remove`：登记已经摘掉，那一步只剩 ERR_PNPM_CANNOT_REMOVE_
     // MISSING_DEPS（没依赖可删），而 node_modules 里那份旧的会被随后按新 spec 的 `add`
     // 重新链接；装不上时还有下面的还原分支兜底。
