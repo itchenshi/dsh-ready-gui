@@ -12,7 +12,7 @@
     "bundle:node": "node scripts/bundle-node.mjs",
     "ensure:electron": "node scripts/ensure-electron.mjs",
     "fix:unpacked": "node scripts/fix-unpacked.mjs --force",
-    "test": "node src/test/plugin-state.test.cjs && node src/test/plugin-enable.test.cjs && node src/test/plugin-manager.test.cjs && node src/test/userdata-migrate.test.cjs && node src/test/settings-ui.test.cjs && node src/test/engine-patch.test.cjs && node src/test/engine-url.test.cjs && node src/test/update-sources.test.cjs && node plugins/dsh-model-surplus/tests/test.mjs && node plugins/dsh-gui-last-session/tests/test.mjs && node plugins/dsh-opencode-go-path/tests/test.mjs && node plugins/dsh-keys-setting/tests/test.mjs && node scripts/lib/download.test.mjs && node scripts/check-settings-html.cjs && node scripts/check-doc-images.cjs",
+    "test": "node src/test/plugin-state.test.cjs && node src/test/plugin-enable.test.cjs && node src/test/plugin-manager.test.cjs && node src/test/userdata-migrate.test.cjs && node src/test/i18n-keys.test.cjs && node src/test/settings-ui.test.cjs && node src/test/engine-patch.test.cjs && node src/test/engine-url.test.cjs && node src/test/update-sources.test.cjs && node plugins/dsh-model-surplus/tests/test.mjs && node plugins/dsh-gui-last-session/tests/test.mjs && node plugins/dsh-opencode-go-path/tests/test.mjs && node plugins/dsh-keys-setting/tests/test.mjs && node scripts/lib/download.test.mjs && node scripts/check-settings-html.cjs && node scripts/check-doc-images.cjs",
     "test:e2e": "powershell -NoProfile -File scripts/smoke-plugin-enable.ps1 && powershell -NoProfile -File scripts/smoke-profile-watch.ps1",
     "verify:builtin": "node scripts/verify-builtin-plugins.cjs",
     "sync:plugins": "node scripts/sync-bundled-plugins.mjs",

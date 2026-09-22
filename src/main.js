@@ -264,14 +264,17 @@ const UI_STRINGS = {
     "diag.openLogs": "打开日志目录",
     // home switch
     "home.switchTitle": "切换数据目录",
-    "home.hasDataMsg": "源数据目录（{0}）包含数据",
-    "home.hasDataDetail": "是否将数据移动到目标目录（{0}）？选择“仅切换”则数据保留在原位置。",
-    "home.moveAndSwitch": "移动并切换",
-    "home.switchOnly": "仅切换，不移动",
+    "home.hasDataMsg": "当前数据目录（{0}）里有数据",
+    "home.hasDataDetail": "要把它带到目标目录（{0}）吗？请按需要三选一：\n① 迁移并切换 —— 把数据移到目标目录，源目录随后清空（等于「连数据一起搬家」，最常用）；\n② 只切换，不迁移 —— 目标目录现在是空的，切换过去等于在那边全新开始；源目录的数据原样保留，之后可以再切回来；\n③ 取消 —— 数据目录保持不变。",
+    "home.moveAndSwitch": "迁移并切换",
+    "home.switchOnly": "只切换，不迁移",
     "home.dstHasData.title": "目标目录已有数据",
     "home.dstHasData.msg": "目标数据目录（{0}）里已经有数据",
-    "home.dstHasData.detail": "继续迁移会把源目录（{0}）的数据【合并覆盖】到目标目录，同名文件（settings.yaml、profiles、last-session.json 等）将以源目录为准，随后源目录会被删除且无法恢复。若不确定，请先取消并自行备份。",
-    "home.dstHasData.merge": "合并覆盖",
+    "home.dstHasData.detail": "源目录（{0}）也有数据，两个目录**不会自动合并**。请按需要三选一：\n① 合并覆盖并切换 —— 把源目录的数据合并进目标目录，同名文件（settings.yaml、profiles、last-session.json 等）以源目录为准，随后删除源目录，**不可恢复**；\n② 只切换，不迁移 —— 直接用目标目录现有的数据，源目录原样保留（不修改、不删除）；\n③ 取消 —— 数据目录保持不变（不确定就选这个，先自行备份）。",
+    "home.dstHasData.merge": "合并覆盖并切换",
+    "home.dstHasData.switchOnly": "只切换，不迁移",
+    "home.moveFailed.title": "数据迁移失败",
+    "home.moveFailed.msg": "数据目录仍保持为（{0}），引擎已按原目录重启。请检查两个目录后重试。",
     "home.switching": "正在移动数据目录…",
     "home.switched": "数据目录已切换",
     "home.restarting": "正在重新启动 DeepSeek Harness…",
@@ -282,6 +285,7 @@ const UI_STRINGS = {
     "home.modeLabel": "数据目录",
     // dialogs & misc
     "common.ok": "知道了",
+    "common.cancel": "取消",
     "common.okShort": "确定",
     "common.continue": "继续",
     "common.engine": "引擎",
@@ -404,14 +408,17 @@ const UI_STRINGS = {
     "diag.openLogs": "Open Logs Folder",
     // home switch
     "home.switchTitle": "Switch Data Folder",
-    "home.hasDataMsg": "The source data folder ({0}) contains data",
-    "home.hasDataDetail": "Move the data to the destination folder ({0})? Choose “Switch only” to keep the data where it is.",
-    "home.moveAndSwitch": "Move & Switch",
-    "home.switchOnly": "Switch Only",
+    "home.hasDataMsg": "The current data folder ({0}) contains data",
+    "home.hasDataDetail": "Bring it to the destination folder ({0})? Pick one of three:\n① Move & switch — the data moves to the destination and the source is emptied afterwards (“move everything, data included” — the usual choice).\n② Switch only, no move — the destination is empty right now, so you start fresh there; the source data is left untouched and you can switch back later.\n③ Cancel — the data folder stays as it is.",
+    "home.moveAndSwitch": "Move & switch",
+    "home.switchOnly": "Switch only, no move",
     "home.dstHasData.title": "Destination already holds data",
     "home.dstHasData.msg": "The destination data folder ({0}) already contains data",
-    "home.dstHasData.detail": "Continuing MERGES the source folder ({0}) INTO the destination and overwrites colliding files (settings.yaml, profiles, last-session.json, …) with the source version; the source is then deleted and this cannot be undone. If unsure, cancel and back up first.",
-    "home.dstHasData.merge": "Merge & overwrite",
+    "home.dstHasData.detail": "The source folder ({0}) holds data too, and the two are **never merged automatically**. Pick one of three:\n① Merge, overwrite & switch — merge the source INTO the destination, overwriting colliding files (settings.yaml, profiles, last-session.json, …) with the source version, then delete the source; this **cannot be undone**.\n② Switch only, no move — use the destination's existing data as-is; the source is left untouched (not modified, not deleted).\n③ Cancel — the data folder stays as it is (pick this if unsure, and back up first).",
+    "home.dstHasData.merge": "Merge, overwrite & switch",
+    "home.dstHasData.switchOnly": "Switch only, no move",
+    "home.moveFailed.title": "Moving the data failed",
+    "home.moveFailed.msg": "The data folder is still ({0}) and the engine has been restarted on it. Check both folders and try again.",
     "home.switching": "Moving data folder…",
     "home.switched": "Data folder switched",
     "home.restarting": "Restarting DeepSeek Harness…",
@@ -422,6 +429,7 @@ const UI_STRINGS = {
     "home.modeLabel": "Data Folder",
     // dialogs & misc
     "common.ok": "OK",
+    "common.cancel": "Cancel",
     "common.okShort": "OK",
     "common.continue": "Continue",
     "common.engine": "Engine",
@@ -775,38 +783,53 @@ async function switchHomeMode(mode) {
   const hasData = await hasHomeData(srcPath);
   const dstHasData = await hasHomeData(dstPath);
   if (hasData && path.resolve(srcPath) !== path.resolve(dstPath) && dstHasData) {
-    // 目标目录已有数据：迁移是「合并 + 覆盖」语义（fs.cp force），绝不能默认执行——
-    // 否则 settings.yaml / profiles / last-session.json 会被静默覆盖后源目录被删除。
+    // 目标目录已有数据：三个选择，**默认与 Esc 都落在「取消」**（这是唯一不会改变任何
+    // 东西的选项），迁移/合并必须由用户显式点选。
+    //   ① 合并覆盖并切换：源 → 目标（fs.cp force 语义，同名以源为准），随后删除源目录；
+    //   ② 只切换，不迁移：直接用目标现有的数据，源目录原样保留；
+    //   ③ 取消。
+    // 早先这里只有「合并覆盖」和「取消」两个按钮，而 `common.cancel` 这个键**从未定义** ——
+    // L() 回退成键名，于是取消按钮上显示的是字面量 `common.cancel`。
     const { response } = await dialog
       .showMessageBox(parent, {
         type: "warning",
         title: L("home.dstHasData.title"),
         message: L("home.dstHasData.msg", dstPath),
         detail: L("home.dstHasData.detail", srcPath),
-        buttons: [L("home.dstHasData.merge"), L("common.cancel")],
-        defaultId: 1,
-        cancelId: 1,
+        buttons: [L("home.dstHasData.merge"), L("home.dstHasData.switchOnly"), L("common.cancel")],
+        defaultId: 2,
+        cancelId: 2,
         noLink: true,
       })
-      .catch(() => ({ response: 1 }));
-    if (response !== 0) {
+      .catch(() => ({ response: 2 }));
+    if (response === 0) {
+      doMove = true;
+    } else if (response === 1) {
+      log("home switch: destination already holds data; switching without merging");
+    } else {
       log("home switch cancelled: destination already holds data");
       return false; // 切换未发生：调用方据此不要闪「已保存」
     }
-    doMove = true;
   } else if (hasData && path.resolve(srcPath) !== path.resolve(dstPath)) {
+    // 源有数据、目标是空的：默认「迁移并切换」（用户换目录通常就是这个意图），但**取消**
+    // 必须真的能取消 —— 早先只有两个按钮且 cancelId 指向「仅切换」，按 Esc 会直接切换并把
+    // 数据留在原地。
     const { response } = await dialog
       .showMessageBox(parent, {
         type: "question",
         title: L("home.switchTitle"),
         message: L("home.hasDataMsg", srcPath),
         detail: L("home.hasDataDetail", dstPath),
-        buttons: [L("home.moveAndSwitch"), L("home.switchOnly")],
+        buttons: [L("home.moveAndSwitch"), L("home.switchOnly"), L("common.cancel")],
         defaultId: 0,
-        cancelId: 1,
+        cancelId: 2,
         noLink: true,
       })
-      .catch(() => ({ response: 1 }));
+      .catch(() => ({ response: 2 }));
+    if (response === 2) {
+      log("home switch cancelled by user");
+      return false;
+    }
     doMove = response === 0;
   } else {
     log("home switch: source has no data (or same path), no move needed");
@@ -816,7 +839,29 @@ async function switchHomeMode(mode) {
     await killEngineForSwitch(); // stop writers before moving files
     log("moving harness data:", srcPath, "->", dstPath);
     setStatus(L("home.switching"), "");
-    const result = await moveHomeData(srcPath, dstPath);
+    let result;
+    try {
+      result = await moveHomeData(srcPath, dstPath);
+    } catch (error) {
+      // 引擎是我们为迁移停掉的：迁移抛错时**必须**把它按原目录拉回来，而且不能保存新目录
+      // —— 否则用户看到「已保存」、单选框停在新值上，而数据目录其实没变、引擎却是死的。
+      err("home move failed:", error);
+      dialog
+        .showMessageBox(parent, {
+          type: "error",
+          title: L("home.moveFailed.title"),
+          message: L("home.moveFailed.msg", srcPath),
+          detail: String((error && error.message) || error),
+          buttons: [L("common.ok")],
+        })
+        .catch(() => {});
+      if (engineWasRunning) {
+        await restartEngineAfterSwitch(resolveNodeExecutable()).catch((e2) =>
+          err("restart after failed move failed:", e2.message),
+        );
+      }
+      return false;
+    }
     log("move result:", JSON.stringify(result));
     if (result.skipped.length > 0) {
       dialog
