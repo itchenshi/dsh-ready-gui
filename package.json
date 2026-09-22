@@ -12,15 +12,16 @@
     "bundle:node": "node scripts/bundle-node.mjs",
     "ensure:electron": "node scripts/ensure-electron.mjs",
     "fix:unpacked": "node scripts/fix-unpacked.mjs --force",
-    "test": "node src/test/plugin-state.test.cjs && node src/test/plugin-enable.test.cjs && node src/test/plugin-manager.test.cjs && node src/test/userdata-migrate.test.cjs && node src/test/settings-ui.test.cjs && node src/test/engine-patch.test.cjs && node src/test/engine-url.test.cjs && node src/test/update-sources.test.cjs && node plugins/dsh-model-surplus/tests/test.mjs && node plugins/dsh-gui-last-session/tests/test.mjs && node plugins/dsh-opencode-go-path/tests/test.mjs && node plugins/dsh-keys-setting/tests/test.mjs && node scripts/check-settings-html.cjs && node scripts/check-doc-images.cjs",
+    "test": "node src/test/plugin-state.test.cjs && node src/test/plugin-enable.test.cjs && node src/test/plugin-manager.test.cjs && node src/test/userdata-migrate.test.cjs && node src/test/settings-ui.test.cjs && node src/test/engine-patch.test.cjs && node src/test/engine-url.test.cjs && node src/test/update-sources.test.cjs && node plugins/dsh-model-surplus/tests/test.mjs && node plugins/dsh-gui-last-session/tests/test.mjs && node plugins/dsh-opencode-go-path/tests/test.mjs && node plugins/dsh-keys-setting/tests/test.mjs && node scripts/lib/download.test.mjs && node scripts/check-settings-html.cjs && node scripts/check-doc-images.cjs",
     "test:e2e": "powershell -NoProfile -File scripts/smoke-plugin-enable.ps1 && powershell -NoProfile -File scripts/smoke-profile-watch.ps1",
     "verify:builtin": "node scripts/verify-builtin-plugins.cjs",
-    "dist:win": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && node scripts/ensure-electron.mjs && electron-builder --win --config.electronDist=resources/.electron-cache/dist.zip --publish never && node scripts/fix-unpacked.mjs --force",
-    "dist:mac": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --publish never && node scripts/fix-unpacked.mjs --force",
-    "dist:mac:x64": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --x64 --publish never && node scripts/fix-unpacked.mjs --force",
-    "dist:mac:arm64": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --arm64 --publish never && node scripts/fix-unpacked.mjs --force",
-    "dist:linux": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --linux --publish never && node scripts/fix-unpacked.mjs --force",
-    "dist": "node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --win --linux --publish never && node scripts/fix-unpacked.mjs --force"
+    "sync:plugins": "node scripts/sync-bundled-plugins.mjs",
+    "dist:win": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && node scripts/ensure-electron.mjs && electron-builder --win --config.electronDist=resources/.electron-cache/dist.zip --publish never && node scripts/fix-unpacked.mjs --force",
+    "dist:mac": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --publish never && node scripts/fix-unpacked.mjs --force",
+    "dist:mac:x64": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --x64 --publish never && node scripts/fix-unpacked.mjs --force",
+    "dist:mac:arm64": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --mac --arm64 --publish never && node scripts/fix-unpacked.mjs --force",
+    "dist:linux": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --linux --publish never && node scripts/fix-unpacked.mjs --force",
+    "dist": "npm run sync:plugins && node scripts/make-icons.mjs && node scripts/bundle-node.mjs && electron-builder --win --linux --publish never && node scripts/fix-unpacked.mjs --force"
   },
   "license": "MIT",
   "devDependencies": {

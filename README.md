@@ -370,7 +370,7 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 │  ├─ status.html         # 启动/更新状态页（跟随 Harness 主题）
 │  ├─ notice.html         # 持久更新角标
 │  └─ home-migrate.js     # 数据目录检测与迁移（纯 Node，可单测）
-├─ plugins/               # 四个随附插件源码（随包内置，装 GUI 就有；见上方「随附插件」）
+├─ plugins/               # 四个随附插件的内置副本（由插件仓库生成，见下方「插件源码 → 内置副本」）
 ├─ scripts/               # 构建与测试脚本
 │  ├─ make-icons.mjs      # 官网 favicon → 各尺寸图标 + win 用的混合帧 icon.ico
 │  ├─ ico-info.cjs        # 检查任意 .ico 的帧构成与长度自洽性
@@ -378,16 +378,52 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 │  ├─ bundle-node.mjs     # 便携 Node 下载/解包（幂等 + 归档缓存）
 │  ├─ ensure-electron.mjs # electron 发行 zip 本地缓存（SHA-256 校验）
 │  ├─ fix-unpacked.mjs    # 改名 + 生成 zip
+│  ├─ lib/download.mjs    # 构建脚本共用的下载/哈希（带超时与长度校验）
+│  ├─ sync-bundled-plugins.mjs # 插件仓库 → plugins/（构建前自动跑）
+│  ├─ verify-builtin-plugins.cjs # 内置插件自愈的端到端验证（真引擎 + 真 pnpm）
 │  ├─ after-pack.js       # electron-builder 钩子：完整拷贝捆绑 Node
 │  ├─ push-all.ps1        # 推送分支+tags 到三平台
 │  ├─ publish-all.ps1     # 构建 + 三平台 Releases 发布
+│  ├─ publish-plugins.ps1 # 四个插件发布到 npm（等注册渠道可用时）
+│  ├─ update-release-notes.ps1 # 把 RELEASE-NOTES-*.md 推到三平台已发布的 release
 │  └─ smoke-*.ps1         # Windows E2E 冒烟
 ├─ marketing/            # 营销物料（按版本分目录 v0.1.0 / v0.2.0 / v0.3.0 / …）
 │  └─ v0.3.0/            # CSDN/知乎/掘金/少数派文章、推广文案包、B 站视频脚本
-├─ resources/icons/       # 官网 favicon 源文件（svg/ico）
+├─ resources/icons/       # 官网 favicon 源文件（harness.svg）
 ├─ electron-builder.yml   # 打包配置（win/mac/linux）
 └─ dist/                  # 构建产物（已 gitignore）
 ```
+
+### 插件源码 → 内置副本
+
+四个插件各自是**独立仓库**（也能作为独立包给别的 DSH 宿主用），本仓库里的 `plugins/` 是它们的
+**内置副本**：随应用打包、启动时 staging 成真实目录再装进 profile。副本不是手写的，是**生成**的——
+开发工作区把主项目和插件仓库放在一起：
+
+```
+dsh-dev/
+├─ dsh-ready-gui/          # 本仓库
+└─ plugin-repos/           # 四个插件仓库（dsh-model-surplus / dsh-gui-last-session /
+                           #   dsh-opencode-go-path / dsh-keys-setting）
+```
+
+```sh
+npm run sync:plugins                        # 插件仓库 → plugins/（全量镜像，打印增删改）
+node scripts/sync-bundled-plugins.mjs --check   # 只检查漂移，不一致时退出码 1（CI 用）
+node scripts/sync-bundled-plugins.mjs --only dsh-keys-setting
+```
+
+- **规矩：改插件请改插件仓库**（`plugin-repos/<名字>/`），然后 `npm run sync:plugins`；
+  **不要直接手改 `plugins/`**——下次同步会覆盖掉。
+- 插件仓库的位置是**自动找**的（`dsh-dev/plugin-repos`、本仓库旁边的同名目录、本仓库内
+  `plugin-repos/` 都认）；也可以用 `--repos <目录>` 或环境变量 `DSH_PLUGIN_REPOS` 指定。
+- 同步的是**工作区里的文件**（含未提交的修改），只取 git 跟踪的 + 未被忽略的未跟踪文件，
+  源里删掉的文件会在副本里一起删掉，行尾保持副本原有约定（Windows 检出不会因此天天变脏）。
+- 每个插件同步时会校验：`package.json` 的 `name` 与目录一致、有 `version`、声明了
+  `dsh.bundle.patch`、`cordis.patch.yml` 存在——不合格只告警，不会静默出错。
+- **改了插件代码记得提 `package.json` 的 `version`**：GUI 只在「随包版本比已装的新」时才替换
+  已装副本，同版本不重装（这是为了不把用户更新过的副本无人值守降级）。
+- `npm run dist:*` 会**先跑同步**，所以发布产物不可能带着旧插件。
 
 ---
 
@@ -453,6 +489,7 @@ npm start                                   # 运行应用
 npm test                                    # 全部单测（含设置窗口内联 JS 语法/结构校验）
 npm run test:e2e                            # Windows 端到端（需先关闭正在运行的实例）
 npm run verify:builtin                      # 内置插件自愈的端到端验证（真引擎 + 真 pnpm，见下）
+npm run sync:plugins                        # 插件仓库 → plugins/（全量镜像，构建前自动跑）
 # 分开跑：
 node src/test/engine-patch.test.cjs         # 引擎补丁工具纯函数单测
 node src/test/plugin-state.test.cjs         # 插件状态指纹（含启用/禁用维度）
@@ -460,6 +497,7 @@ node src/test/plugin-enable.test.cjs        # 启用/禁用：补丁层读写、
 node src/test/settings-ui.test.cjs          # 设置项/主题映射
 node src/test/plugin-manager.test.cjs       # profile 自愈/清理
 node scripts/check-settings-html.cjs        # 设置窗口内联 JS 语法 + 插件行结构约束
+node scripts/sync-bundled-plugins.mjs --check   # 只检查内置副本是否漂移（CI 用，有漂移退出码 1）
 node scripts/verify-builtin-plugins.cjs     # 内置插件自愈（临时 DSH_HOME，不碰你的数据）
 # Windows 端到端：
 powershell -File scripts/smoke-close.ps1 -Mode quit   # “直接退出”模式

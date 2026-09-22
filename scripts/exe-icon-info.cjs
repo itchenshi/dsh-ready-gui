@@ -192,7 +192,7 @@ function inspect(file) {
   if (!groups.length) console.log("*** no RT_GROUP_ICON resources found ***");
   if (bad)
     console.log("*** BAD: at least one BMP frame has header/payload size mismatch ***");
-  return {iconCount: icons.size, groupCount: groups.length};
+  return {iconCount: icons.size, groupCount: groups.length, bad};
 }
 
 if (require.main === module) {
@@ -201,13 +201,19 @@ if (require.main === module) {
     console.error("usage: node scripts/exe-icon-info.cjs <file.exe> [...]");
     process.exit(2);
   }
+  // 退出码必须反映结果：早先只打印，作为 CI 门禁时永远是「通过」。
+  let failures = 0;
   for (const f of files) {
     try {
-      inspect(f);
+      const result = inspect(f);
+      if (result.bad || result.iconCount === 0) failures += 1;
     } catch (error) {
       console.error(`${f}: ${error.message}`);
+      failures += 1;
     }
   }
+  if (failures > 0) {
+    console.error(`exe-icon-info: ${failures} file(s) failed`);
+    process.exitCode = 1;
+  }
 }
-
-module.exports = {inspect};

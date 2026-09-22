@@ -491,6 +491,25 @@ function isBundledStagedSpec(spec, entry, stagingRoot) {
 }
 
 /**
+ * 「把原来那份装回去」之前，这个 spec 形状能不能用？
+ *
+ * previousSpec 取自 profile 的 dependencies —— 那个文件可以被插件市场、甚至引擎进程里的
+ * 第三方插件改写，所以不能无条件喂给 pnpm：
+ *   - 以 `-` 开头会被 pnpm 当成命令行选项解析（argv 注入）；
+ *   - 带 `:` 前缀的（file: / git: / github: / https: / npm:）会把安装指向任意本地目录或
+ *     远程仓库 —— 恢复动作等于替别人装一份代码。
+ * 内置条目只认我们自己 staging 出来的那一份；目录外的条目（如 dshmarket）允许普通的包名
+ * 或版本范围。其它形状一律拒绝：宁可报错，也不装来路不明的东西。
+ */
+function isRestorableSpec(spec, entry, stagingRoot) {
+  if (typeof spec !== "string") return false;
+  const value = spec.trim();
+  if (value === "" || value.startsWith("-")) return false;
+  if (entry.localSource) return isBundledStagedSpec(value, entry, stagingRoot);
+  return !value.includes(":");
+}
+
+/**
  * 把内置插件 staging 成 <stagingRoot>/<pkg> 的真实目录并返回该目录。
  * 每次安装前整目录刷新，保证装的是当前随应用发布的代码。
  * @returns {Promise<string>} 真实 staging 目录
@@ -514,8 +533,29 @@ async function stageBundledPlugin(entry, { stagingRoot, log = () => {} }) {
   }
   await fsp.rm(stagingDir, { recursive: true, force: true });
   await copyDirRecursive(sourceDir, stagingDir);
+  if (stagingRoot) pruneStaleStagingDirs(stagingRoot);
   log("built-in plugin staged:", sourceDir, "->", stagingDir);
   return stagingDir;
+}
+
+/**
+ * 清掉 staging 目录里**已不在目录里**的旧插件拷贝。
+ *
+ * 这些残留不只是占磁盘：profile 里若有指向它们的 `file:` 依赖，它们让那条依赖始终
+ * 「可解析」，于是旧包清理一旦漏一处，引擎的 reconcile 立刻把旧包重新登记回 bundles，
+ * 新旧两版同时加载。只删 LEGACY_PLUGIN_PKGS 里、且不在现役目录中的名字（保守：不碰
+ * 任何我们不认识的目录）。
+ */
+function pruneStaleStagingDirs(stagingRoot) {
+  const live = new Set(CATALOG.map((entry) => entry.pkg));
+  for (const legacy of LEGACY_PLUGIN_PKGS) {
+    if (live.has(legacy.pkg)) continue;
+    try {
+      fs.rmSync(path.join(stagingRoot, legacy.pkg), { recursive: true, force: true });
+    } catch {
+      /* 删不掉就留着，不影响安装 */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -876,14 +916,21 @@ function withPatchLock(patchPath, task) {
       if ((error && error.code) !== "EEXIST") {
         return { ok: false, reason: `patch layer lock failed: ${(error && error.message) || error}` };
       }
+      // 抢锁失败：先判断是不是陈旧锁（持有者崩了），再判断超时，最后才睡。
+      // 这个顺序很重要：早先两处 `continue` 绕过了 deadline 与 sleep，于是 statSync
+      // 持续抛错时（EACCES/EPERM、网络盘）这里会变成**不睡的紧循环**，把主进程钉死。
+      let stale = false;
       try {
-        const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-        if (age > 10_000) {
-          fs.rmSync(lockPath, { force: true });
-          continue;
-        }
+        stale = Date.now() - fs.statSync(lockPath).mtimeMs > 10_000;
       } catch {
-        continue; // 锁刚好被释放
+        /* 锁刚好被释放：下一轮重试即可 */
+      }
+      if (stale) {
+        try {
+          fs.rmSync(lockPath, { force: true });
+        } catch {
+          /* 删不掉就下一轮再试，超时后放弃 */
+        }
       }
       if (Date.now() > deadline) return { ok: false, reason: "patch layer is locked by another writer" };
       sleepSync(25);
@@ -1255,7 +1302,7 @@ function catalogStatus(dshHome) {
  * @param {object} o
  * @returns {Promise<{ok:boolean, code:number, output:string}>}
  */
-function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = () => {} }) {
+function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = () => {}, timeoutMs = 600000 }) {
   return new Promise((resolve) => {
     const bin = engineBin({ engineDir });
     if (!bin) return resolve({ ok: false, code: -1, output: "engine bin missing" });
@@ -1273,6 +1320,14 @@ function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = ()
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let settled = false;
+    let timer = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(value);
+    };
     const sink = (chunk) => {
       const text = String(chunk ?? "");
       output = (output + text).split(/\r?\n/u).slice(-20).join("\n");
@@ -1281,8 +1336,18 @@ function runDshPlugin({ engineDir, dshHome, pnpmBinDir, args, nodeExec, log = ()
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", sink);
     child.stderr.on("data", sink);
-    child.on("error", (error) => resolve({ ok: false, code: -1, output: String((error && error.message) || error) }));
-    child.on("close", (code) => resolve({ ok: code === 0, code: code ?? -1, output }));
+    child.on("error", (error) => finish({ ok: false, code: -1, output: String((error && error.message) || error) }));
+    child.on("close", (code) => finish({ ok: code === 0, code: code ?? -1, output }));
+    // 没有超时的话，pnpm 卡在 store 锁 / 网络 / 交互提示时这个 Promise **永不 settle**：
+    // 设置窗口的进度条永远在转、子进程与管道常驻，重复点击还会继续累积。
+    timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* 已经退出 */
+      }
+      finish({ ok: false, code: -1, output: `${output}\n[dsh plugin timed out after ${timeoutMs}ms]` });
+    }, timeoutMs);
   });
 }
 
@@ -1433,9 +1498,13 @@ function removePatchRows(dshHome, rowIds) {
     let next = text;
     for (const rowId of rowIds) {
       if (!ROW_ID_RE.test(rowId)) continue;
+      // 与 enablePatchRow 用同一条缩进不敏感正则，并且带 `g`：钉死「列 0 的 `- id:` +
+      // 恰好两空格 + 结尾换行」时，任何手写或其它工具用别的缩进写的行都删不掉，而读者
+      // （patchTextState）是缩进无关的 —— 界面上读到「已禁用」，磁盘上这个 orphan 却
+      // 永远清不掉，旧包清理也静默地什么都不做。
       const blockRe = new RegExp(
-        `^- id: ['"]?${escapeRegExp(rowId)}['"]?\\r?\\n  disabled: (?:true|false)\\r?\\n`,
-        "mu",
+        `^([ \\t]*)- id: ['"]?${escapeRegExp(rowId)}['"]?[ \\t]*(?:#.*)?\\r?\\n[ \\t]*disabled:[ \\t]*(?:true|false)[ \\t]*(?:#.*)?\\r?\\n`,
+        "gmu",
       );
       if (!blockRe.test(next)) continue;
       next = next.replace(blockRe, "");
@@ -1445,6 +1514,33 @@ function removePatchRows(dshHome, rowIds) {
   });
   // 被拒 / 写后校验失败 = 什么都没落地：报「没摘掉」，不能假成功。
   return res.ok ? removed : [];
+}
+
+/**
+ * 现役目录条目在补丁层占用的 row id。
+ *
+ * 为什么必须有这个：改名时**刻意保留**了补丁层行 id（`model-usage` / `composer-keys` /
+ * `opencode-go`），好让用户保存的启用/禁用选择跟着新包走 —— 于是旧包名的 rowIds 与现役
+ * 条目**完全同名**。清理旧包遗留行时若不排除这些 id，就等于每次启动都把用户对现役插件的
+ * 禁用行删掉：界面上「已禁用」的插件在下次启动后静默恢复加载（补丁行没了，而
+ * reconcilePluginEnabled 只在市场 state.json 记着禁用时才会补行）。
+ *
+ * 两处都看：已装包（权威，与 catalogStatus 同源）与随包副本（插件尚未安装时也认得出）。
+ */
+function liveCatalogRowIds(dshHome) {
+  const ids = new Set();
+  for (const entry of CATALOG) {
+    for (const id of packageRowIds(dshHome, entry.pkg)) ids.add(id);
+    try {
+      const patchFile = path.join(bundledSourceDir(entry), "cordis.patch.yml");
+      if (fs.existsSync(patchFile)) {
+        for (const id of insertRowIdsInText(readPatchText(patchFile))) ids.add(id);
+      }
+    } catch {
+      /* 随包副本不可读（未打包运行且 plugins/ 缺失）：已装包那条路径已经覆盖 */
+    }
+  }
+  return ids;
 }
 
 /**
@@ -1466,32 +1562,38 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
     log("legacy plugin cleanup: cannot read bundles:", (error && error.message) || error);
     return result;
   }
+  // 现役条目占用的 row id —— 旧包名与它们同名，必须排除（见 liveCatalogRowIds 的说明）。
+  const liveRowIds = liveCatalogRowIds(dshHome);
   for (const legacy of LEGACY_PLUGIN_PKGS) {
     const wasInstalled = bundles.has(legacy.pkg);
+    const staleRowIds = legacy.rowIds.filter((rowId) => !liveRowIds.has(rowId));
     // 禁用意图可能记在市场的 state.json（包名）或补丁层（row id）任一处。
     let wasDisabled = false;
     try {
       wasDisabled =
         readMarketDisabled(dshHome).has(legacy.pkg) ||
-        legacy.rowIds.some((rowId) => readUserPatchState(dshHome).disables.has(rowId));
+        staleRowIds.some((rowId) => readUserPatchState(dshHome).disables.has(rowId));
     } catch {
       /* 读不到就当没禁用 */
     }
 
     // 补丁层与市场状态即使包已不在 bundles 里也可能残留，因此独立清理。
-    try {
-      // 经补丁层写入队列：启动维护是异步路径（await 之间会回到事件循环），与
-      // 其它异步改动排队后才不会互相覆盖。
-      const removedRows = await queuePatchMutation(userPatchPath(dshHome), () =>
-        removePatchRows(dshHome, legacy.rowIds),
-      );
-      if (removedRows.length > 0) {
-        result.removedRows.push(...removedRows);
-        result.changed = true;
-        log("legacy plugin: removed stale patch rows:", removedRows.join(", "));
+    // 只清「不再属于现役条目」的行：现役插件的禁用行是用户的当前选择，不是遗留物。
+    if (staleRowIds.length > 0) {
+      try {
+        // 经补丁层写入队列：启动维护是异步路径（await 之间会回到事件循环），与
+        // 其它异步改动排队后才不会互相覆盖。
+        const removedRows = await queuePatchMutation(userPatchPath(dshHome), () =>
+          removePatchRows(dshHome, staleRowIds),
+        );
+        if (removedRows.length > 0) {
+          result.removedRows.push(...removedRows);
+          result.changed = true;
+          log("legacy plugin: removed stale patch rows:", removedRows.join(", "));
+        }
+      } catch (error) {
+        log("legacy plugin: patch-row cleanup failed:", legacy.pkg, (error && error.message) || error);
       }
-    } catch (error) {
-      log("legacy plugin: patch-row cleanup failed:", legacy.pkg, (error && error.message) || error);
     }
     try {
       const marketDisabled = readMarketDisabled(dshHome);
@@ -1520,24 +1622,28 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
       } catch (error) {
         log("legacy plugin: engine remove failed, pruning instead:", legacy.pkg, (error && error.message) || error);
       }
-      // 2) 然后**无论如何**都把登记摘干净（bundles + dependencies）。
-      //    只靠第 1 步是不够的：`dsh plugin remove` 在依赖已不在 package.json 时
-      //    会报 ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS；而只摘 bundles 又会被引擎的
-      //    reconcile 依据残留依赖重新登记回来（实测就是这个原因导致改名后新旧两版
-      //    同时加载、控件显示两遍）。这里以「摘完再查一遍」为准，不信任何返回值。
-      try {
-        pruneProfilePackages(dshHome, [legacy.pkg]);
-      } catch (error) {
-        log("legacy plugin: prune failed:", legacy.pkg, (error && error.message) || error);
-      }
-      const removed = !isRegisteredInProfile(dshHome, legacy.pkg);
-      if (removed) {
-        result.pruned.push(legacy.pkg);
-        result.changed = true;
-        log("legacy plugin removed (renamed):", legacy.pkg);
-      } else {
-        log("legacy plugin could not be removed:", legacy.pkg);
-      }
+    }
+
+    // 2) **无论如何**都把登记摘干净（bundles + dependencies）—— 不只在 wasInstalled 时：
+    //    旧包可能只剩 dependencies 里的声明（自愈剪掉了不可解析的 bundles 条目、依赖还在），
+    //    留着它，下一次 `dsh plugin add` 会连带把旧包装回来，引擎的 reconcile 又会把它重新
+    //    登记进 bundles，于是新旧两版同时加载（这正是本函数存在的理由）。
+    //    只靠第 1 步是不够的：`dsh plugin remove` 在依赖已不在 package.json 时会报
+    //    ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS；而只摘 bundles 又会被引擎的 reconcile 依据
+    //    残留依赖重新登记回来（实测就是这个原因导致改名后新旧两版同时加载、控件显示两遍）。
+    //    这里以「实际摘掉了什么」为准，不信任何返回值。
+    let removedNames = [];
+    try {
+      removedNames = pruneProfilePackages(dshHome, [legacy.pkg]);
+    } catch (error) {
+      log("legacy plugin: prune failed:", legacy.pkg, (error && error.message) || error);
+    }
+    if (removedNames.length > 0) {
+      if (!result.pruned.includes(legacy.pkg)) result.pruned.push(legacy.pkg);
+      result.changed = true;
+      log(wasInstalled ? "legacy plugin removed (renamed):" : "legacy plugin registration pruned:", legacy.pkg);
+    } else if (wasInstalled && isRegisteredInProfile(dshHome, legacy.pkg)) {
+      log("legacy plugin could not be removed:", legacy.pkg);
     }
 
     // 迁移：替代条目由调用方安装；禁用意图搬到替代包名上（补丁行由随后运行的
@@ -1566,9 +1672,20 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
 /** 原子写回 profile manifest（先写临时文件再 rename，中途崩溃不会留下残缺 JSON）。 */
 function writeProfileManifest(dshHome, manifest) {
   const file = path.join(profileDir(dshHome), "package.json");
-  const tmp = `${file}.dsh-ready-gui-heal.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
-  fs.renameSync(tmp, file);
+  // 唯一临时名：固定名会被同机另一个写者（另一个 GUI 实例、或 pnpm 正在写同一个文件）
+  // 抢用，一方的 rename 可能发布另一方写了一半的字节（补丁层写入者为此也用了唯一名）。
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* 临时文件清理尽力而为 */
+    }
+    throw error;
+  }
 }
 
 /** 只修剪，不自愈性补齐。给“禁用并重启”等需要直接摘 bundle 的调用方复用。 */
@@ -1808,7 +1925,7 @@ async function syncEnabledPlugins({
   }
   // 内置插件的 staging 根目录（必须**稳定**：pnpm 会把 `file:` spec 原样写进 profile
   // 的 dependencies，之后在那个 profile 里再跑 pnpm 仍要能解析到同一路径）。
-  const bundledStagingRoot = stagingRoot ?? path.join(pnpmInstallDir, "bundled-plugins");
+  const bundledStagingRoot = stagingRoot ?? path.join(path.dirname(pnpmInstallDir), "bundled-plugins");
   // 内置条目的安装来源由应用自己管理。**先摘掉所有「即将安装、但来源不对」的登记，再
   // 统一安装**：残留的 `file:` 依赖会被 pnpm 在下一次安装里一起重新解析，那条路径一旦
   // 解析不了，就会让**别的**插件的安装一起失败——实测：修 A 时因为我们自己的 B 依赖
@@ -1854,7 +1971,13 @@ async function syncEnabledPlugins({
   const engineVersion = readEngineVersion(engineDir);
   for (const entry of CATALOG) {
     const name = entry.pkg;
-    const has = installedBundles(dshHome).includes(name);
+    const registered = installedBundles(dshHome).includes(name);
+    // 「登记在 bundles 里」不等于「装好了」：登记还在、node_modules 里的拷贝却被删掉时，
+    // 把 has 当成 true 会让下面 `has && !wantsUpdate → continue` 直接跳过，installPlugin
+    // 里那条「缺文件就重装」的保护**永远不可达** —— 设置页点多少次「修复 / 重试」都修不好
+    // 这类条目，只能等启动期的 heal 兜。所以 has 还要求落地文件确实存在。
+    const materialised = fs.existsSync(path.join(profileDir(dshHome), "node_modules", name, "package.json"));
+    const has = registered && materialised;
     const compatible = engineSatisfies(entry, engineVersion);
 
     // 引擎不兼容：绝不安装。
@@ -1872,7 +1995,8 @@ async function syncEnabledPlugins({
       // dsh-market 手动装的插件，静默卸载会误删；只有勾选框取消（sync 模式，
       // 单目标）或“修复 / 重试”时才按需移除——此时语义就是“让已装集合等于
       // 期望集合”。移除走引擎的 `dsh plugin remove`（与 dsh-market 一致）。
-      if (!has) continue;
+      // 这里用 registered 而不是 has：登记还在、文件已丢的条目也应当被清掉。
+      if (!registered) continue;
       const guiManagedIncompatible = !compatible && enabled.has(entry.id);
       if (!guiManagedIncompatible && !removeUnchecked) {
         // install 模式 + 未勾选：保留（需要的用户可去设置页点「修复 / 重试」）。
@@ -1975,7 +2099,12 @@ async function syncEnabledPlugins({
         // 重装失败时**把原来那份装回去**，绝不让插件凭空消失。实测过没有这一步的后果：
         // remove + prune 成功、add 失败，插件直接从 dsh.profile.bundles 里没了。
         result.errors.push(`${name}: ${res.output.slice(-200)}`);
-        if (previousSpec) {
+        // 恢复前先校验 spec 形状：它来自 profile 的 dependencies，而那个文件可以被市场
+        // 或引擎内的插件改写 —— 以 `-` 开头会被 pnpm 当成选项解析，带 `:` 前缀
+        // （file:/git:/github:/https:）则是「去装一份来路不明的代码」。宁可报错。
+        if (previousSpec && !isRestorableSpec(previousSpec, entry, bundledStagingRoot)) {
+          log("not restoring an unrecognised dependency spec:", name, previousSpec);
+        } else if (previousSpec) {
           try {
             const back = await installPlugin({
               engineDir,

@@ -18,13 +18,11 @@
  *                          可选 https://github.com/electron/electron/releases/download/）
  */
 
-import {createHash} from "node:crypto";
-import {createReadStream, createWriteStream, existsSync} from "node:fs";
+import {existsSync} from "node:fs";
 import {mkdir, readFile, readdir, rename, rm, stat, writeFile} from "node:fs/promises";
 import {dirname, join, resolve} from "node:path";
-import {Readable} from "node:stream";
 import {fileURLToPath} from "node:url";
-import {pipeline} from "node:stream/promises";
+import {download, sha256Of} from "./lib/download.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CACHE_DIR = join(ROOT, "resources", ".electron-cache");
@@ -53,23 +51,6 @@ const MIRROR = (
 const FILE_NAME = `electron-v${VERSION}-${PLATFORM}-${ARCH_NAME}.zip`;
 const URL = `${MIRROR}/v${VERSION}/${FILE_NAME}`;
 const TAG = `${VERSION} ${PLATFORM}-${ARCH_NAME}`;
-
-async function sha256Of(file) {
-  return new Promise((resolvePromise, reject) => {
-    const h = createHash("sha256");
-    createReadStream(file)
-      .on("error", reject)
-      .on("data", (chunk) => h.update(chunk))
-      .on("end", () => resolvePromise(h.digest("hex")));
-  });
-}
-
-async function download(url, dest) {
-  console.log(`downloading ${url}`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} (${url})`);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
-}
 
 /** 官方 SHASUMS256.txt 里该文件行的哈希（失败返回 null，不阻断下载后的自校验）。 */
 async function officialSha256() {

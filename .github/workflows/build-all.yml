@@ -15,8 +15,32 @@ permissions:
   contents: write
 
 jobs:
+  # Run the test suite once, before anything is built: it covers the unit tests plus
+  # the checks the README advertises for CI (settings-window inline JS, bundled-plugin
+  # drift, doc image references). They all run against the copies in plugins/, so no
+  # plugin repository checkout is needed.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
   build:
     name: build (${{ matrix.name }})
+    needs: test
     strategy:
       fail-fast: false
       matrix:

@@ -70,7 +70,10 @@ Write-Step "target platform: $platform"
 # -------------------------------------------------------------- secrets ----
 $secrets = @{}
 if (Test-Path $SecretsFile) {
-  Get-Content $SecretsFile |
+  # Read as UTF-8 explicitly: Windows PowerShell 5.1 defaults to ANSI, and a UTF-8 BOM
+  # makes the first line's key invisible to the `^\s*KEY=` match below (silently dropping
+  # a platform's token, which then looked like "skipped" instead of "failed").
+  Get-Content $SecretsFile -Encoding UTF8 |
     Where-Object { $_ -match '^\s*[A-Za-z_][A-Za-z0-9_]*=' } |
     ForEach-Object {
       $kv = $_ -split '=', 2
@@ -201,7 +204,7 @@ function Publish-GiteeLikeRelease {
     # them up front turns a confusing bare 400 into an explicit, expected message.
     [long]$MaxAssetBytes = 0
   )
-  if (-not $Token) { Write-Warn "${Label}: no token, skipping publish"; return }
+  if (-not $Token) { throw "${Label}: no token in the secrets file - cannot publish" }
   $releaseUrl = "$ApiBase/repos/$Owner/$Repo/releases"
 
   # Gitee/GitCode v5 accept releases via form-urlencoded (application/json is
@@ -274,7 +277,7 @@ function Publish-GiteeLikeRelease {
         # Some clones (GitCode) expose no id but accept the tag as the handle.
         $patchUrl = "$releaseUrl/$Tag"
       }
-      $patchOut = & curl.exe -sS -X PATCH $patchUrl `
+      $patchOut = & curl.exe -sS -f -X PATCH $patchUrl `
         --data-urlencode "access_token=$Token" `
         --data-urlencode "tag_name=$Tag" `
         --data-urlencode "name=$Name" `
@@ -340,13 +343,13 @@ function Publish-GitHubRelease {
         Write-Warn "${Label}: no API token, using authenticated 'gh' CLI"
       }
       else {
-        Write-Warn "${Label}: no token and gh not authenticated - skipping publish"
-        return
+        Write-Warn "${Label}: no token and gh not authenticated - cannot publish"
+        throw "${Label}: no credentials"
       }
     }
     else {
-      Write-Warn "${Label}: no token and no gh CLI - skipping publish"
-      return
+      Write-Warn "${Label}: no token and no gh CLI - cannot publish"
+      throw "${Label}: no credentials"
     }
   }
 
@@ -457,7 +460,7 @@ if ($Skip -contains 'Gitee') {
   try {
     Publish-GiteeLikeRelease -ApiBase 'https://gitee.com/api/v5' -Owner $owner -Repo $repo `
       -Token $secrets['GITEE_TOKEN'] -Tag $tag -Name $releaseName -BodyFile $bodyFile `
-      -AssetFiles $assets -Label 'Gitee'
+      -AssetFiles $assets -Label 'Gitee' -MaxAssetBytes 104857600
   }
   catch {
     Write-Warn "Gitee publish failed: $($_.Exception.Message)"

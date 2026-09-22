@@ -30,6 +30,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { randomBytes } = require("node:crypto");
 
 const LAST_MARKER = "/* dsh-gui-last-session-patch v3 */";
 /**
@@ -87,48 +88,6 @@ function versionOf(engineDir, rel) {
   } catch {
     return null;
   }
-}
-
-/** 移除已插入的旧补丁块（任意 vN 标记）。返回是否清除了内容。 */
-function stripLegacyPatch(lines, anchorPatterns) {
-  let removed = false;
-  // 旧块只可能插在锚点之后、引擎原始代码之前。我们从锚点结束位置向后找旧块
-  // 的首行（`// dsh-gui:` 注释）与结束行（它后面的下一行是引擎原代码
-  // `const slots = ctx.slots;`，这是 ui-conversation apply 紧跟 sessions 解包的语句）。
-  const anchorIdx = findBlock(lines, anchorPatterns);
-  if (anchorIdx !== -1) {
-    let start = -1;
-    for (let i = anchorIdx + anchorPatterns.length; i < lines.length; i += 1) {
-      if (lines[i].trim().startsWith("// dsh-gui:")) {
-        start = i;
-        break;
-      }
-    }
-    if (start !== -1) {
-      let end = -1;
-      for (let i = start + 1; i < lines.length; i += 1) {
-        const t = lines[i].trim();
-        if (t === "const slots = ctx.slots;") {
-          end = i;
-          break;
-        }
-        // 引擎布局若不同，找不到结束行就整段放弃（不冒险）。
-        if (i - start > 400) break;
-      }
-      if (end !== -1) {
-        lines.splice(start, end - start);
-        removed = true;
-      }
-    }
-  }
-  // 清掉行尾的旧版本标记（v1 等在文件末尾追加的注释行）。
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/dsh-gui-last-session-patch v\d+/.test(lines[i])) {
-      lines.splice(i, 1);
-      removed = true;
-    }
-  }
-  return removed;
 }
 
 /** 注入痕迹统计：blocks = 以 `// dsh-gui:` 开头的补丁注释行数；markers = vN 标记行数。 */
@@ -335,7 +294,21 @@ function applyLastSession(engineDir, log = () => {}) {
     log(`last-session patch: patched file failed syntax check (${error.message}), reverted`);
     return { ok: false, reason: `patched syntax invalid: ${error.message}` };
   }
-  fs.writeFileSync(clientFile, next, "utf8");
+  // 原子写：这个文件就是引擎页面本身的代码，半个文件落地等于引擎页白屏。临时名必须
+  // 唯一——同一台机器上可能存在另一个 GUI 实例在补同一份引擎（与补丁层的写法一致）。
+  const tmpClient = `${clientFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(tmpClient, next, "utf8");
+    fs.renameSync(tmpClient, clientFile);
+  } catch (error) {
+    try {
+      fs.rmSync(tmpClient, { force: true });
+    } catch {
+      /* 临时文件清理尽力而为 */
+    }
+    log(`last-session patch: writing the patched file failed (${error.message}), engine file left unchanged`);
+    return { ok: false, reason: `patched write failed: ${error.message}` };
+  }
   log("last-session patch: applied v3 (auto reopen last conversation)");
   return { ok: true };
 }
@@ -366,7 +339,6 @@ module.exports = {
   insertAfter,
   indentOf,
   versionOf,
-  stripLegacyPatch,
   injectedState,
   stripInjectedBlocks,
   LAST_MARKER,

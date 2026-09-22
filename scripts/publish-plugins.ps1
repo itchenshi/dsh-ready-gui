@@ -24,8 +24,9 @@
 #   (run that exact form -- without --registry the login goes to the mirror)
 #
 # After a successful first publish, consider switching each package to npm
-# "trusted publishing" (OIDC) in its settings on npmjs.com so the GitHub Actions
-# workflow in .github/workflows/publish.yml can release without a stored token.
+# "trusted publishing" (OIDC) in its settings on npmjs.com so the workflow in
+# that plugin repository (.github/workflows/publish.yml) can release without a
+# stored token.
 
 param(
   # Print every action without publishing anything.

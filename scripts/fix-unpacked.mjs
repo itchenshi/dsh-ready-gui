@@ -31,7 +31,12 @@ const FORCE = process.argv.includes("--force");
 
 const MAPPINGS = [
   ["win-unpacked", "DSH-READY-GUI-WIN"],
-  ["mac-unpacked", "DSH-READY-GUI-MAC"],
+  // electron-builder 从不产出 `mac-unpacked`：mac 的输出目录按架构命名（`mac` 是 x64、
+  // `mac-arm64` 是 arm64、`mac-universal` 是通用包）。早先那条 `mac-unpacked` 永远匹配
+  // 不到，于是 README 承诺的 dist/DSH-READY-GUI-MAC.zip 从来没被生成过，而脚本仍然退出 0。
+  ["mac", "DSH-READY-GUI-MAC-x64"],
+  ["mac-arm64", "DSH-READY-GUI-MAC-arm64"],
+  ["mac-universal", "DSH-READY-GUI-MAC-universal"],
   ["linux-unpacked", "DSH-READY-GUI-LINUX"],
 ];
 
@@ -39,7 +44,9 @@ const MAPPINGS = [
 async function zipDir(dirPath, zipPath, name) {
   await mkdir(dirname(zipPath), { recursive: true });
   const output = createWriteStream(zipPath);
-  const archive = new ZipArchive({ zlib: { level: 9 } });
+  // level 6 而不是 9：目录里大部分是已经压过的产物，9 只换来百分之几的体积、却让打包
+  // 多花几分钟（win 上这个 zip 约 190 MB）。
+  const archive = new ZipArchive({ zlib: { level: 6 } });
   const completion = new Promise((resolveClose, rejectClose) => {
     output.on("close", resolveClose);
     output.on("error", rejectClose);
@@ -60,15 +67,25 @@ async function main() {
       console.log(`skip ${from} (absent)`);
       continue;
     }
+    // --force：先把旧产物挪到一边，rename 失败再挪回来 —— 早先是「先 rm 再 rename」，
+    // rename 一旦失败两份都没了。
+    const parked = `${toPath}.old`;
     if (existsSync(toPath)) {
       if (!FORCE) {
         console.warn(`skip ${from}: target ${to} already exists (run with --force to replace)`);
         continue;
       }
-      await rm(toPath, { recursive: true, force: true });
+      await rm(parked, { recursive: true, force: true });
+      await rename(toPath, parked);
     }
     await mkdir(DIST, { recursive: true });
-    await rename(fromPath, toPath);
+    try {
+      await rename(fromPath, toPath);
+    } catch (error) {
+      if (existsSync(parked)) await rename(parked, toPath).catch(() => {});
+      throw error;
+    }
+    if (existsSync(parked)) await rm(parked, { recursive: true, force: true }).catch(() => {});
     console.log(`renamed ${from} -> ${to}`);
 
     // Archive the program directory.

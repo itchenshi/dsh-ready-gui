@@ -30,7 +30,9 @@ $remotes = @(
 # Load secrets (KEY=VALUE lines)
 $secrets = @{}
 if (Test-Path $SecretsFile) {
-  Get-Content $SecretsFile |
+  # -Encoding UTF8: PS 5.1 defaults to ANSI, and a UTF-8 BOM would hide the first
+  # line's key from the match below (a token silently going missing).
+  Get-Content $SecretsFile -Encoding UTF8 |
     Where-Object { $_ -match '^\s*[A-Za-z_][A-Za-z0-9_]*=' } |
     ForEach-Object {
       $kv = $_ -split '=', 2

@@ -463,6 +463,34 @@ ok("pruneProfilePackages 是幂等的，且不动无关包", () => {
   }
 });
 
+ok("旧包清理不碰现役插件的补丁行（旧包名与现役 row id 同名）", async () => {
+  // 改名时刻意保留了补丁层行 id，于是 `model-usage` / `composer-keys` / `opencode-go`
+  // 三个旧包名的 rowIds 与**现役**插件完全同名。旧包清理若照着旧包名的 rowIds 直接删，
+  // 就等于每次启动都把用户对现役插件的禁用行抹掉 —— 界面上「已禁用」的插件下次启动
+  // 静默恢复加载（reconcilePluginEnabled 只在市场 state.json 记着禁用时才补行）。
+  // 只有真正只属于旧包的行（如 opencode-go-usage）才该被清掉。
+  const { root, dshHome, profile } = makeProfile({
+    bundles: [],
+    patch:
+      "- id: model-usage\n  disabled: true\n- id: composer-keys\n  disabled: true\n- id: opencode-go-usage\n  disabled: true\n",
+  });
+  try {
+    const res = await pm.removeLegacyPlugins({
+      dshHome,
+      engineDir: path.join(root, "no-engine"),
+      nodeExec: "node",
+      pnpmInstallDir: path.join(root, "pnpm"),
+    });
+    const text = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
+    assert.match(text, /^- id: model-usage\n {2}disabled: true$/m, "现役插件的禁用行必须保留");
+    assert.match(text, /^- id: composer-keys\n {2}disabled: true$/m, "现役插件的禁用行必须保留");
+    assert.doesNotMatch(text, /opencode-go-usage/, "只属于旧包的行必须清掉");
+    assert.deepStrictEqual(res.removedRows, ["opencode-go-usage"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Await the async checks before reporting, so their failures are counted.
 Promise.all(asyncChecks).then(() => {
   if (failures > 0) {

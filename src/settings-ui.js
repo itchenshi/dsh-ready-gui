@@ -34,10 +34,21 @@ const ENGINE_LOCALES = ["zh", "en"];
  * returned document.
  */
 function parseEngineSettings(text) {
-  let doc;
+  let doc = null;
   try {
     doc = YAML.parseDocument(String(text ?? ""));
   } catch {
+    doc = null;
+  }
+  // yaml 的解析错误**不会抛异常**，而是挂在 `doc.errors` 上 —— 而带错误的文档
+  // `toString()` 会抛 `Document with errors cannot be stringified`，于是「改主题 / 改语言」
+  // 在引擎侧永远不生效（调用方只把它 catch 成一行日志，用户看不到任何提示）。顶层不是
+  // 映射（标量 / 序列）时 `setIn` 也会抛，同样在这里兜住：回退到一份全新文档，并告诉
+  // 调用方这次是「降级」写入。
+  const parseErrors = Array.isArray(doc?.errors) ? doc.errors : [];
+  let degraded = false;
+  if (doc === null || parseErrors.length > 0 || !YAML.isMap(doc.contents)) {
+    degraded = parseErrors.length > 0;
     doc = YAML.parseDocument("");
   }
   let parsed = null;
@@ -52,6 +63,9 @@ function parseEngineSettings(text) {
     doc,
     theme: ENGINE_THEMES.includes(theme) ? theme : null,
     locale: ENGINE_LOCALES.includes(locale) ? locale : null,
+    /** true = 原文件解析不了，已回退到全新文档（写入会覆盖掉那些无法解析的内容）。 */
+    degraded,
+    errors: parseErrors.map((error) => String((error && error.message) || error)),
   };
 }
 

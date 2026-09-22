@@ -295,7 +295,7 @@ All DeepSeek Harness user data lives under `$DSH_HOME` (default `~/.dsh`):
 │  ├─ status.html         # startup/update status page (follows Harness theme)
 │  ├─ notice.html         # persistent update badge
 │  └─ home-migrate.js     # data-dir detection & migration (pure Node, unit-testable)
-├─ plugins/               # the four bundled plugin sources (shipped with the app, see above)
+├─ plugins/               # the four bundled copies (generated from the plugin repos, see below)
 ├─ scripts/               # build & test scripts
 │  ├─ make-icons.mjs      # official favicon → icons at all sizes + win hybrid icon.ico
 │  ├─ ico-info.cjs        # inspect any .ico's frames and length consistency
@@ -303,16 +303,56 @@ All DeepSeek Harness user data lives under `$DSH_HOME` (default `~/.dsh`):
 │  ├─ bundle-node.mjs     # portable Node download/unpack (idempotent + archive cache)
 │  ├─ ensure-electron.mjs # local Electron release zip cache (SHA-256 verified)
 │  ├─ fix-unpacked.mjs    # rename + generate zip
+│  ├─ lib/download.mjs    # shared download/hash helper for the build scripts
+│  ├─ sync-bundled-plugins.mjs # plugin repos → plugins/ (runs before every build)
+│  ├─ verify-builtin-plugins.cjs # end-to-end check that bundled plugins self-heal
 │  ├─ after-pack.js       # electron-builder hook: ship the bundled Node in full
 │  ├─ push-all.ps1        # push branch + tags to the three platforms
 │  ├─ publish-all.ps1     # build + publish releases on the three platforms
+│  ├─ publish-plugins.ps1 # publish the four plugins to npm (for when sign-up works)
+│  ├─ update-release-notes.ps1 # push RELEASE-NOTES-*.md to the published releases
 │  └─ smoke-*.ps1         # Windows E2E smoke tests
 ├─ marketing/            # marketing assets (versioned dirs: v0.1.0 / v0.2.0 / v0.3.0 / …)
 │  └─ v0.3.0/            # CSDN/Zhihu/Juejin/Sspai articles, promo copy pack, Bilibili script
-├─ resources/icons/       # official favicon sources (svg/ico)
+├─ resources/icons/       # official favicon sources (harness.svg)
 ├─ electron-builder.yml   # packaging config (win/mac/linux)
 └─ dist/                  # build output (gitignored)
 ```
+
+### Plugin sources → bundled copies
+
+Each of the four plugins is its **own repository** (and is usable as a standalone package in other DSH
+hosts), while `plugins/` in this repo holds the **bundled copies** that ship inside the app and get
+staged into the profile at boot. Those copies are not written by hand — they are generated. The
+development workspace keeps the shell and the plugin repos together:
+
+```
+dsh-dev/
+├─ dsh-ready-gui/          # this repository
+└─ plugin-repos/           # the four plugin repos (dsh-model-surplus / dsh-gui-last-session /
+                           #   dsh-opencode-go-path / dsh-keys-setting)
+```
+
+```sh
+npm run sync:plugins                            # plugin repos → plugins/ (full mirror, prints changes)
+node scripts/sync-bundled-plugins.mjs --check   # report drift only, exit 1 when out of date (CI)
+node scripts/sync-bundled-plugins.mjs --only dsh-keys-setting
+```
+
+- **The rule: edit the plugin repository** (`plugin-repos/<name>/`), then run `npm run sync:plugins`.
+  **Do not edit `plugins/` directly** — the next sync overwrites it.
+- The plugin repositories are **discovered** (`dsh-dev/plugin-repos`, same-named directories next to
+  this repo, or `plugin-repos/` inside it); `--repos <dir>` or `DSH_PLUGIN_REPOS` overrides that.
+- What is mirrored is the **working tree** (uncommitted edits included): git-tracked files plus
+  untracked-but-not-ignored ones, deleting anything the source no longer has, and keeping the
+  copy's existing line-ending convention (a Windows checkout does not turn dirty because of EOLs).
+- Every plugin is validated while syncing: `package.json` `name` matches the directory, a `version`
+  exists, `dsh.bundle.patch` is declared and `cordis.patch.yml` is present — mismatches warn instead
+  of failing silently.
+- **Bump `version` when you change plugin code**: the GUI only replaces an installed copy when the
+  bundled version is newer, never for an equal version (so a copy the user updated is not silently
+  downgraded).
+- `npm run dist:*` runs the sync **first**, so a release can never ship a stale plugin.
 
 ---
 
@@ -380,6 +420,10 @@ node src/test/plugin-state.test.cjs
 # a throwaway DSH_HOME (never touches your data). Needs an engine (--engine <dir>
 # or $DSH_ENGINE_DIR) and, on the first run, network access to fetch pnpm:
 node scripts/verify-builtin-plugins.cjs
+# Mirror the plugin repositories into plugins/ (also runs before every build),
+# or only report drift (exit 1 when out of date):
+npm run sync:plugins
+node scripts/sync-bundled-plugins.mjs --check
 # Windows E2E (real WM_CLOSE validating close/tray/modal behavior):
 powershell -File scripts/smoke-close.ps1 -Mode quit   # "quit directly" mode
 powershell -File scripts/smoke-close.ps1 -Mode tray   # "hide to tray" mode

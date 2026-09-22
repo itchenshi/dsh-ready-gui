@@ -23,13 +23,11 @@
  */
 
 import {execFileSync} from "node:child_process";
-import {createHash} from "node:crypto";
-import {createReadStream, createWriteStream, existsSync} from "node:fs";
+import {existsSync} from "node:fs";
 import {mkdir, readFile, readdir, rename, rm, stat, writeFile} from "node:fs/promises";
 import {dirname, join, resolve} from "node:path";
-import {Readable} from "node:stream";
 import {fileURLToPath} from "node:url";
-import {pipeline} from "node:stream/promises";
+import {download, sha256Of} from "./lib/download.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "resources", "node");
@@ -65,24 +63,6 @@ const FORCE = process.argv.includes("--force") || process.env.DSH_NODE_REFRESH =
 const CACHE_ARCHIVE = join(CACHE_DIR, `${BASE}.${entry.ext}`);
 const CACHE_HASH = `${CACHE_ARCHIVE}.sha256`;
 const VERSION_TAG = `v${NODE_VERSION} ${KEY}`;
-
-/** SHA-256 文件校验（与 sidecar 比对用）。 */
-async function sha256Of(file) {
-  return new Promise((resolvePromise, reject) => {
-    const h = createHash("sha256");
-    createReadStream(file)
-      .on("error", reject)
-      .on("data", (chunk) => h.update(chunk))
-      .on("end", () => resolvePromise(h.digest("hex")));
-  });
-}
-
-async function download(url, dest) {
-  console.log(`downloading ${url}`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} (${url})`);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
-}
 
 /** 已就位的 bundled node 是否就是目标版本+平台（幂等跳过的主要依据）。 */
 async function isBundleUpToDate() {

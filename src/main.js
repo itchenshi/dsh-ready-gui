@@ -511,6 +511,9 @@ let engineOrigin = null;
 let pluginsInstalledThisLaunch = [];
 let pluginFailureRecoveryDone = false;
 let pluginReadyWatchdog = null;
+// 插件特权操作（安装/卸载/启用开关/修复）的主进程互斥：并发调用会对同一个 profile 的
+// package.json 与补丁层做「读—改—写」而互相覆盖（渲染层的 busy 态只覆盖其中一条路径）。
+let pluginOpInFlight = false;
 // 启动失败诊断：本次启动只弹一次（无论是否自动剔除过）。
 let startupDiagnosisDone = false;
 // “重启引擎”请求/进行中的标记（页面或设置窗口触发 → 主进程杀掉并重拉 dsh）。
@@ -521,6 +524,12 @@ let engineReady = false;
 let intentionalEngineStop = false;
 // 就绪后连续意外退出的计数（>3 停止自动重拉并提示）。
 let unexpectedEngineExits = 0;
+// 引擎最近一次就绪的时刻。「稳定跑过 ENGINE_STABLE_MS 之后才退出」才算一次干净的重启，
+// 此时才把连续崩溃计数清零 —— 早期版本在每次 onUrl 里无条件清零，于是「能就绪、随后必崩」
+// 的场景永远停在 1/3：上限到不了、连提示都不弹，只是每 600ms 无限重启。
+let engineReadyAt = 0;
+const ENGINE_STABLE_MS = 60_000;
+const ENGINE_RESTART_MAX_DELAY_MS = 30_000;
 // “启动后自动回到最近一次对话”：轮询 __dshOpenLast 就绪的计时器（窗口级一个即可，
 // 页面每导航/重载一次即重置，避免多个页面周期叠加轮询）。
 let openLastPollTimer = null;
@@ -529,11 +538,16 @@ let openLastPollClosed = null; // 绑定到 win 'closed' 的清理函数
 
 /** Test/CI hook: quit N ms after the web UI finished loading. */
 const autoquitMs = Number(process.env.DSH_SHELL_AUTOQUIT_MS) || 0;
+/** 自动退出定时器句柄：不保存的话，重启/退出路径无法取消，多次就绪会累积待触发的 quit。 */
+let autoQuitTimer = null;
 
 function scheduleAutoQuit() {
-  if (autoquitMs > 0) {
+  if (autoquitMs > 0 && autoQuitTimer === null) {
     log(`auto-quit scheduled in ${autoquitMs}ms`);
-    setTimeout(() => app.quit(), autoquitMs);
+    autoQuitTimer = setTimeout(() => {
+      autoQuitTimer = null;
+      app.quit();
+    }, autoquitMs);
   }
 }
 
@@ -905,12 +919,16 @@ function settingsPayload() {
 // ---------------------------------------------------------------------------
 
 /** Bundled portable Node shipped inside the app (resources/node). */
+let bundledNodeExecutableCache;
 function bundledNodeExecutable() {
+  // 结果在进程生命周期内不会变，而它被自动重启路径反复调用 —— 每次 existsSync 一遍没必要。
+  if (bundledNodeExecutableCache !== undefined) return bundledNodeExecutableCache;
   const candidates =
     process.platform === "win32"
       ? [path.join(process.resourcesPath, "node", "node.exe")]
       : [path.join(process.resourcesPath, "node", "bin", "node")];
-  return candidates.find((p) => fs.existsSync(p)) || null;
+  bundledNodeExecutableCache = candidates.find((p) => fs.existsSync(p)) || null;
+  return bundledNodeExecutableCache;
 }
 
 /**
@@ -979,6 +997,9 @@ function nodeVersionOf(nodeExec) {
 // built-in plugin staging root (space-free path required by pnpm install)
 // ---------------------------------------------------------------------------
 
+/** shortPathIfSpaced 的结果缓存（进程内不变，避免每次安装都起一个 cmd 探测子进程）。 */
+const shortPathCache = new Map();
+
 /**
  * 8.3 短路径：仅当路径含空格且系统能给出短路径时缩短，否则原样返回。
  * 引擎用 shell 转发参数给 pnpm（Node 26 起 shell:true 不再转义参数），
@@ -986,13 +1007,18 @@ function nodeVersionOf(nodeExec) {
  */
 function shortPathIfSpaced(p) {
   if (!/\s/u.test(p)) return p;
+  // 结果只取决于 p，而 p 只来自 <home>\.dsh-gui\bundled-plugins：缓存掉那次 cmd 探测。
+  const cached = shortPathCache.get(p);
+  if (cached !== undefined) return cached;
   // 路径来自 <os.homedir()>（即 USERPROFILE）。被插进下面这条 cmd 命令里：含 `"` 会闭合
   // 引号，`&`/`|`/`^`/`%` 会被 cmd 解释 —— 与其尝试转义，不如直接拒绝这类路径，回退到
   // 「不短化」的保守分支（上层只过滤空白，同样会拒绝它）。
   if (/["&|^%!<>]/u.test(p)) {
     err("refusing to shorten a path with cmd metacharacters");
+    shortPathCache.set(p, p);
     return p;
   }
+  let result = p;
   try {
     const probe = spawnSync(
       "cmd",
@@ -1000,11 +1026,12 @@ function shortPathIfSpaced(p) {
       { encoding: "utf8", windowsHide: true },
     );
     const short = probe.status === 0 ? String(probe.stdout ?? "").trim() : "";
-    if (short && !/\s/u.test(short) && fs.existsSync(short)) return short;
+    if (short && !/\s/u.test(short) && fs.existsSync(short)) result = short;
   } catch {
     /* keep long path */
   }
-  return p;
+  shortPathCache.set(p, result);
+  return result;
 }
 
 /**
@@ -1019,14 +1046,19 @@ function shortPathIfSpaced(p) {
  * 注：`.dsh-gui` 这个目录名 v0.4.1 就在用，**刻意不跟着应用改名** —— 已有 profile 里的
  * `file:` 依赖原样指向它，改掉会让那些依赖失效（见 CHANGELOG「刻意没有改的东西」）。
  */
+let pluginBundledPluginsDirCache;
 function pluginBundledPluginsDir() {
+  // 每次调用都 mkdir + （路径含空格时）起一个 cmd 子进程做 8.3 短化探测，而它在每次
+  // 插件安装 / 卸载 / 修复里都会被调用 —— 结果在进程生命周期内是常量，缓存即可。
+  if (pluginBundledPluginsDirCache !== undefined) return pluginBundledPluginsDirCache;
   const dir = path.join(os.homedir(), ".dsh-gui", "bundled-plugins");
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (error) {
     err("plugin staging dir create failed:", error.message);
   }
-  return shortPathIfSpaced(dir);
+  pluginBundledPluginsDirCache = shortPathIfSpaced(dir);
+  return pluginBundledPluginsDirCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,7 +1080,16 @@ function profilePnpmSpec() {
 
 async function fetchLatestVersion(timeoutMs = 8000) {
   // Test-only override so CI can exercise the update path deterministically.
-  if (process.env.DSH_SHELL_TEST_LATEST) return process.env.DSH_SHELL_TEST_LATEST;
+  // 仍要过 semver：这个值会被拼成 `@deepseek-ai/dsh@<值>` 交给 npm install，
+  // 未校验时 `file:` / `github:` 之类形状同样合法 —— 等于让环境变量指定安装源。
+  if (process.env.DSH_SHELL_TEST_LATEST) {
+    const forced = process.env.DSH_SHELL_TEST_LATEST.trim();
+    if (semver.valid(forced) === null) {
+      err("DSH_SHELL_TEST_LATEST is not a valid semver version; ignoring it:", forced);
+    } else {
+      return forced;
+    }
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1068,6 +1109,16 @@ async function fetchLatestVersion(timeoutMs = 8000) {
     if (channel === "npm") {
       const tag = data["dist-tags"] && data["dist-tags"].latest;
       if (tag && all.includes(tag)) return tag;
+      // 拿不到合法的 `latest`（企业代理/镜像会重塑响应）时**不能**退回「含 alpha 的最高
+      // 版本」：那与本通道的语义正好相反，会把「跟随 latest」的用户推上 alpha，而且没有任何
+      // 提示。退到「最高正式版」；一个正式版都没有就返回 null（当作没有可用更新）。
+      const stable = all.filter((v) => semver.prerelease(v) === null);
+      const picked = stable.sort((a, b) => (semver.lt(a, b) ? 1 : -1))[0] ?? null;
+      log(
+        "registry has no usable dist-tag latest; using the highest stable release instead:",
+        picked ?? "(none)",
+      );
+      return picked;
     }
     // rc：跳过 alpha，取 rc / 正式版最高。
     const list =
@@ -1086,7 +1137,14 @@ async function fetchLatestVersion(timeoutMs = 8000) {
 async function readInstalledVersion() {
   try {
     const pkg = JSON.parse(await fsp.readFile(engineDshVersionPath(), "utf8"));
-    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
+    if (typeof pkg.version !== "string" || pkg.version === "") return null;
+    // 只接受合法 semver：`dev` / `0.5` / `1.0.0.1` 这类值会让后面的 semver.lt 抛
+    // TypeError，而它在 boot() 里 —— 整个启动会因此失败并弹「无法启动」，尽管引擎本身是好的。
+    if (semver.valid(pkg.version) === null) {
+      err("engine package.json has a non-semver version; treating it as unknown:", pkg.version);
+      return null;
+    }
+    return pkg.version;
   } catch {
     return null;
   }
@@ -1209,11 +1267,11 @@ function npmInstall(version, onProgress) {
           reject(error);
           return;
         }
-        try {
-          fs.rmSync(old, { recursive: true, force: true });
-        } catch {
+        // 删旧引擎树（几百 MB、数万个文件）**不能同步做**：fs.rmSync 会把主进程钉住，
+        // 期间窗口不响应、托盘冻结、IPC 停摆。这里交给后台删；失败只留一个无害的 .old。
+        fsp.rm(old, { recursive: true, force: true }).catch(() => {
           /* stale .old dir is harmless */
-        }
+        });
         resolve();
       } catch (error) {
         cleanupStage();
@@ -1292,8 +1350,21 @@ function killProcessTree(child, done) {
       windowsHide: true,
       stdio: "ignore",
     });
-    killer.on("close", () => done?.());
-    killer.on("error", () => done?.());
+    // taskkill 失败（进程已被别的路径杀掉、权限不足）时也要有兜底：否则调用方以为
+    // 引擎已经停了，随后把 dshChild 置空 —— 句柄丢失、诊断日志也拿不到它的输出。
+    const fallback = () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      done?.();
+    };
+    killer.on("close", (code) => {
+      if (code === 0) done?.();
+      else fallback();
+    });
+    killer.on("error", fallback);
   } else {
     try {
       process.kill(-child.pid, "SIGTERM");
@@ -1940,7 +2011,15 @@ async function syncEngineUI(patch) {
   let theme = null;
   try {
     const text = await fsp.readFile(file, "utf8");
-    ({ doc, locale, theme } = parseEngineSettings(text));
+    let degraded = false;
+    let parseErrors = [];
+    ({ doc, locale, theme, degraded, errors: parseErrors } = parseEngineSettings(text));
+    if (degraded) {
+      // 原文件解析不了（tab 缩进、重复键、未闭合的 flow 序列…）。以前这里会静默失败：
+      // 带错误的文档 toString() 抛异常 → 主题/语言在引擎侧永远不生效，而用户只看到
+      // 「已保存」。现在照常写入（用一份全新文档），但把这件事记进日志。
+      err("engine settings.yaml has YAML errors; rewriting it:", parseErrors.join(" | "));
+    }
   } catch {
     doc = YAML.parseDocument("");
   }
@@ -2573,6 +2652,9 @@ function stopAppUpdateChecks() {
     clearInterval(appUpdateTimer);
     appUpdateTimer = null;
   }
+  // 标志也要复位：否则同一进程内之后再调用 startAppUpdateChecks() 会被
+  // `if (appUpdateChecksStarted) return;` 直接挡掉，定时器永久不再启动。
+  appUpdateChecksStarted = false;
 }
 
 /** 托盘/设置“检查 DSH Ready GUI 更新…”：查三个开源平台，有新版则询问并打开下载页。 */
@@ -3171,7 +3253,7 @@ async function startEngine(nodeExec) {
       // preload 窄桥 —— 所以只接受本机/局域网的 http 来源，否则不予加载。
       const safe = acceptableEngineUrl(url);
       if (safe === null) {
-        err("ignoring engine URL that is not a local http origin:", String(url).slice(0, 80));
+        err("ignoring engine URL that is not a local http origin:", redactToken(String(url).slice(0, 80)));
         return;
       }
       settled = true;
@@ -3181,7 +3263,7 @@ async function startEngine(nodeExec) {
       engineReady = true;
       engineRestartInFlight = false;
       intentionalEngineStop = false;
-      unexpectedEngineExits = 0;
+      engineReadyAt = Date.now();
       engineOrigin = safe.origin;
       lastEngineUrl = safe.toString();
       // 只记来源，不把 ?token=… 打进控制台/日志。
@@ -3204,6 +3286,11 @@ async function startEngine(nodeExec) {
       engineReady = false;
       lastEngineUrl = null;
       engineOrigin = null;
+      // 有意停止（切换数据目录 / 更新引擎 / 正在重启 / 退出）**不是失败**，而且这个判断
+      // 必须放在 `!settled` 之前：否则「已 spawn、还没来得及打印 URL 时被有意杀掉」会走
+      // 启动失败诊断 —— 写一份 dsh-start-fail 日志、弹错误框，甚至顺着 tail 里的包名把插件
+      // 判成元凶（用户点「禁用并重启」就真的把插件卸了）。
+      if (quitting || engineRestartInFlight || intentionalEngineStop) return;
       if (!settled) {
         // 尚未就绪就退出：本次刚自动装过插件 → 先自动剔除并重试（保留既有兜底）；
         // 已剔除过或本就没有本次新装插件 → 进入诊断（保存日志、判定插件/原因）。
@@ -3214,8 +3301,6 @@ async function startEngine(nodeExec) {
         }
         return;
       }
-      // 曾成功就绪后退出：主动停止/切换目录/正在重启由调用方负责，这里不插手。
-      if (quitting || engineRestartInFlight || intentionalEngineStop) return;
       // 本次刚装过插件且尚未剔除过 → 可能插件在运行后把引擎弄崩，先剔除再重拉。
       if (!pluginFailureRecoveryDone && pluginsInstalledThisLaunch.length > 0) {
         recoverFromPluginFailure(`exit-after-ready ${code}`).catch((error) =>
@@ -3223,18 +3308,23 @@ async function startEngine(nodeExec) {
         );
         return;
       }
-      // 其余意外退出（含 dsh 页面自身请求退出/插件市场的“重启”）：GUI 作为
-      // supervisor 自动重拉引擎；连续失败 3 次后停止并提示。
+      // 稳定跑过一段时间的引擎再退出不算「连续崩溃」，此时才把计数清零（见 engineReadyAt
+      // 的说明：在 onUrl 里无条件清零会让上限永远到不了）。
+      if (engineReadyAt > 0 && Date.now() - engineReadyAt >= ENGINE_STABLE_MS) unexpectedEngineExits = 0;
+      // 其余意外退出（含 dsh 页面自身请求退出/插件市场的“重启”）：GUI 作为 supervisor 自动
+      // 重拉引擎；连续失败 3 次后停止并提示。重试要**退避**：600ms 一轮的无限重拉会把 CPU
+      // 和磁盘拖住，而且用户看不到任何提示。
       unexpectedEngineExits += 1;
       if (unexpectedEngineExits > 3) {
         setStatus(L("engine.startFailed"), L("engine.autoRestartGaveUp", unexpectedEngineExits));
         showUpdateNotice(L("engine.crash.title"), L("engine.crash.msg", String(code ?? signal ?? "")));
         return;
       }
-      log(`engine exited after ready (${code} ${signal ?? ""}) — auto-restart ${unexpectedEngineExits}/3`);
+      const restartDelay = Math.min(ENGINE_RESTART_MAX_DELAY_MS, 600 * 2 ** (unexpectedEngineExits - 1));
+      log(`engine exited after ready (${code} ${signal ?? ""}) — auto-restart ${unexpectedEngineExits}/3 in ${restartDelay}ms`);
       setTimeout(() => {
         if (!quitting && !engineRestartInFlight) restartEngineNow(`auto-restart after exit ${code}`);
-      }, 600);
+      }, restartDelay);
     },
     onError: (error) => {
       // 同 handleStartupFailure：别再让「正在重启」标志卡住。
@@ -3301,10 +3391,23 @@ function sendSettingsProgress(text) {
 /** 包一层 log：既走主进程日志，也实时推送进度给设置窗口。 */
 function progressLogFor(header) {
   sendSettingsProgress(header);
+  // 进度推送要**合并**：plugin-manager 会把子进程（pnpm）的每一行输出都交给这个 log，
+  // 一次插件安装能输出成百上千行 —— 逐行 webContents.send 会把渲染进程淹掉。这里保留
+  // 最新一行、最多每 150ms 发一次（最后一行一定会发出去，不会停在中间状态）。
+  let pending = null;
+  let flushTimer = null;
+  const flush = () => {
+    flushTimer = null;
+    if (pending === null) return;
+    const text = pending;
+    pending = null;
+    sendSettingsProgress(text);
+  };
   return (...args) => {
     const line = args.map(String).join(" ");
     log(line);
-    sendSettingsProgress(line);
+    pending = line;
+    if (flushTimer === null) flushTimer = setTimeout(flush, 150);
   };
 }
 
@@ -3571,17 +3674,30 @@ function registerIpc() {
   // 生效：装一个 / 卸一个，随后广播新状态让设置窗口重新渲染。返回
   // { ok, skipped, error, changed, status } —— ok=false 且 skipped=true 表示
   // 引擎不兼容未装；error 为安装/卸载失败信息。
+  //
+  // 主进程侧的互斥：渲染层虽然有自己的 busy 态（安装勾选框），但启用开关那条路径不走它，
+  // 而且「修复 / 重试」是独立入口 —— 两个并发操作会对同一个 profile 的 package.json 与
+  // 补丁层做「读—改—写」，互相覆盖。这里统一挡在入口（返回 busy，不排队）。
+  const gatePluginOp = async (run) => {
+    if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
+    pluginOpInFlight = true;
+    try {
+      return await run();
+    } finally {
+      pluginOpInFlight = false;
+    }
+  };
   ipcMain.handle("plugins:install", async (event, id) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "plugins:install")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
-    return runPluginInstallUninstall(entry, "install");
+    return gatePluginOp(() => runPluginInstallUninstall(entry, "install"));
   });
   ipcMain.handle("plugins:remove", async (event, id) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "plugins:remove")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
-    return runPluginInstallUninstall(entry, "remove");
+    return gatePluginOp(() => runPluginInstallUninstall(entry, "remove"));
   });
 
   // 启用/禁用（第二个勾选框）：状态镜像 + 走市场的开关接口（见 callMarketToggle）。
@@ -3589,7 +3705,7 @@ function registerIpc() {
     if (rejectForeignSender(event, isFromSettingsWindow, "plugins:set-enabled")) return { ok: false, error: "unauthorized" };
     const entry = PLUGIN_CATALOG.find((c) => c.id === id);
     if (!entry) return { ok: false, error: "unknown plugin: " + String(id) };
-    return runPluginSetEnabled(entry, enabled !== false);
+    return gatePluginOp(() => runPluginSetEnabled(entry, enabled !== false));
   });
 
   // 「刷新 Harness 页面」：禁用/启用带客户端半体的插件后，页面里已经加载的那半
@@ -3611,6 +3727,9 @@ function registerIpc() {
   ipcMain.handle("settings:plugin-sync", async (event) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "settings:plugin-sync")) return { ok: false, error: "unauthorized" };
     const progressLog = progressLogFor("repairing plugins");
+    // 与安装/卸载/启用开关共用同一把主进程互斥（见 gatePluginOp）。
+    if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
+    pluginOpInFlight = true;
     try {
       // 先自愈：清掉不可解析/失效的 bundle 登记（坏安装留下的 stale 条目会让
       // 引擎启动失败），再对账目录插件。
@@ -3686,6 +3805,8 @@ function registerIpc() {
         changed: false,
         errors: [String((error && error.message) || error)],
       };
+    } finally {
+      pluginOpInFlight = false;
     }
   });
 
@@ -3823,6 +3944,12 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     stopAppUpdateChecks();
     stopProfileWatcher();
+    // 自动退出定时器也要取消：它是测试/CI 钩子，但重启引擎后可能被重新武装，
+    // 留着会在退出流程里再触发一次 app.quit()。
+    if (autoQuitTimer !== null) {
+      clearTimeout(autoQuitTimer);
+      autoQuitTimer = null;
+    }
     if (tray) {
       tray.destroy();
       tray = null;
