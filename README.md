@@ -104,6 +104,8 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   目录再装。v0.5.0 一度删掉过这套机制（插件改从 registry 装就不再需要），改回内置后原样
   恢复，包括带空格路径的 8.3 短化。
 
+完整改动见 [CHANGELOG.md](CHANGELOG.md) 与 [RELEASE-NOTES-v0.5.0.md](RELEASE-NOTES-v0.5.0.md)。
+
 ## 🆕 v0.4.1 亮点
 
 - **🔐 安全修复（建议所有用户升级）**：三个插件的**浏览器路由此前完全没有鉴权** —— 实测不带任何

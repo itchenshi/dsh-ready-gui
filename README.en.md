@@ -113,6 +113,8 @@ powershell -File scripts/publish-plugins.ps1           # publish all four
   needed a `file:` install once every entry came from the registry); it is restored verbatim now that
   the plugins are bundled again, including the 8.3 short-path handling for paths with spaces.
 
+Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.5.0.md](RELEASE-NOTES-v0.5.0.md).
+
 ## 🆕 What's new in v0.4.1
 
 - **🔐 Security fixes (everyone should upgrade)**: the three plugins' **browser routes had no authentication at all** — a request with no credentials returned your **account usage and DeepSeek balance**, and even wrote settings (a forged `Host` worked too, the DNS-rebinding shape). This release also adds the **navigation fence** (the engine page could previously walk the window — preload bridge included — onto a remote origin), a **permission fence** (microphone/camera/geolocation/notifications were auto-granted), **sender checks on every privileged IPC channel**, and closes "any third-party plugin can disable the engine's own rows".
