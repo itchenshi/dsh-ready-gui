@@ -10,15 +10,22 @@
 //      openai-responses, so the shared fallback is undefined; catalog-unknown
 //      models therefore need the route-level `api`.
 //
-//   2. PUT THE DEEPSEEK V4.1 MODELS FIRST (this file, settings half): once the
-//      `llm-pi-ai` settings namespace is registered, checks whether the user
-//      configured a model list for the opencode-go route; if they did, the known
-//      DeepSeek V4.1 models are placed at the FRONT of that list via
-//      settings.update (the same write path the Models page uses, so the change
-//      lands in settings.yaml and re-runs the engine's strict validation — which
-//      passes because `api` is present on the base layer). Position matters: the
-//      list order is the model picker's order and the picker preselects the
-//      first entry, so "out of the box" means V4.1 Flash is the default.
+//   2. DETECT THE ROUTE'S MODELS, ADD THE DEEPSEEK V4.1 MODELS, PUT THEM FIRST
+//      (this file, settings half): once the `llm-pi-ai` settings namespace is
+//      registered, the route's models are DETECTED from the engine itself
+//      (`llm.discoverModels`, which answers the installed pi-ai catalog for a
+//      catalog route without any network call), and the DeepSeek V4.1 models are
+//      placed at the FRONT of the route's `models` list via settings.update (the
+//      same write path the Models page uses, so the change lands in
+//      settings.yaml and re-runs the engine's strict validation). When the user
+//      configured no list, the detected catalog SEEDS one — a non-empty list
+//      replaces the served catalog, so writing our models alone would leave the
+//      picker showing a single model. The route's `baseURL` is declared too when
+//      a listed model is not in the installed catalog, because that is the only
+//      way such a model resolves an endpoint (the engine refuses it otherwise).
+//      Position matters: the list order is the model picker's order and the
+//      picker preselects the first entry, so "out of the box" means V4.1 Flash is
+//      the default.
 //
 //   3. ATTACH `x-opencode-session` (this file, header half): OpenCode's relay
 //      pins every request sharing the same `x-opencode-session` value to the
@@ -342,14 +349,59 @@ function installSessionHeader(ctx, config) {
 const NS = 'llm-pi-ai'
 const PROVIDER = 'opencode-go'
 
+// OpenCode Go's OpenAI-compatible endpoint — the one the route's declared `api`
+// speaks.
+//
+// The installed pi-ai catalog gives every model IT describes its own `baseUrl`
+// (…/zen/go for the anthropic-messages ones, …/zen/go/v1 for the OpenAI-shaped
+// ones), so a catalog route normally needs no route-level endpoint. A model the
+// catalog does NOT describe is different: the engine resolves its endpoint as
+// `route.baseURL ?? catalogModel.baseUrl ?? providerBaseUrl`, and the opencode-go
+// catalog provider carries no provider-level baseUrl — so `deepseek-v4.1-flash`
+// has nowhere to point and the engine refuses both to serve it and to store it
+// (`model "…" needs a baseURL`). Declaring this on the route is what admits such
+// a model, and since the patch in cordis.patch.yml already points the whole
+// route at `openai-completions`, this is the endpoint that protocol speaks.
+const DEFAULT_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
 // DeepSeek V4.1* models OpenCode Go serves (probed upstream: 37 models, one
 // v4.1 today). Extend this list when upstream adds more.
+//
+// Every field here exists because the installed catalog does NOT describe these
+// models, so nothing else can supply it:
+//
+//   * contextWindow / maxTokens — the engine falls back to the catalog entry's
+//     values, and there is none.
+//   * compat — the DeepSeek wire quirks the endpoint needs. pi-ai auto-detects
+//     them from the provider name or host (`isDeepSeek = provider === "deepseek"
+//     || baseUrl includes "deepseek.com"`), and the OpenCode Go relay is neither:
+//     it is `provider: "opencode-go"` at `opencode.ai`. Without the explicit
+//     block, `requiresReasoningContentOnAssistantMessages` stays false and the
+//     replayed assistant turns omit `reasoning_content` — DeepSeek then answers
+//     400 "The `reasoning_content` in the thinking mode must be passed back to
+//     the API", and every multi-turn conversation on the model fails. The values
+//     below are exactly what the installed catalog declares for its own
+//     opencode-go DeepSeek entries (deepseek-v4-flash / -vision-exp / -pro).
+//   * reasoningEfforts — the model IS a thinking model, and the compat fallback
+//     above is gated on `model.reasoning`. Without a catalog entry the engine
+//     would resolve it as non-reasoning, so pi-ai would neither request thinking
+//     nor pad `reasoning_content`. The levels mirror the same catalog entries:
+//     `low` / `high` / `max`, plus `off` (declared with no wire value, which is
+//     how "supported, send nothing" is spelled).
 export const V4_1_MODELS = [
   {
     id: 'deepseek-v4.1-flash',
     name: 'DeepSeek V4.1 Flash',
     contextWindow: 1000000,
     maxTokens: 384000,
+    reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'max' },
+    compat: {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: 'max_tokens',
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: 'deepseek',
+    },
   },
 ]
 
@@ -368,6 +420,35 @@ export function isV41(id) {
 }
 
 /**
+ * One of our model entries, with every field the USER already set kept as-is and
+ * the fields only we can know filled in.
+ *
+ * These are not cosmetic defaults: `compat` and `reasoningEfforts` are the wire
+ * facts the installed catalog would have supplied for a model it describes (see
+ * V4_1_MODELS). An entry written by an earlier version of this plugin — or by the
+ * GUI model page, or by hand — carries neither, and on this route that costs a
+ * 400 on every multi-turn conversation. So the missing fields are ADDED, while
+ * anything the user decided (name, limits, their own compat switches, an
+ * explicit `reasoningEfforts: false`) is never overwritten.
+ *
+ * @param entry - the stored entry for one of our ids, or undefined.
+ * @param def - our definition for that id.
+ * @returns the entry to write.
+ */
+export function withV41Defaults(entry, def) {
+  if (entry === null || typeof entry !== 'object') return { ...def }
+  const merged = { ...def, ...entry }
+  // Nested blocks merge field by field, ours underneath the user's.
+  if (def.compat !== undefined || entry.compat !== undefined) {
+    merged.compat = { ...def.compat, ...entry.compat }
+  }
+  // `reasoningEfforts` is a whole decision (a dict, or `false` for a
+  // non-reasoning model), so an entry that states one keeps it untouched.
+  if (entry.reasoningEfforts === undefined) merged.reasoningEfforts = def.reasoningEfforts
+  return merged
+}
+
+/**
  * The next models array, with this plugin's DeepSeek V4.1 models FIRST and
  * everything the user configured kept in its own relative order.
  *
@@ -376,11 +457,11 @@ export function isV41(id) {
  * of this plugin *appended* the models, so anyone who already has a v4.1 entry
  * carries it at the END; leaving it there would make the plugin's own promise
  * ("works out of the box") depend on the user dragging it up by hand. Moving it
- * is part of the job, and it is idempotent: once the models sit at the front,
- * this returns null.
+ * is part of the job, and it is idempotent: once the models sit at the front (and
+ * carry the fields we maintain), this returns null.
  *
- * An entry the user already has for one of our ids is reused verbatim (they may
- * have tuned its name or limits) and is never overwritten with our default.
+ * An entry the user already has for one of our ids is kept, and completed by
+ * `withV41Defaults` — never replaced.
  *
  * @param {Array} existing
  * @returns {Array|null} the models array to write, or null when the list already
@@ -389,35 +470,113 @@ export function isV41(id) {
  */
 export function withV41ModelsFirst(existing) {
   const models = Array.isArray(existing) ? existing : []
-  const ours = V4_1_MODELS.map((def) => models.find((m) => m?.id === def.id) ?? { ...def })
+  const ours = V4_1_MODELS.map((def) => withV41Defaults(models.find((m) => m?.id === def.id), def))
   const rest = models.filter((m) => !V4_1_MODELS.some((def) => def.id === m?.id))
   const next = [...ours, ...rest]
   return JSON.stringify(next) === JSON.stringify(models) ? null : next
 }
 
 /**
- * Decide what to write for the route's `models`, from the **user's own** layer.
+ * The patch to write for the `opencode-go` route, or null when the stored route
+ * already has the shape this plugin maintains.
  *
- * The engine treats a non-empty configured `models` list as the complete set for
- * that provider (`entries = configured.length > 0 ? configured : defaults`), so a
- * list written where the user had none REPLACES the provider's built-in catalog
- * with exactly what we send — appending to an empty list would leave the model
- * picker showing a single model. Therefore: only extend a list the user already
- * configured; when they have not, the engine's catalog stays authoritative and we
- * write nothing.
+ * Three decisions live here:
  *
- * The merged (`resolved`) settings cannot drive this decision: this plugin's own
- * cordis patch injects `providers.opencode-go.api`, so the merged layer always has
- * the route and a "route exists" guard would never fire.
+ * 1. WHICH MODELS. The engine treats a non-empty configured `models` list as the
+ *    provider's COMPLETE model set (`entries = configured.length > 0 ? configured
+ *    : defaults`). So a user list is extended (`withV41ModelsFirst`), while a
+ *    route the user configured NO list for is seeded from the DETECTED catalog
+ *    (`catalog`) — writing our models into an empty list would otherwise replace
+ *    the whole served catalog with a single entry. Detection is what makes the
+ *    "no list configured" case work at all instead of silently doing nothing.
  *
- * @param userProfile - `settings.section(NS).providers['opencode-go']`, or undefined.
- * @returns {Array|null} the models array to write, or null when nothing should be written.
+ * 2. WHETHER THE ROUTE NEEDS `baseURL`. A model the installed catalog does not
+ *    describe resolves its endpoint from the route (see DEFAULT_BASE_URL), so the
+ *    route must carry one whenever such a model is listed — including when the
+ *    list already has the right ORDER but the endpoint is still missing, which is
+ *    the state a hand-edited settings.yaml can be in.
+ *
+ * 3. WHETHER ANYTHING CHANGED. Both fields are compared against what is actually
+ *    stored, so the write is skipped once the route is in shape — which is also
+ *    what stops the `settings/document-updated` event from looping.
+ *
+ * An entry the user already has for one of our ids is reused verbatim (they may
+ * have tuned its name or limits) and is never overwritten with our default.
+ *
+ * @param userProfile - the route exactly as the USER configured it
+ *   (`settings.section(NS).providers[PROVIDER]`), or undefined.
+ * @param resolvedRoute - the route as the engine resolves it (base + user layers).
+ * @param catalog - the models the installed catalog describes for the route, as
+ *   `llm.discoverModels()` reports them.
+ * @returns {{models?: Array, baseURL?: string}|null} the patch to write.
  */
-export function nextV41Models(userProfile) {
-  if (userProfile === null || typeof userProfile !== 'object') return null
-  const models = userProfile.models
-  if (!Array.isArray(models) || models.length === 0) return null
-  return withV41ModelsFirst(models)
+export function planRouteUpdate(userProfile, resolvedRoute, catalog) {
+  // Detection is the precondition for deciding anything: without it a route the
+  // user configured no list for cannot be described, and the caller skips too.
+  if (!Array.isArray(catalog)) return null
+  const detected = catalog.filter((model) => typeof model?.id === 'string' && model.id.length > 0)
+  const catalogIds = new Set(detected.map((model) => model.id))
+  const stored = Array.isArray(userProfile?.models) ? userProfile.models : undefined
+  const userConfigured = stored !== undefined && stored.length > 0
+
+  // 1. the list the route should end up with: the user's own when they configured
+  //    one, otherwise the detected catalog (so the served catalog survives the
+  //    write), each with our models in front. `merged === null` means it already
+  //    has that shape, so there is nothing to write for it.
+  const listed = userConfigured ? stored : detected.map((model) => (
+    // Only id + name: the remaining fields (limits, modalities, api) stay the
+    // catalog's, so a later catalog update still reaches this entry.
+    typeof model.name === 'string' && model.name.length > 0
+      ? { id: model.id, name: model.name }
+      : { id: model.id }
+  ))
+  const merged = withV41ModelsFirst(listed)
+  const models = merged ?? listed
+
+  const patch = {}
+  // A list is written only when it needed changing — never merely to restate a
+  // list the user layer (or the catalog) already has, which is what keeps a
+  // catalog-authoritative route authoritative.
+  if (merged !== null) patch.models = models
+  // 2. an endpoint is required exactly when a listed model is not in the catalog.
+  if ((resolvedRoute?.baseURL ?? '') === '' && models.some((model) => !catalogIds.has(model?.id))) {
+    patch.baseURL = DEFAULT_BASE_URL
+  }
+  // 3. nothing to change -> no write, no event, no loop.
+  return Object.keys(patch).length > 0 ? patch : null
+}
+
+/**
+ * Detect the models the installed engine catalog describes for the route.
+ *
+ * `llm.discoverModels` is the engine's own provider-endpoint interrogation. For a
+ * route pi-ai ships a catalog for it answers that catalog directly; passing no
+ * `baseURL` and no credential is deliberate, because the fallback path (a route
+ * with no catalog) then fails before reaching the network — a catalog-less route
+ * is one this plugin cannot describe anyway, and the plugin makes no outbound
+ * requests.
+ *
+ * @returns {Promise<Array|undefined>} the detected models, or undefined when
+ *   detection is unavailable — in which case the caller must NOT guess a list.
+ */
+async function detectCatalogModels(ctx) {
+  const llm = ctx.llm
+  if (typeof llm?.discoverModels !== 'function') {
+    ctx.logger?.warn('[opencode-go] llm.discoverModels() is unavailable; skipping the V4.1 auto-add')
+    return undefined
+  }
+  try {
+    const models = await llm.discoverModels(NS, { provider: PROVIDER })
+    if (!Array.isArray(models)) return undefined
+    return models.filter((model) => typeof model?.id === 'string' && model.id.length > 0)
+  } catch (error) {
+    ctx.logger?.warn(
+      '[opencode-go] could not detect the "%s" model catalog: %s',
+      PROVIDER,
+      error?.message ?? String(error),
+    )
+    return undefined
+  }
 }
 
 async function waitForNamespace(settings) {
@@ -435,19 +594,23 @@ async function waitForNamespace(settings) {
 }
 
 /**
- * Ensure the opencode-go route lists the DeepSeek V4.1 models FIRST. No-ops when
- * the route is absent (only touch it when opencode-go exists) or when the list
- * already has the shape this plugin maintains.
+ * Ensure the opencode-go route carries the DeepSeek V4.1 models FIRST. No-ops
+ * when the route is absent (only touch it when opencode-go exists), when its
+ * catalog cannot be detected, or when the route already has the shape this
+ * plugin maintains.
  */
 async function ensureV41Models(ctx, settings) {
+  const catalog = await detectCatalogModels(ctx)
+  if (catalog === undefined) return
+
   let resolved
   try {
     resolved = settings.get(NS)
   } catch {
     return
   }
-  const profile = resolved?.providers?.[PROVIDER]
-  if (!profile) return // no opencode-go route configured
+  const route = resolved?.providers?.[PROVIDER]
+  if (!route) return // no opencode-go route configured
 
   let userSection
   try {
@@ -462,13 +625,18 @@ async function ensureV41Models(ctx, settings) {
     ctx.logger?.warn('[opencode-go] reading the user settings section failed: %s', error?.message ?? String(error))
     userSection = undefined
   }
-  // 只扩展用户自己配置过的 models 列表 —— 详见 nextV41Models 的说明（空列表写入会
-  // 用我们这份列表整体替换引擎目录，导致模型选择器只剩一个模型）。
-  const next = nextV41Models(userSection?.providers?.[PROVIDER])
-  if (next === null) return // not user-configured, or already in the shape we maintain
 
-  ctx.logger.info('[opencode-go] route exists; putting DeepSeek V4.1 models first: %s', V4_1_MODELS.map((m) => m.id).join(', '))
-  await settings.update(NS, { providers: { [PROVIDER]: { models: next } } })
+  const patch = planRouteUpdate(userSection?.providers?.[PROVIDER], route, catalog)
+  if (patch === null) return // already in the shape we maintain
+
+  ctx.logger.info(
+    '[opencode-go] detected %d "%s" model(s); putting %s first%s',
+    catalog.length,
+    PROVIDER,
+    V4_1_MODELS.map((m) => m.id).join(', '),
+    patch.baseURL === undefined ? '' : ` and declaring baseURL ${patch.baseURL}`,
+  )
+  await settings.update(NS, { providers: { [PROVIDER]: patch } })
 }
 
 function installAutoModels(ctx) {
@@ -494,7 +662,8 @@ function installAutoModels(ctx) {
     })()
 
     // Re-run whenever the user edits the llm-pi-ai settings (Models page or
-    // file). Idempotent: once the models sit at the front, later calls no-op.
+    // file). Idempotent: once the models sit at the front and the route has its
+    // endpoint, later calls no-op — including the call our own write triggers.
     const off = ctx.on('settings/document-updated', (ns) => {
       if (ns === NS) ensure()
     })

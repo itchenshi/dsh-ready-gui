@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { V4_1_MODELS, headerValueFor, isV41, nextV41Models, patchFetch, redactSessionId, withStore, withV41ModelsFirst } from '../lib/index.js'
+import { V4_1_MODELS, headerValueFor, isV41, patchFetch, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -153,9 +153,33 @@ check('withV41ModelsFirst moves an already-listed model to the front', () => {
 check('withV41ModelsFirst keeps the user\'s own entry for our model id', () => {
   const tuned = { id: 'deepseek-v4.1-flash', name: '我的 Flash', contextWindow: 1234 }
   const next = withV41ModelsFirst([{ id: 'a' }, tuned])
-  assert.equal(next[0], tuned, 'the same object is reused, not replaced by our default')
-  assert.equal(next[0].name, '我的 Flash')
-  assert.equal(next[0].contextWindow, 1234)
+  assert.equal(next[0].name, '我的 Flash', 'the user name wins')
+  assert.equal(next[0].contextWindow, 1234, 'the user limits win')
+  assert.equal(next[0].maxTokens, V4_1_MODELS[0].maxTokens, 'a field the user left out is filled in')
+})
+
+check('withV41Defaults adds the wire facts a catalog-unknown model needs', () => {
+  // The 400 fix: without these, the replayed assistant turns omit
+  // reasoning_content and DeepSeek refuses every multi-turn conversation.
+  const def = V4_1_MODELS[0]
+  assert.equal(def.compat.requiresReasoningContentOnAssistantMessages, true)
+  assert.equal(def.compat.thinkingFormat, 'deepseek')
+  assert.deepEqual(def.reasoningEfforts, { off: null, low: 'low', high: 'high', max: 'max' })
+
+  // an entry written before this plugin knew about them gets completed
+  const upgraded = withV41Defaults({ id: def.id, name: '我的 Flash', contextWindow: 1234 }, def)
+  assert.equal(upgraded.name, '我的 Flash')
+  assert.equal(upgraded.contextWindow, 1234)
+  assert.deepEqual(upgraded.compat, def.compat)
+  assert.deepEqual(upgraded.reasoningEfforts, def.reasoningEfforts)
+
+  // the user's own compat switches win; ours fill the gaps
+  const partial = withV41Defaults({ id: def.id, compat: { supportsStore: true } }, def)
+  assert.equal(partial.compat.supportsStore, true, 'an explicit user switch is never overwritten')
+  assert.equal(partial.compat.requiresReasoningContentOnAssistantMessages, true, 'the rest is filled in')
+
+  // an explicit non-reasoning decision is a whole answer and is respected
+  assert.equal(withV41Defaults({ id: def.id, reasoningEfforts: false }, def).reasoningEfforts, false)
 })
 
 check('withV41ModelsFirst handles a missing/empty list', () => {
@@ -165,7 +189,7 @@ check('withV41ModelsFirst handles a missing/empty list', () => {
 })
 
 check('withV41ModelsFirst is idempotent (null once the shape is right)', () => {
-  const already = [{ id: 'deepseek-v4.1-flash' }, { id: 'deepseek-v4-flash' }]
+  const already = [{ ...V4_1_MODELS[0] }, { id: 'deepseek-v4-flash' }]
   assert.equal(withV41ModelsFirst(already), null)
   // a second pass over its own output is a no-op -> no settings write loop
   assert.equal(withV41ModelsFirst(withV41ModelsFirst([{ id: 'x' }])), null)
@@ -179,25 +203,136 @@ check('an unrelated upstream v4.1 model does not suppress our own', () => {
   assert.deepEqual(next.map((m) => m.id), ['deepseek-v4.1-flash', 'deepseek-v4.1-pro'])
 })
 
-check('nextV41Models only extends a models list the USER configured', () => {
-  // The engine treats a non-empty configured list as the provider's COMPLETE model
-  // set, so writing one where the user had none would replace the whole built-in
-  // catalog with a single model. The decision must therefore read the user layer.
-  assert.equal(nextV41Models(undefined), null, 'route not configured by the user')
-  assert.equal(nextV41Models(null), null)
-  assert.equal(nextV41Models({}), null, 'no models key -> catalog stays authoritative')
-  assert.equal(nextV41Models({ models: [] }), null, 'empty list -> nothing to extend')
-  assert.equal(nextV41Models({ models: 'nope' }), null, 'non-array -> refuse')
-  // a user list is extended, with our models in front
-  const extended = nextV41Models({ models: [{ id: 'deepseek-v4-flash' }] })
-  assert.equal(extended.length, 1 + V4_1_MODELS.length)
-  assert.equal(extended[0].id, V4_1_MODELS[0].id)
-  assert.equal(extended[1].id, 'deepseek-v4-flash')
-  // already in the shape we maintain -> no write
-  assert.equal(nextV41Models({ models: [{ id: V4_1_MODELS[0].id }] }), null)
-  // apiKey/baseUrl siblings are irrelevant to the decision
-  assert.ok(Array.isArray(nextV41Models({ apiKeyRef: 'X', models: [{ id: 'deepseek-v4.1-pro' }] })))
-  assert.ok(Array.isArray(nextV41Models({ apiKeyRef: 'X', models: [{ id: 'a' }] })))
+// --- model half: planRouteUpdate ---
+
+// The installed catalog as `llm.discoverModels()` reports it: a few models that
+// each carry their own per-model baseUrl, and none of them V4.1 Flash.
+const CATALOG = [
+  { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 1000000, maxTokens: 131072 },
+  { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 384000 },
+  { id: 'kimi-k3', name: 'Kimi K3', contextWindow: 1048576, maxTokens: 131072 },
+]
+
+check('planRouteUpdate seeds a full list when the user configured none', () => {
+  // The bug this fixes: nothing was written at all, so V4.1 Flash never appeared
+  // in the picker for a route that relies on the served catalog.
+  const patch = planRouteUpdate(undefined, { api: 'openai-completions' }, CATALOG)
+  assert.ok(patch, 'a patch is produced')
+  assert.deepEqual(patch.models.map((m) => m.id), [
+    V4_1_MODELS[0].id,
+    'minimax-m3',
+    'deepseek-v4-flash',
+    'kimi-k3',
+  ])
+  // our entry keeps its own limits; the detected ones stay catalog-shaped
+  assert.equal(patch.models[0].contextWindow, V4_1_MODELS[0].contextWindow)
+  assert.deepEqual(patch.models[1], { id: 'minimax-m3', name: 'MiniMax-M3' })
+  // a catalog-unknown model is listed -> the route needs an endpoint, or the
+  // engine refuses the very write that adds it ("needs a baseURL").
+  assert.equal(patch.baseURL, 'https://opencode.ai/zen/go/v1')
+})
+
+check('planRouteUpdate extends a user list and keeps its order', () => {
+  const patch = planRouteUpdate(
+    { models: [{ id: 'deepseek-v4-flash' }, { id: 'kimi-k3' }] },
+    { baseURL: 'https://opencode.ai/zen/go/v1' },
+    CATALOG,
+  )
+  assert.deepEqual(patch.models.map((m) => m.id), [V4_1_MODELS[0].id, 'deepseek-v4-flash', 'kimi-k3'])
+  assert.equal(patch.models[1].id, 'deepseek-v4-flash', 'the user entry is reused verbatim')
+  assert.equal(patch.baseURL, undefined, 'the route already has an endpoint')
+})
+
+check('planRouteUpdate repairs an already-hoisted list that has no baseURL', () => {
+  // A hand-written settings.yaml can hold the right ORDER while the route still
+  // has no endpoint — the engine then drops the catalog-unknown model silently.
+  const patch = planRouteUpdate(
+    { models: [{ ...V4_1_MODELS[0] }, { id: 'kimi-k3' }] },
+    { api: 'openai-completions' },
+    CATALOG,
+  )
+  assert.equal(patch.models, undefined, 'the order is already right')
+  assert.equal(patch.baseURL, 'https://opencode.ai/zen/go/v1')
+})
+
+check('planRouteUpdate upgrades an entry that predates the reasoning compat', () => {
+  // THE 400 FIX: a user who already has V4.1 Flash — added by an earlier version
+  // of this plugin, the GUI model page, or by hand — carries no compat block, so
+  // DeepSeek rejects every replayed assistant turn. That entry is still first (no
+  // reordering to do), and the write must happen anyway to add the wire facts.
+  const patch = planRouteUpdate(
+    {
+      models: [
+        { id: V4_1_MODELS[0].id, name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000 },
+        { id: 'kimi-k3' },
+      ],
+    },
+    { baseURL: 'https://opencode.ai/zen/go/v1' },
+    CATALOG,
+  )
+  assert.ok(patch, 'a patch is produced even though the order was already right')
+  assert.equal(patch.baseURL, undefined, 'the endpoint is already there')
+  assert.deepEqual(patch.models[0].reasoningEfforts, V4_1_MODELS[0].reasoningEfforts)
+  assert.deepEqual(patch.models[0].compat, V4_1_MODELS[0].compat)
+  assert.equal(patch.models[1].id, 'kimi-k3', 'the user list is otherwise untouched')
+})
+
+check('planRouteUpdate supplies no baseURL once the catalog describes our models', () => {
+  // When upstream catches up, the catalog supplies the endpoint itself and the
+  // route must stay untouched (writing one would repoint the route's models).
+  const catalog = [{ ...V4_1_MODELS[0] }, ...CATALOG]
+  const patch = planRouteUpdate({ models: [{ id: 'kimi-k3' }] }, {}, catalog)
+  assert.deepEqual(patch.models.map((m) => m.id), [V4_1_MODELS[0].id, 'kimi-k3'])
+  assert.equal(patch.baseURL, undefined)
+})
+
+check('planRouteUpdate is idempotent in both directions', () => {
+  const userList = { models: [{ ...V4_1_MODELS[0] }, { id: 'kimi-k3' }] }
+  // the seeded write lands as a user list; the next pass must be a no-op
+  const first = planRouteUpdate(undefined, {}, CATALOG)
+  const stored = { models: first.models }
+  const second = planRouteUpdate(stored, { baseURL: first.baseURL }, CATALOG)
+  assert.equal(second, null, 'no write loop through settings/document-updated')
+  // a user list that is already in shape is left alone
+  assert.equal(planRouteUpdate(userList, { baseURL: 'x' }, CATALOG), null)
+  // A route the user configured nothing for is seeded once even when the detected
+  // catalog already lists our model: a detected entry is reduced to id+name, so it
+  // cannot carry the wire facts we maintain. The seeded result is stable after.
+  const covered = [{ id: V4_1_MODELS[0].id, name: 'DeepSeek V4.1 Flash' }, ...CATALOG.map((m) => ({ id: m.id, name: m.name }))]
+  const seeded = planRouteUpdate(undefined, {}, covered)
+  assert.ok(seeded, 'the catalog entry is completed with our fields')
+  assert.deepEqual(seeded.models[0], { ...V4_1_MODELS[0] })
+  assert.equal(planRouteUpdate({ models: seeded.models }, { baseURL: 'x' }, covered), null)
+})
+
+check('planRouteUpdate refuses to guess when detection failed', () => {
+  // No catalog means a route the user configured nothing for cannot be
+  // described; writing our models alone would shrink the picker to one entry.
+  assert.equal(planRouteUpdate(undefined, {}, undefined), null)
+  assert.equal(planRouteUpdate(undefined, {}, null), null)
+  assert.equal(planRouteUpdate(undefined, {}, 'nope'), null)
+})
+
+check('planRouteUpdate tolerates junk in the catalog and the user layer', () => {
+  const patch = planRouteUpdate({ models: 'nope' }, {}, [null, { id: '' }, { id: 'kimi-k3' }])
+  assert.deepEqual(patch.models.map((m) => m.id), [V4_1_MODELS[0].id, 'kimi-k3'])
+  assert.equal(patch.baseURL, 'https://opencode.ai/zen/go/v1')
+})
+
+check('planRouteUpdate treats an explicit empty list as unconfigured', () => {
+  // `models: []` resolves to the served catalog in the engine, so seeding it is
+  // the same decision as having no list at all.
+  const patch = planRouteUpdate({ models: [] }, {}, CATALOG)
+  assert.equal(patch.models.length, CATALOG.length + V4_1_MODELS.length)
+  assert.equal(patch.models[0].id, V4_1_MODELS[0].id)
+})
+
+check('planRouteUpdate keeps a tuned user entry for our id', () => {
+  const tuned = { id: V4_1_MODELS[0].id, name: '我的 Flash', contextWindow: 1234 }
+  const patch = planRouteUpdate({ models: [{ id: 'kimi-k3' }, tuned] }, { baseURL: 'x' }, CATALOG)
+  assert.equal(patch.models[0].name, '我的 Flash', 'the user name wins')
+  assert.equal(patch.models[0].contextWindow, 1234, 'the user limits win')
+  assert.deepEqual(patch.models[0].compat, V4_1_MODELS[0].compat, 'the wire facts are still filled in')
 })
 
 await Promise.resolve()

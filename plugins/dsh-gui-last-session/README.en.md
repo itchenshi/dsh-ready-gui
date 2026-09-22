@@ -4,158 +4,64 @@
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
 Reopen the conversation you were last in after restarting
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) — no digging through history.
 
-This plugin replaces the DSH GUI's old **engine-file patch** for the same feature.
+## Install and go
 
-## Why this is a plugin
+- **Using DSH Ready GUI (recommended)**: the plugin **ships inside the GUI** and is **on by default** —
+  installing the GUI already gives you the feature. To turn it off, untick it in Settings →
+  Third-party plugins.
+- **Any other DSH host** (`dsh web`, the CLI):
 
-The previous implementation did not extend DSH — it *edited DSH's own files*. It
-rewrote `node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`,
-locating its insertion point by matching engine source text and gating on an
-exact engine version string.
+  ```sh
+  git clone https://github.com/itchenshi/dsh-gui-last-session.git
+  dsh plugin --profile web add file:<absolute path of the clone>
+  ```
 
-That made the feature fail on **almost every engine update**:
+  That installs the real on-disk directory, so a later `git pull` updates the very code in use — but
+  moving or deleting the directory breaks the dependency (just add it again). Then **restart the
+  engine** (plugins are installed by directory and assembled at startup).
 
-| Failure mode | Cause |
+> Not on npm yet: sign-up is unreachable (`www.npmjs.com` answers with a Cloudflare challenge), so
+> nothing can be published. Use one of the two routes above; publishing resumes once sign-up works.
+
+## What it fixes
+
+The original implementation **rewrote an engine file**: it patched
+`node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`, located the insertion point by
+matching engine source text, and gated on an exact engine version string. So the feature broke on
+**almost every engine update**:
+
+| How it broke | Why |
 |---|---|
-| Version gate | The patch refused to apply unless the engine version was *exactly* the one it was written against. |
-| Anchor drift | The insertion point was found by matching literal source lines; any rebuild, rename, or reformat broke it. |
-| Silent degradation | On failure it returned `{ ok: false }` and logged one line — so the feature just stopped working with no visible error. |
-| Re-install loss | Reinstalling the engine wiped the patch entirely. |
+| Version gate | Any engine version other than the one it was written against refuses to apply |
+| Anchor drift | The insertion point was found by matching literal source lines; a rebuild, rename or reformat invalidates it |
+| Silent degradation | On failure it logged one line and returned — the feature was simply gone, with no visible error |
+| Lost on reinstall | Reinstalling the engine wiped the patch |
 
-A plugin lives in its own package and talks to the engine through its published
-service contract (`ctx.sessions`), so an engine update no longer deletes the
-feature. When the contract does change, the engine reports it loudly instead of
-quietly disabling the feature.
+It is now a **plugin**: it lives in its own package and talks to the engine through the published
+service contract (`ctx.sessions`), so engine updates no longer delete the feature. If that contract ever
+changes, the engine **fails loudly** instead of quietly turning the feature off.
 
-## Install
+## Behaviour details
 
-> **Not on npm yet — the only install path today is from source.**
->
-> The plan was to publish the four bundled plugins to npm, so that `dsh plugin add dsh-gui-last-session` would
-> work in any DSH host. npm account sign-up is currently unreachable: `www.npmjs.com` answers its
-> sign-up/sign-in pages with a Cloudflare managed challenge (`registry.npmjs.org` itself is
-> reachable — sign-up is what is blocked), so no account can be created and nothing can be
-> published. Therefore:
->
-> - **Using DSH Ready GUI**: these four plugins ship inside the GUI — open Settings → Third-party
->   plugins and tick the row, no command line needed. (Installing your own checkout by hand in the
->   GUI is deliberately reverted by boot maintenance.)
-> - **Other DSH hosts** (`dsh web`, the CLI, …): install from source as described below.
->
-> Publishing to npm will resume once sign-up works; `dsh plugin --profile web add dsh-gui-last-session` will work
-> then.
+Two behaviours are critical, and both are covered by tests:
 
-**Option 1 — DSH Ready GUI (recommended)**: these four plugins ship inside the GUI. Open the GUI →
-Settings → Third-party plugins → tick **会话续接（dsh-gui-last-session）**. Install, uninstall and enable/disable
-all live in that window; restart the engine when it says so.
+1. **The blank session the engine boots into is never recorded.** While the page loads, the engine
+   navigates to a workspace and may create or select an *empty* session; recording it would make the
+   next launch resume an empty conversation. Two independent defences:
+   - recording stays **disabled** until the resume attempt settles (or a 4s fallback timer fires), so
+     the engine's startup navigation happens before the plugin starts listening;
+   - even once enabled, a row flagged `blank: true` is never recorded.
 
-**Option 2 — any other DSH host**: clone this repository, then install it by **directory**:
+2. **Resuming waits for the target to become addressable.** The session list arrives from the network
+   after the page mounts, and calling `open()` on an unknown id fails, so the plugin polls the list
+   snapshot (every 150ms, for up to ~30s) until the row appears, then selects it.
 
-```sh
-git clone https://github.com/itchenshi/dsh-gui-last-session.git
-dsh plugin --profile web add file:<absolute path of the clone>
-```
+**Best effort**: if the remembered session has been deleted, the plugin gives up quietly and leaves the
+engine's own startup behaviour in place.
 
-That installs the real on-disk directory, so a later `git pull` updates the very code in use — but
-moving or deleting the directory breaks the dependency (just add it again).
-
-Restart `dsh web` (or reopen DSH GUI) afterwards. The
-[plugin marketplace](https://github.com/dsh-market/dsh-market) installs from npm, and this package
-is not published yet, so **it cannot be installed from the market today** — use one of the two
-options above. It will work there too once published.
-
-The engine's `plugin` command is a thin pnpm forwarder: the package is installed by
-its **true package name** and, because the manifest declares `dsh.bundle.patch`, it
-joins the profile's bundle layer stack automatically. Bundle layers are read at boot,
-so **restart the engine** afterwards.
-
-## Permissions, dependencies and failure bounds
-
-Marketplaces that pin a commit (DSH STORE and similar) statically review the runtime
-source and report the permissions they detect. The facts:
-
-- **Runtime dependencies:** none — Node built-ins only (`node:fs/promises`,
-  `node:crypto`, `node:path`, `node:os`).
-- **Files: yes, exactly one.** The host half keeps a small pointer document at
-  `<DSH_HOME>/last-session.json`, written atomically (unique temporary name + rename)
-  so a crash cannot leave a half-written file. It records one session id and nothing
-  else; no other file is read or written and no user file is touched.
-- **Local route: yes, one.** The host registers a single page-facing route so the page
-  half can read and update that pointer; it goes through the engine's trust fence (Host
-  allow-list plus browser session cookie) and **fails closed** when the fence is
-  unavailable.
-- **Outbound network: none.** The only `fetch` calls are same-origin requests to the
-  local route above.
-- **Credentials / commands / native artifacts / lifecycle scripts:** none.
-- **Failure bounds:** a missing, unreadable or corrupt pointer is treated as
-  "nothing to hand over" — the plugin logs it and the launch simply starts on the
-  normal screen. It never blocks engine startup, and removing the plugin restores the
-  plain behaviour with no leftover state beyond that one file.
-
-## Two halves
-
-| Half | File | Runs in | Job |
-|---|---|---|---|
-| Host | `lib/index.js` | Node | Persists the pointer at `$DSH_HOME/last-session.json`; serves a tiny JSON route. |
-| Client | `client/client.js` | Browser | Records the current session; on load, reopens the stored one. |
-
-The client half is a **hand-written, dependency-free bundle** — there is no build
-step and no bundler.
-
-### Bundle format (important)
-
-The engine's client module system does **not** consume plain ESM. A client bundle
-must register a lazy CJS factory:
-
-```js
-window.__ModuleLoader__.load({
-  id: 'dsh-gui-last-session',            // must equal the package name
-  factory: (require) => ({ name, inject, apply, ... }),
-})
-```
-
-Executing the bundle only *registers* the factory; every side effect must live
-inside the factory closure and runs at materialization (first import). Because
-this plugin needs nothing but `ctx.sessions`, a single hand-written file
-satisfies the contract with no `require()` of other modules.
-
-**Two inject mechanisms — don't confuse them:**
-
-| Where | Values are | Purpose |
-|---|---|---|
-| `dsh.client.inject` in `package.json` | package names (e.g. `@deepseek-ai/dsh-api-session-controller`) | drive the browser module-graph **load order** |
-| exported `inject` from the bundle factory | **service names** (e.g. `['sessions']`) | drive the cordis fiber's inject for `apply(ctx)` |
-
-Both are required. Omitting the exported `inject` makes `ctx.sessions` in
-`apply()` throw `cannot get property "sessions" without inject` the moment the
-page loads — the failure this plugin originally hit. The engine's own
-`dsh-client-ui-session` bundle does `exports.inject = ["sessions", "slots"]`,
-the same pattern.
-
-`tests/test.mjs` loads the bundle through this exact contract, so either a
-regression back to plain ESM or a missing exported `inject` fails the suite
-rather than failing at runtime in the browser.
-
-## HTTP surface
-
-The host half registers exactly one route on the engine's own webserver:
-
-```
-GET  /gui-last-session   -> { sessionId: string | null, updatedAt?: number }
-POST /gui-last-session   -> { ok: true, sessionId, updatedAt }
-     body: { "sessionId": "session-..." }
-```
-
-Both directions validate the id against `/^session-[A-Za-z0-9_-]{4,200}$/`. A
-`POST` with anything else is rejected with `400` and the file is left untouched.
-The pointer is written atomically (temp file + rename), so a crash mid-write
-cannot leave a half-written file behind.
-
-## Configuration
-
-The plugin row lives in `cordis.patch.yml`; both keys are optional:
+## Configuration (the `cordis.patch.yml` row config, all optional)
 
 ```yaml
 - insert:
@@ -163,76 +69,40 @@ The plugin row lives in `cordis.patch.yml`; both keys are optional:
       name: dsh-gui-last-session
       config:
         enabled: true   # master switch
-        quiet: false    # true = log nothing on activate
+        quiet: false    # true = log nothing on activation
 ```
 
-To override configuration in a profile without editing the package, add a row
-with the same id in the profile's own `cordis.patch.yml` (it replaces the whole
-`config`, so restate every key).
+To override it for one profile without touching the package, add a row with the same id to **that
+profile's own** `cordis.patch.yml` (it replaces `config` wholesale, so spell out every key).
 
-## Correctness notes
+## Permissions and boundaries (for marketplaces that scan statically)
 
-Two behaviours matter, and both are covered by tests:
+- **Runtime dependencies: none.** Node built-ins only (`node:fs/promises`, `node:crypto`, `node:path`,
+  `node:os`).
+- **Files: exactly one.** The host half keeps a tiny pointer document at `<DSH_HOME>/last-session.json`,
+  written **atomically** (unique temp name + rename), so a crash cannot leave half a file. It records a
+  session id and nothing else.
+- **Local routes: one.** The host registers a single page-facing route the page half uses to read and
+  update that pointer; it goes through the engine's trust fence (Host allow-list + browser session
+  cookie) and **fails closed** when the fence is unavailable.
+- **Outbound network: none.** The only `fetch` is the same-origin request to that local route.
+- **Credentials / commands / native artifacts / lifecycle scripts: none.**
+- **Failure boundary:** a missing, unreadable or corrupt pointer is treated as "nothing to resume" — one
+  log line, and startup proceeds normally. It never blocks engine startup, and uninstalling it restores
+  native behaviour with no leftover state beyond that one file.
 
-1. **The blank bootstrap session is never recorded.** On page load the engine
-   itself navigates to a workspace and may create/select an *empty* session. If
-   that got recorded, the stored pointer would become "the empty session the
-   engine just made" and the next start would reopen nothing useful. This was a
-   real observed failure of the old patch. Two independent guards prevent it:
-   - Recording stays **disarmed** until the reopen attempt has settled (or a 4s
-     fallback timer fires), so the engine's bootstrap navigation happens while
-     the plugin is not yet listening for changes.
-   - Even once armed, a row flagged `blank: true` is never recorded.
+## HTTP interface
 
-2. **Reopening waits for the target to become addressable.** The session list
-   arrives over the network after the page mounts. The contract says `open()`
-   on an unknown id fails loud, so the plugin polls the list snapshot (150ms
-   intervals, ~30s ceiling) until the row exists, then selects it.
+```
+GET  /gui-last-session   -> { sessionId: string | null, updatedAt?: number }
+POST /gui-last-session   -> { ok: true, sessionId, updatedAt }
+     body: { "sessionId": "session-..." }
+```
 
-A snapshot that throws (service tearing down, not ready yet) does not abort the
-wait — the poll simply continues.
-
-## Compatibility
-
-This plugin depends on **published service contracts**, not on an engine version
-number, so it is deliberately **not** version-gated.
-
-Verified working on **dsh 0.1.5-rc.1** (and the contract is identical on
-0.1.2-rc.1):
-
-| Dependency | Contract used |
-|---|---|
-| `ctx.sessions` (client) | `list` (ObservableSnapshot), `open(id)`, `binding(id)` |
-| `SessionListState` | `current`, `byId`, `byId[id].blank` |
-| `ctx.webServer` (host) | `register({ kind, path, handler })` |
-| Injection package | `@deepseek-ai/dsh-api-session-controller` |
-
-End-to-end check on 0.1.5-rc.1: the engine boots with the plugin installed,
-`GET /gui-last-session` returns the stored pointer, and
-`dsh-gui-last-session/client.js` is served inside the boot payload's plugin
-bundle (HTTP 200).
-
-If a future engine breaks one of these contracts, activation **fails loudly**
-(the engine reports a plugin load failure) rather than silently disabling the
-feature — then update `dsh.client.inject` and the host route accordingly.
-
-> Note: this plugin is intentionally **not** given an `engineRange` in the DSH GUI
-> catalog. Version ranges are a poor fit here: npm semver excludes prereleases
-> from ranges unless the range names a prerelease at the exact
-> `[major,minor,patch]`, so a range like `>=0.1.2-0 <0.2.0` would wrongly block
-> `0.1.5-rc.1`. The plugin is also low-risk: its worst case is "the conversation
-> wasn't reopened", never a broken engine boot.
-
-## Migrating from the DSH GUI pointer
-
-DSH GUI keeps its own pointer at `<userData>/last-session.json`. This plugin
-deliberately owns a **separate** file so it stays self-contained and works for
-anyone who installs it, not just DSH GUI users. DSH GUI performs this hand-off
-automatically at startup (one-way: it never overwrites a pointer the plugin
-already recorded). To do it by hand, copy the `sessionId` across — note the route
-is behind the engine's trust fence, so a bare `curl` now gets **401**
-(pass the engine's session cookie: open the engine URL printed by `dsh web` once,
-then reuse its cookie):
+Both directions validate the id against `/^session-[A-Za-z0-9_-]{4,200}$/`; a `POST` carrying anything
+else is rejected with `400` and the file is left as it was. The route sits behind the trust fence, so a
+bare `curl` gets **401** — to call it by hand, open the URL `dsh web` prints to obtain the session
+cookie and pass it along:
 
 ```sh
 curl -X POST http://127.0.0.1:<port>/gui-last-session \
@@ -241,6 +111,25 @@ curl -X POST http://127.0.0.1:<port>/gui-last-session \
      -d '{"sessionId":"session-..."}'
 ```
 
+## Two halves
+
+| Half | File | Runs in | Responsibility |
+|---|---|---|---|
+| Host | `lib/index.js` | Node | Atomically persists the pointer to `$DSH_HOME/last-session.json`; serves one tiny JSON route |
+| Page | `client/client.js` | Browser | Records the current session; reopens the stored one on load |
+
+The page half is a **hand-written, dependency-free bundle** — no build step, no bundler. The engine's
+client module system does **not** accept plain ESM: the bundle must register a lazy CJS factory
+(`window.__ModuleLoader__.load({ id, factory })`, where `id` must equal the package name) and every side
+effect must live in the factory closure, running only at materialisation. **Do not confuse the two
+inject mechanisms**: `dsh.client.inject` in `package.json` lists **package names** (it sets the browser
+module graph's load order), while the `inject` exported by the bundle factory lists **service names**
+(such as `['sessions']`). Both are required — drop the exported one and the page throws
+`cannot get property "sessions" without inject` the moment `apply()` runs.
+
+`tests/test.mjs` loads the bundle against exactly that contract, so a regression to plain ESM or a
+missing exported `inject` fails the suite instead of blowing up in the browser.
+
 ## Development
 
 ```sh
@@ -248,19 +137,14 @@ node --check lib/index.js
 npm test        # local behaviour tests (no network, no engine)
 ```
 
-`npm test` also asserts the client bundle registers under the engine's
-`__ModuleLoader__` contract with the correct package id.
+**Compatibility**: the plugin depends on **published service contracts**, not an engine version, so it
+deliberately declares **no version range** (a range is also the wrong tool here: npm semver excludes
+prereleases from ranges like `>=0.1.2-0 <0.2.0`, which would wrongly reject `0.1.5-rc.1`). Verified
+end-to-end on dsh 0.1.5-rc.1: the engine starts with the plugin installed, `GET /gui-last-session`
+returns the stored pointer, and `dsh-gui-last-session/client.js` ships inside the startup payload
+(HTTP 200).
 
-The package is plain JavaScript with zero dependencies.
-
-## Notes / limitations
-
-- The plugin relies on `ctx.sessions` (client) and `ctx.webServer` (host). If a
-  future DSH version renames either service, activation reports the failure
-  instead of silently disabling the feature — update `package.json`'s
-  `dsh.client.inject` accordingly.
-- Reopening is best-effort: if the remembered session was deleted, the plugin
-  gives up quietly and leaves the engine's own startup behaviour in place.
+This package is plain JavaScript with zero dependencies.
 
 ## License
 

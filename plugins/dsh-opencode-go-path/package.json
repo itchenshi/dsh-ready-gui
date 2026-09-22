@@ -1,7 +1,7 @@
 {
   "name": "dsh-opencode-go-path",
-  "version": "0.1.2",
-  "description": "DeepSeek Harness plugin for the OpenCode / OpenCode Go routes: declares the route wire protocol, keeps the DeepSeek V4.1 models at the front of the model list, and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
+  "version": "0.1.4",
+  "description": "DeepSeek Harness plugin for the OpenCode / OpenCode Go routes: declares the route wire protocol, detects the route's model catalog and puts the DeepSeek V4.1 models at the front of the model list (supplying the route baseURL and the DeepSeek reasoning compat a catalog-unknown model needs), and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

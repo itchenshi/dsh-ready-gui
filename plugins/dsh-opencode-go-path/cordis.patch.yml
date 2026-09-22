@@ -13,8 +13,27 @@
 #      correct (the same choice the user settings document makes for
 #      bailian-tpp).
 #
-#   2. Mount this plugin's host half (lib/index.js), which auto-adds the
-#      DeepSeek V4.1 models to the route's models list when the route exists.
+#   2. Mount this plugin's host half (lib/index.js), which DETECTS the route's
+#      models from the engine's own catalog and puts the DeepSeek V4.1 models at
+#      the FRONT of the route's models list — seeding that list from the detected
+#      catalog when the user configured none, and declaring the route's baseURL
+#      when a listed model is not in the catalog (the only way the engine will
+#      serve one).
+#
+#      Why that baseURL matters: a catalog-unknown model resolves its endpoint as
+#        baseURL = route.baseURL ?? catalogModel.baseUrl ?? providerBaseUrl
+#      and the installed opencode-go catalog provider has no provider-level
+#      baseUrl, so such a model has nowhere to point — the engine then refuses
+#      both to serve it ("needs a baseURL") and to STORE it, which is why the
+#      model never reached the picker. The runtime half supplies the endpoint only
+#      when the route has none, so a route the user pointed elsewhere keeps its own.
+#
+#      Those entries also carry the DeepSeek wire quirks the catalog would
+#      otherwise supply (`compat` + `reasoningEfforts`): pi-ai auto-detects them
+#      from the provider name or host, and the OpenCode Go relay is neither, so
+#      without them the replayed assistant turns omit `reasoning_content` and
+#      DeepSeek answers 400 "The reasoning_content in the thinking mode must be
+#      passed back to the API" on every multi-turn call.
 #
 #   3. Attach `x-opencode-session` to model requests routed to an OpenCode /
 #      OpenCode Go provider profile (see the row config below).
