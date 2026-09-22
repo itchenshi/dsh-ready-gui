@@ -34,57 +34,84 @@ The three repositories are mirrors of each other; installers are published on [G
 | Gitee (mirror) | https://gitee.com/itchenshi/dsh-ready-gui | `git clone https://gitee.com/itchenshi/dsh-ready-gui.git` |
 | GitCode (mirror) | https://gitcode.com/itchenshi/dsh-ready-gui | `git clone https://gitcode.com/itchenshi/dsh-ready-gui.git` |
 
-## 📦 Related repositories (bundled plugins)
+## 📦 Bundled plugins and their standalone repositories
 
-Since v0.5.0 the four bundled plugins each live in their own repository and are published to npm.
-They are **host-agnostic**: install them with `dsh plugin add` on the official desktop app, a Tauri
-client, `dsh web` or the CLI — or one-click from the
-[plugin marketplace](https://github.com/dsh-market/dsh-market).
+The four plugins — model surplus, session resume, OpenCode Go routes, key bindings — **ship inside the
+app**: the sources live in [`plugins/`](plugins/), so installing the GUI installs them. Install,
+uninstall and enable/disable all happen in the settings window; you never run `dsh plugin add`
+yourself. Each one also has its own repository, with the package name matching the repository name:
 
-| Plugin | npm package | Repository |
+| Plugin | Package | Repository |
 |---|---|---|
 | Model surplus | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
 | Session resume | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
 | OpenCode Go routes | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
 | Key bindings | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
-```bash
-dsh plugin --profile web add dsh-model-surplus
-```
-
+> **Why bundled rather than installed from npm**: the plan was to publish them to npm so plugin
+> updates would not have to wait for a shell release. npm account sign-up is currently unreachable
+> (`www.npmjs.com` answers with a Cloudflare managed challenge), so the packages cannot be published
+> — and a profile that registers a package the registry does not have makes the plugin vanish from the
+> engine's bundle list *and* makes **every** install operation in that profile fail (both reproduced).
+> So they stay **bundled**; the four standalone repositories are kept for when publishing works.
+>
 > **A few packages were renamed**: `dsh-opencode-go` (and `dsh-opencode-go-plus`) and
 > `dsh-composer-keys` were already taken on npm by other authors, and `dsh-model-usage` — though free
-> — already had three same-named GitHub repositories by others. The final names are
-> **`dsh-opencode-go-path`**, **`dsh-keys-setting`** and **`dsh-model-surplus`**. This is purely about
-> the install name — the features are unchanged.
+> — already had three same-named GitHub repositories by others. To avoid a future name collision the
+> final names are **`dsh-opencode-go-path`**, **`dsh-keys-setting`** and **`dsh-model-surplus`**. This
+> is purely about the install name — the features are unchanged, and existing users need to do
+> nothing (see below).
+
+Renaming does not disturb existing installs: boot maintenance unregisters the old package names,
+clears stale patch rows and carries the disabled choice over. A bundled plugin registered from
+somewhere else (a development checkout, npm, an old staging directory) is switched back to the copy
+that ships with the app — and if that fails, the previous install is restored, so the plugin is never
+lost.
+
+`scripts/publish-plugins.ps1` is for when publishing becomes possible again (it forces the official
+registry, validates each tarball and re-checks on the registry after publishing):
+
+```powershell
+# Log in to the official registry first — do not drop --registry:
+# if your .npmrc points at a mirror, a bare `npm login` logs you in there and the token is useless on npmjs
+npm login --registry=https://registry.npmjs.org
+
+powershell -File scripts/publish-plugins.ps1 -DryRun   # dry run, publishes nothing
+powershell -File scripts/publish-plugins.ps1           # publish all four
+```
 
 ## 🆕 What's new in v0.5.0
 
-- **📦 Plugins split out and published to npm**: the four bundled plugins (model surplus,
-  session resume, OpenCode Go routes, key bindings) are **no longer packaged with this
-  repository**. Each is its own repository and an npm package, and DSH Ready GUI now installs them from the
-  registry like `dsh-market` does. Plugin updates no longer wait for a shell release, and the plugins
-  work in any DSH host.
+- **📦 Plugins renamed and given standalone repositories**: the four bundled plugins (model surplus,
+  session resume, OpenCode Go routes, key bindings) **still ship inside the app** (sources in
+  `plugins/`, so installing the GUI installs them), and each now has its own repository with a
+  matching package name. **The original plan was to publish them to npm and have the shell install
+  them from the registry like `dsh-market`** — plugin updates would no longer wait for a shell
+  release, and any DSH host could install them. But npm account sign-up is currently unreachable, so
+  the packages cannot be published, and a profile registering a package the registry does not have
+  makes the plugin vanish from the engine's bundle list (reproduced). They therefore stay **bundled**.
 - **⚠️ Three package names changed**: `dsh-opencode-go` → **`dsh-opencode-go-path`** and
   `dsh-composer-keys` → **`dsh-keys-setting`** (both were taken on npm by other authors), plus
   `dsh-model-usage` → **`dsh-model-surplus`** (the npm name was free, but three other GitHub
   repositories already used it — two of them declaring it in their own package.json — so the name was
-  changed before the first publish rather than racing for it).
+  changed up front rather than racing for it later).
   No manual work for existing users: boot maintenance removes the old package names once (unregisters
   the bundle, clears stale patch rows, carries the disabled choice over), so the old and new copies
   never load side by side. **The patch-layer row ids and settings namespaces are unchanged**
   (`composer-keys` / `model-usage`), so saved keybindings and the enable/disable choice survive the rename.
-- **🔁 Old `file:` installs are converted to registry installs**: v0.4.1 staged the plugins into
-  `<home>\.dsh-gui\bundled-plugins` and installed them with a `file:` spec, so `dsh-gui-last-session`
-  (**the one whose name did not change**) would also stay frozen on the old copy and
-  never get updates — and a cleaned-up staging directory would make the profile fail to boot. Boot
-  maintenance now detects those entries (a `file:` spec whose path is inside `.dsh-gui/bundled-plugins`)
-  and replaces them with the npm package — and if that replacement fails it restores the previous
-  install, so the plugin is never lost. **Only that one staging directory counts**: a deliberate
-  install from your own checkout is left alone. The three renamed ones go through the rename
-  migration instead.
-- **🧹 The app.asar staging machinery is gone**: it existed only because a child pnpm cannot read
-  inside app.asar. With every entry coming from the registry, nothing needs a `file:` install.
+- **🔁 The install source of bundled plugins is managed by the app**: the copy that ships with the app
+  is staged into `<home>\.dsh-gui\bundled-plugins` and installed with a `file:` spec — that is the
+  only "genuine" copy. If the profile's dependency points anywhere else (a development checkout, an
+  npm/git install, an old staging directory), boot maintenance switches it back — otherwise the app
+  is no longer self-contained: a dependency pointing at a checkout was measured to make the plugin
+  impossible to install once that directory disappears. If the switch fails, the previous install is
+  restored, so the plugin is never lost. **Only entries the user has ticked are touched**: install
+  mode leaves unchecked plugins alone.
+- **🧹 The staging machinery stays (still the v0.4.1 shape)**: a bundled plugin cannot be installed
+  from a path inside app.asar (a child pnpm treats app.asar as a plain file), so the main process
+  copies it into a real directory on disk first. v0.5.0 removed this machinery for a while (nothing
+  needed a `file:` install once every entry came from the registry); it is restored verbatim now that
+  the plugins are bundled again, including the 8.3 short-path handling for paths with spaces.
 
 ## 🆕 What's new in v0.4.1
 
@@ -144,8 +171,8 @@ A plugin has **two orthogonal states**. The settings window gives each its own c
 - **Disagreements self-heal**: if the market disabled a plugin but the disable row never made it into the profile patch layer (in which case the engine is in fact still loading it), boot maintenance and "Repair / retry" write the real disable, and the settings window says why in the meantime.
 - **Boot maintenance** (installed catalog entries only): bundled plugins are reinstalled when their bundled code was updated; installed entries whose `engineRange` is incompatible with the current engine (these can crash the profile) are removed before spawn; user-installed extra bundles are never touched. Renamed/merged catalog entries are also migrated here: the old package is unregistered and its replacement installed, carrying the enabled/disabled choice over.
 - **"Repair / retry" button**: reconciles against the currently installed set (pulls bundled-plugin updates), additive only — safe to use as a retry after a failed install; it also aligns the enabled/disabled state and runs the same rename migration.
-- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Session resume (dsh-gui-last-session) · **Model surplus (dsh-model-surplus)** · OpenCode Go routes (dsh-opencode-go-path) · Key bindings (dsh-keys-setting). The settings order is exactly this order. **The last four are separate repositories and npm packages since v0.5.0** — all installed from the registry, no longer packaged here.
-- **How each change takes effect is stated per plugin**: install/uninstall edits the profile's bundle list, which the engine assembles only at boot, so it **needs an engine restart**; enable/disable writes the patch layer, which the engine **hot-reloads live**; a plugin with a page half (`dsh.client`) additionally needs a **Harness page reload** for that half. The two general rules live in the section note (repeating them on every row only made the window taller); the **per-plugin difference — “page half · reload page” — is a small tag on that row**. The GUI detects the page half from the plugin's package.json (an uninstalled npm entry cannot be inspected, so nothing is tagged).
+- **Curated catalog (verified community plugins)**: Plugin marketplace (dsh-market) · Session resume (dsh-gui-last-session) · **Model surplus (dsh-model-surplus)** · OpenCode Go routes (dsh-opencode-go-path) · Key bindings (dsh-keys-setting). The settings order is exactly this order. **The last four ship inside the app** (sources in `plugins/`, so installing the GUI installs them; each also has a standalone repository, see "Bundled plugins" above). The first one (dsh-market) is a community plugin installed from the registry.
+- **How each change takes effect is stated per plugin**: install/uninstall edits the profile's bundle list, which the engine assembles only at boot, so it **needs an engine restart**; enable/disable writes the patch layer, which the engine **hot-reloads live**; a plugin with a page half (`dsh.client`) additionally needs a **Harness page reload** for that half. The two general rules live in the section note (repeating them on every row only made the window taller); the **per-plugin difference — “page half · reload page” — is a small tag on that row**. The GUI determines the page half itself: for an installed plugin it reads the real manifest in the profile, and for an uninstalled one it uses the verified `client` declaration in the catalog entry.
 - **`dsh-opencode-go-path`** handles the OpenCode / OpenCode Go routes end to end: (1) it declares the route wire protocol (`api: openai-completions`), fixing the `needs an api` error and the refused save for models the installed catalog does not describe (e.g. `deepseek-v4.1-flash`); (2) after boot it appends the DeepSeek V4.1 models to the route's model list whenever the route exists and they are missing (idempotent, written to `settings.yaml`); (3) it attaches a stable per-conversation `x-opencode-session` header to OpenCode requests (fixes 400 MissingSessionID; defaults to an opaque UUID and never sends the internal session id). **It merges the former `dsh-opencode-go-session` and `dsh-opencode-go-api`, and was renamed from `dsh-opencode-go` to `dsh-opencode-go-path`** (the original name was taken on npm) — on upgrade the GUI unregisters the old packages and installs this one (carrying the disabled choice across), so old and new never load side by side.
 - **`dsh-model-surplus`** shows **the active model's** usage / balance right of the session title, split by the session's current model route (each half appears only for its own models):
   - OpenCode Go models (`opencode-go` / `opencode`) → plan usage (rolling / weekly / monthly percentages + reset time). The host resolves `OPENCODE_GO_API_KEY` through `ctx.credentials` and calls `GET https://opencode.ai/zen/go/v1/usage`.
@@ -266,8 +293,7 @@ All DeepSeek Harness user data lives under `$DSH_HOME` (default `~/.dsh`):
 │  ├─ status.html         # startup/update status page (follows Harness theme)
 │  ├─ notice.html         # persistent update badge
 │  └─ home-migrate.js     # data-dir detection & migration (pure Node, unit-testable)
-├─ (no plugins/ since v0.5.0 — the four bundled plugins are separate repositories
-│   and npm packages, see "Related repositories" above)
+├─ plugins/               # the four bundled plugin sources (shipped with the app, see above)
 ├─ scripts/               # build & test scripts
 │  ├─ make-icons.mjs      # official favicon → icons at all sizes + win hybrid icon.ico
 │  ├─ ico-info.cjs        # inspect any .ico's frames and length consistency
@@ -348,6 +374,10 @@ npm start                                   # run the app
 node src/test/engine-patch.test.cjs
 # Plugin-state drift unit tests (settings window <-> plugin market sync):
 node src/test/plugin-state.test.cjs
+# End-to-end check that bundled plugins self-heal: real installs, real engine,
+# a throwaway DSH_HOME (never touches your data). Needs an engine (--engine <dir>
+# or $DSH_ENGINE_DIR) and, on the first run, network access to fetch pnpm:
+node scripts/verify-builtin-plugins.cjs
 # Windows E2E (real WM_CLOSE validating close/tray/modal behavior):
 powershell -File scripts/smoke-close.ps1 -Mode quit   # "quit directly" mode
 powershell -File scripts/smoke-close.ps1 -Mode tray   # "hide to tray" mode

@@ -2,9 +2,9 @@
 
 **发布日：2026-09-22** · 从 v0.4.1 累积的所有改动。
 
-> 一句话：**改名为 DSH Ready GUI，并把四个随附插件拆成独立仓库** —— 应用身份、产物名
-> 与三平台仓库名同步更新；壳不再打包插件，改为从 registry 安装；已有安装的数据目录会
-> 自动迁移，不会看起来像全新安装。
+> 一句话：**改名为 DSH Ready GUI，四个随附插件换了包名、也各自建立了独立仓库** —— 应用
+> 身份、产物名与三平台仓库名同步更新；插件仍随壳内置（改从 npm 安装这条路暂时走不通，
+> 见下）；已有安装的数据目录会自动迁移，不会看起来像全新安装。
 
 ---
 
@@ -57,8 +57,8 @@ Electron 的 `userData` 目录由 `productName` 推导，所以改名会把目�
 
 - **`// dsh-gui:`** —— 引擎补丁写进引擎自身文件的标记，必须与旧版写下的内容一致，否则
   识别不出、也清理不掉旧补丁；
-- **`<home>\.dsh-gui\bundled-plugins`** —— v0.4.1 的插件 staging 目录，是磁盘上真实存在
-  的路径（迁移逻辑按它匹配）；
+- **`<home>\.dsh-gui\bundled-plugins`** —— 插件 staging 目录，磁盘上真实存在、且 profile 的
+  `file:` 依赖直接指向的路径（v0.4.1 引入，v0.5.0 改回内置后继续沿用）；
 - **`dsh-gui-last-session`** —— 那是另一个项目的名字（四个随附插件之一）；
 - **`DSH_SHELL_*` 环境变量**（13 个，README 里公开的接口）与 **`dsh-gui:*` IPC 通道**
   —— 内部/接口标识，用户看不到，改名只会制造破坏。
@@ -73,28 +73,33 @@ Electron 的 `userData` 目录由 `productName` 推导，所以改名会把目�
 
 ---
 
-## 📦 四个插件拆成独立仓库并发布到 npm
+## 📦 四个随附插件：包名与仓库名统一了，但**仍然随壳内置**
 
-### 改了什么
+四个插件（模型余量、会话续接、OpenCode Go 路由、按键设置）**继续随应用打包**，
+`plugins/` 仍在仓库里，安装方式与 v0.4.1 相同（先 staging 成磁盘上的真实目录、再以
+`file:` 装进 profile，见本文末尾）。同时它们各自有了独立仓库，包名与仓库名一一对应：
 
-`plugins/` 目录从本仓库移除。四个插件的源码、测试与发布流程各自独立：
-
-| 插件 | npm 包名 | 仓库 |
+| 插件 | 包名 | 仓库 |
 |---|---|---|
 | 模型余量 | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
 | 会话续接 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
 | OpenCode Go 路由 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
 | 按键设置 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
-### 为什么
+### 为什么最后没有改成从 npm 安装
 
-- **插件更新不必再等壳发版**：以前插件代码打进 app.asar，只有装新版 GUI 才会更新；
-  现在是一条普通的 registry 条目，`dsh plugin update` / 插件市场即可升级。
-- **插件与宿主解耦**：官方桌面端、Tauri 客户端、`dsh web`、CLI 都能装，不再只服务
-  于本壳。生态里 4000+ 插件都是这个形态，独立仓库才能被
-  [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
-  与插件市场收录。
-- **一个仓库一个条目**：注册表按 `owner/repo` 收录，插件埋在 monorepo 里无法上架。
+原计划是把四个插件拆出去发布到 npm、壳改成像 `dsh-market` 那样从 registry 安装。好处是
+明确的：插件更新不必再等壳发版（以前插件代码打进 app.asar，只有装新版 GUI 才会更新），
+而且官方桌面端、Tauri 客户端、`dsh web`、CLI 都能装——生态里 4000+ 插件都是这个形态，
+独立仓库也是 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+与插件市场收录的前提（注册表按 `owner/repo` 收录，插件埋在 monorepo 里无法上架）。
+
+**但这条路卡在发布渠道上**：npm 账号注册目前走不通，包发布不出去。而「装了、却装不回来」
+的插件比「随壳发布的旧版」糟得多——本轮实测就是这样：profile 里登记着 npm 版本、registry
+上却没有，于是插件从 `dsh.profile.bundles` 里消失、引擎少一个功能，而且那条解析不了的
+依赖会让这个 profile 里**每一次**安装操作一起失败（包括在修别的插件的时候）。
+
+所以本轮**保持内置**：壳必须能自给自足。四个独立仓库先留着，等发布渠道通了再切。
 
 ### 三个包名换掉了（重要）
 
@@ -107,7 +112,7 @@ Electron 的 `userData` 目录由 `productName` 推导，所以改名会把目�
 而 `dsh-model-usage` 虽然 npm 上还是空的，但 **GitHub 上已经有三个别人的同名仓库**
 （`ZSN12/DSH-model-usage` 10★、`Timmononon/dsh-model-usage`、`niushuanan/dsh-model-usage`），
 其中前两个的 `package.json` 里 `name` 也写着 `dsh-model-usage`——也就是说谁先 `npm publish`
-谁拿到这个名字。与其竞速，拆仓时直接换掉了。
+谁拿到这个名字。与其将来竞速，这次一并换掉了（顺带让包名与仓库名一一对应）。
 
 因此本项目的包名为 **`dsh-opencode-go-path`**、**`dsh-keys-setting`**、
 **`dsh-model-surplus`**。（输入框快捷键曾短暂用过 `dsh-composer-keys-setting` 这个中间名，
@@ -121,71 +126,63 @@ Electron 的 `userData` 目录由 `productName` 推导，所以改名会把目�
 
 ### 老用户迁移（自动，无需手动操作）
 
-GUI 启动维护会把两个旧包名一次性清理掉，逻辑与既有的改名迁移完全一致：
+GUI 启动维护会把三个旧包名一次性清理掉，逻辑与既有的改名迁移完全一致：
 
 1. 摘掉 profile 的 bundles 登记与 `package.json` 里的 `file:` 依赖（只摘 bundles 不够——
    引擎的 reconcile 会依据残留依赖把旧插件重新登记回来，实测会导致新旧同时加载）；
 2. 清掉补丁层里指向旧行 id 的残留 `disabled:` 行（`opencode-go` / `composer-keys`）；
 3. 把「已禁用」的选择搬到新包上——**改名不该改变用户的选择**；
-4. 随后由启动流程从 npm 安装新包（新旧补丁层行 id 保持一致，因此选择能对上）。
+4. 随后由启动流程从**随包副本**安装新包（新旧补丁层行 id 保持一致，因此选择能对上）。
 
 失败自动恢复、插件市场双向同步等既有能力不受影响。
 
-### `file:` 安装也要迁移（名字没变的那个插件）
+### 内置插件的安装来源由应用自己管
 
-`dsh-gui-last-session` 的**包名没变**，所以不在改名迁移表里——但
-v0.4.1 及更早是把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
-profile 的（profile 的 `dependencies` 里能看到 `file:C:/…/.dsh-gui/bundled-plugins/…`）。
-那份拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码写入，于是：
-
-- 留着它 = 这个插件**永远拿不到 npm 上的更新**（GUI 只按 `dsh.profile.bundles` 判断「已装」）；
-- 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为解析不到
-  这个依赖而**启动失败**。
-
-（另外三个插件的包名都变了，由上面那条改名迁移处理，走不到这条路径。）
-
-现在启动维护会识别这种「装是装了、但来源是 v0.4.1 的 staging 目录」的条目
-（`isLegacyStagedInstall`：读 profile `dependencies` 里那条 spec，必须是 `file:` 且路径落在
-`.dsh-gui/bundled-plugins` 里）并换成 registry 版本。
-
-**为什么只认那一个目录、不认任意 `file:`**：从自己的 checkout 安装（开发时，或 registry 上
-还没发布时的本地安装）是有意为之。把任意 `file:` 都当成旧版残留去 remove+add，而 registry 上
-又还没有这个包时，插件会被删掉且装不回来——在引擎 0.1.5-rc.2 上实测过：`remove` + `prune`
-成功、`add` 404，插件直接从 `dsh.profile.bundles` 里消失。所以判定收窄到 staging 目录。
+内置条目的「正版」只有一份：随壳打包、由主进程 staging 出来的
+`<home>\.dsh-gui\bundled-plugins\<包名>`。profile 里那条依赖只要不是它——指向开发用的
+checkout、v0.4.1 的旧 staging 目录、npm 或 git 安装——启动维护就换回随包那一份。不管的话
+应用就不再自给自足：实测过一条依赖指向某个 checkout，那个目录一没了插件就再也装不上。
 
 **实现上有个实测得出的坑**：不能指望 `dsh plugin add <name>` 原地改写那条 spec。在引擎
 0.1.5-rc.2 / pnpm 12 上实测——对一个已登记进 bundles 的包执行 `dsh plugin add <name>` 会
 exit 0、pnpm 也确实跑了一遍，但它打印的是 *Lockfile is up to date, resolution step is
 skipped*，`package.json` 里的 `file:` spec **原样保留**，等于什么都没做。所以走的是与改名
-迁移完全相同的已验证路径：**remove → prune 残留登记 → 从 registry 装回来**。prune 不能省：
-只 remove 的话，残留的 `dependencies` 会被引擎的 reconcile 重新登记回 bundles。
+迁移完全相同的已验证路径：**remove → prune 残留登记 → add**。prune 不能省：只 remove
+的话，残留的 `dependencies` 会被引擎的 reconcile 重新登记回 bundles。
 
-**换不成时会把原来那份装回去。** 走到这一步最常见的原因是 registry 上还没有这个包（npm 发布
-尚未完成、或本机连不上 registry）——那时旧副本虽然陈旧，但比「插件凭空消失」好得多。实测：
-`remove` + `prune` 之后 `add` 404，随即以原来的 `file:` spec 重装，插件仍在
-`dsh.profile.bundles` 里、spec 原样、文件重新落地。
+**先摘登记，再跑 pnpm。** 摘登记是纯改文件；而只要 profile 里还留着一条解析不了的 `file:`
+依赖，接下来每一次 pnpm 调用都会整体失败——连累的正是我们想修的那个插件。实测顺序颠倒时
+的后果：第一个插件的 `remove` 就报 ENOENT，四个里只修好两个，剩下的要等下一次启动才补上。
 
-## 🧹 顺带：删掉不再需要的 app.asar staging 机制
+**换不成时会把原来那份装回去。** 走到这一步最常见的原因是随包副本 staging 失败或 pnpm 装
+不上——那时旧副本虽然来路不对，也比「插件凭空消失」好得多。实测：`remove` + `prune` 之后
+`add` 失败，随即以原来的 spec 重装，插件仍在 `dsh.profile.bundles` 里、文件重新落地。
 
-原先「捆绑插件」不能按 app.asar 内路径安装（子进程 pnpm 会把 app.asar 当普通文件，
-报 *as it does not exist*），所以主进程要先把插件复制成磁盘上的真实目录再装。插件走
-registry 之后**没有任何目录条目需要 `file:` 安装**，这套机制整体删除：
+## 📦 内置插件为什么非 staging 不可
+
+「捆绑插件」不能按 app.asar 内的路径安装——子进程 pnpm 会把 app.asar 当普通文件，报
+*as it does not exist*。所以主进程每次都先把插件复制成磁盘上的真实目录
+（`<home>\.dsh-gui\bundled-plugins\<包名>`），再用 `file:` 装进 profile。v0.5.0 一度删掉过
+这套机制（插件改从 registry 装就不再需要它），确定改回内置后原样恢复：
 
 - `src/plugin-manager.js`：`bundledPluginsRoot` / `bundledSourceDir` / `copyDirRecursive` /
   `stageBundledPlugin` / `readPackageVersion` / `installedBundleVersion`，以及
-  `syncEnabledPlugins` 里「随包版本更新则强制重装」的分支；
-- `src/main.js`：`pluginBundledPluginsDir()` 与 `shortPathIfSpaced()`（后者只为 staging
-  路径的 8.3 短化而存在）；
-- `electron-builder.yml`：`plugins/**/*` 不再打进 app.asar。
+  `syncEnabledPlugins` 里「随包版本更新才重装」的分支；
+- `src/main.js`：`pluginBundledPluginsDir()` 与 `shortPathIfSpaced()`——后者为 staging 路径
+  的 8.3 短化而存在（`C:\Users\Some User\…` 这种带空格的路径会让 pnpm 的 `file:` 解析出错）；
+- `electron-builder.yml`：`plugins/**/*` 重新打进 app.asar。
 
-`pluginHasClientHalf` 改为「已装读真实 manifest、未装用目录条目的 `client` 声明」——
-拆仓后本地没有源码可读，而「是否含页面半边」决定启用/禁用后要不要刷新页面，必须
-在安装前就能显示。目录条目因此新增 `client: true|false` 字段。
+**staging 目录必须是稳定路径**：pnpm 会把 `file:` spec 原样写进 profile 的 `dependencies`，
+之后在那个 profile 里再跑 pnpm 仍要解析到同一路径，所以它由 userData 推导、不带随机数。
 
-> 注：`<home>\.dsh-gui\bundled-plugins` 目录本身**不会被自动删除**。它与旧版 profile 的
-> `file:` 依赖一一对应，而同一台机器上可能存在多个 DSH_HOME（本 GUI 的 `dsh-home` 与
-> 系统 `~/.dsh`），删掉它可能让某个还没迁移过的 profile 直接启动失败。迁移完成后它只是
-> 占几 MB 空间，可以自行清理。
+`pluginHasClientHalf` 是「已装读 profile 里的真实 manifest、未装用目录条目的 `client`
+声明」：前者权威；后者让「是否含页面半边」在**安装前**就能显示（它决定启用/禁用后要不要
+刷新页面），所以目录条目里保留了 `client: true|false` 声明。
+
+> 注：这个目录现在是**应用的工作目录**，不要手动删除。里面是随包插件的副本，profile 的
+> `file:` 依赖直接指向它；删掉会让已装插件当场解析不到（下次启动会重新 staging 并换回，
+> 但这一次启动是失败的）。同一台机器上可能有多个 DSH_HOME（本 GUI 的 `dsh-home` 与系统
+> `~/.dsh`），各自独立、互不影响。
 
 
 ---

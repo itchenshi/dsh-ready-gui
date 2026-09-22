@@ -36,31 +36,37 @@ DSH Ready GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源
 
 三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/dsh-ready-gui/releases) 为准。
 
-## 📦 相关仓库（随附插件）
+## 📦 随附插件（内置）与它们的独立仓库
 
-四个随附插件自 v0.5.0 起各自独立成仓库并发布到 npm。它们**与宿主无关**：官方桌面端、
-Tauri 客户端、`dsh web`、CLI 里都能用 `dsh plugin add` 装，也可以直接在
-[插件市场](https://github.com/dsh-market/dsh-market) 里一键安装。
+四个插件——模型余量、会话续接、OpenCode Go 路由、按键设置——**随应用打包内置**：源码在
+[`plugins/`](plugins/)，装上 GUI 就有，安装/卸载/启用都在设置窗口里完成，不需要自己
+`dsh plugin add`。同时它们各自也是独立仓库，包名与仓库名一一对应：
 
-| 插件 | npm 包 | 仓库 |
+| 插件 | 包名 | 仓库 |
 |---|---|---|
 | 模型余量 | `dsh-model-surplus` | https://github.com/itchenshi/dsh-model-surplus |
 | 会话续接 | `dsh-gui-last-session` | https://github.com/itchenshi/dsh-gui-last-session |
 | OpenCode Go 路由 | `dsh-opencode-go-path` | https://github.com/itchenshi/dsh-opencode-go-path |
 | 按键设置 | `dsh-keys-setting` | https://github.com/itchenshi/dsh-keys-setting |
 
-```bash
-dsh plugin --profile web add dsh-model-surplus
-```
-
+> **为什么内置、而不是从 npm 装**：原计划是拆出去发布到 npm，让插件更新不必等壳发版。
+> 但 npm 账号注册目前走不通（`www.npmjs.com` 返回 Cloudflare 托管挑战），包发布不出去；
+> 而 profile 里登记着一个 registry 上没有的包，会让插件直接从引擎的 bundle 列表里消失，
+> 并且让这个 profile 里**每一次**安装操作一起失败（都实测到了）。所以**保持内置**，
+> 四个独立仓库先留着，等发布渠道通了再切。
+>
 > **关于几个换过名字的包**：`dsh-opencode-go`（及 `dsh-opencode-go-plus`）与
 > `dsh-composer-keys` 在 npm 上都已被其他作者占用；`dsh-model-usage` 虽然空着，但
-> GitHub 上已有三个别人的同名仓库。因此最终定名 **`dsh-opencode-go-path`**、
-> **`dsh-keys-setting`**、**`dsh-model-surplus`**。这与插件的功能无关，
-> 只影响安装时写的包名。
+> GitHub 上已有三个别人的同名仓库。为避免将来发布撞名，定名为
+> **`dsh-opencode-go-path`**、**`dsh-keys-setting`**、**`dsh-model-surplus`**。这与插件的
+> 功能无关，老用户也不需要手动操作（见下）。
 
-四个插件的发布用 `scripts/publish-plugins.ps1` 一次完成（会强制走官方 registry、
-逐个校验 tarball 内容、发布后在官方 registry 上复核）：
+包名变了不影响已有安装：启动维护会摘掉旧包名的登记、清掉补丁层残留行，并把「已禁用」的
+选择搬到新包上；profile 里指向别处（开发用的 checkout、npm、旧 staging 目录）的内置插件
+会自动换回随包那一份，换不回来时把原来那份装回去，不会把插件弄丢。
+
+`scripts/publish-plugins.ps1` 是等发布渠道可用时用的（强制走官方 registry、逐个校验
+tarball 内容、发布后在官方 registry 上复核）：
 
 ```powershell
 # 先登录到官方 registry —— 注意 --registry 不能省：
@@ -73,29 +79,30 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 
 ## 🆕 v0.5.0 亮点
 
-- **📦 插件拆仓 + 发布 npm**：四个随附插件（模型余量、会话续接、
-  OpenCode Go 路由、按键设置）**不再随本仓库打包**，各自独立成仓库并发布到
-  npm；DSH Ready GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
-  不再需要等壳发版，且在任何 DSH 宿主（官方桌面端、Tauri 客户端、`dsh web`、CLI）
-  里都能装。
+- **📦 插件换名 + 各自建立独立仓库**：四个随附插件（模型余量、会话续接、
+  OpenCode Go 路由、按键设置）**仍然随壳内置**（源码在 `plugins/`，装上 GUI 就有），
+  同时各自独立成仓库、包名与仓库名一一对应。**原计划是发布到 npm、让壳像 `dsh-market`
+  那样从 registry 安装**——那样插件更新不必等壳发版，任何 DSH 宿主都能装；但 npm 账号
+  注册目前走不通，包发不出去，而 profile 里登记着一个 registry 上不存在的包会让插件
+  直接从引擎的 bundle 列表里消失（实测），所以本轮**保持内置**。
 - **⚠️ 三个插件的包名变了**：`dsh-opencode-go` → **`dsh-opencode-go-path`**、
   `dsh-composer-keys` → **`dsh-keys-setting`**（这两个原名都被别人占用）、
   `dsh-model-usage` → **`dsh-model-surplus`**（npm 上那个名字虽然空着，但 GitHub 上
   已有三个别人的同名仓库、其中两个的 package.json 也写着它——谁先发布谁拿到，所以
-  拆仓时直接换掉了）。老用户无需手动操作：GUI 启动维护会把旧包名一次性清理掉
+  定名时一并换掉了）。老用户无需手动操作：GUI 启动维护会把旧包名一次性清理掉
   （摘 bundles 登记 + 清补丁层残留行 + 把「已禁用」的选择搬到新包上），不会出现
   新旧两份同时加载。**补丁层行 id 与设置命名空间保持原样**（`composer-keys` /
   `model-usage`），所以你保存的键位和启用/禁用选择都不会因为改包名而失效。
-- **🔁 旧版留下的 `file:` 安装也会自动转成 registry 版本**：v0.4.1 是把插件 staging
-  到 `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile 的，所以
-  `dsh-gui-last-session`（**包名没变的那个**）也会停在旧副本上、拿不到更新，而且
-  staging 目录一旦被清就会让 profile 启动失败。启动维护会识别这类条目（profile 的
-  `dependencies` 里是 `file:` 且落在 `.dsh-gui/bundled-plugins` 里的 spec）并换成 npm 版本；
-  换不成时会把原来那份装回去，不会把插件弄丢。**只认那一个 staging 目录**——从自己的
-  checkout 有意安装的不动。名字变了的三个由改名迁移处理。
-- **🧹 移除 app.asar 内的插件 staging 机制**：该机制存在的唯一理由是子进程 pnpm
-  读不到 app.asar 内部路径；插件走 registry 之后没有任何条目需要 `file:` 安装，
-  相关代码（staging 目录、递归复制、8.3 短路径处理）整体删除。
+- **🔁 内置插件的安装来源由应用自己管**：随包那一份 staging 到
+  `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile，这是唯一的「正版」。
+  profile 里那条依赖只要指向别处（开发用的 checkout、npm/git 安装、旧 staging 目录），
+  启动维护就换回随包那一份——不管的话应用就不再自给自足：实测过一条依赖指向某个
+  checkout，那个目录一没了插件就再也装不上。换不成时会把原来那份装回去，不会把插件
+  弄丢。**只动已勾选的条目**：install 模式不碰用户没勾选的东西。
+- **🧹 staging 机制保留（仍是 v0.4.1 的形状）**：捆绑插件不能按 app.asar 内的路径安装
+  （子进程 pnpm 会把 app.asar 当普通文件），所以主进程每次都先把插件复制成磁盘上的真实
+  目录再装。v0.5.0 一度删掉过这套机制（插件改从 registry 装就不再需要），改回内置后原样
+  恢复，包括带空格路径的 8.3 短化。
 
 ## 🆕 v0.4.1 亮点
 
@@ -205,12 +212,13 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 - **内置候选目录（经核实的社区插件）**：插件市场（dsh-market）、会话续接
   （dsh-gui-last-session）、模型余量（dsh-model-surplus）、OpenCode Go 路由
   （dsh-opencode-go-path）、按键设置（dsh-keys-setting）。设置窗口
-  展示顺序即此顺序。**后四个自 v0.5.0 起是独立仓库 + npm 包**，全部从 registry
-  安装，不再随本仓库打包（见下方「相关仓库」）。
+  展示顺序即此顺序。**后四个随应用内置**（源码在 `plugins/`，装 GUI 就有；各自也有
+  独立仓库，见上方「随附插件」）；第一个（dsh-market）是社区插件，从 registry 装它。
 - **生效方式按插件标注**：安装/卸载改的是 profile 的 bundle 列表（引擎只在启动时组装），因此**需重启引擎**；
   启用/禁用写的是补丁层，由引擎**热重载即时生效**；含页面半边（`dsh.client`）的插件，那一半还需**刷新 Harness 页面**。
   这两条通用规则写在插件的段落说明里（每行重复只会把窗口撑大），**因插件而异的「含页面部分 · 需刷新页面」
-  以小标签标在对应行上**——「是否含页面半边」由 GUI 读取插件 package.json 判定（未安装的 npm 条目无从判断时不标）。
+  以小标签标在对应行上**——「是否含页面半边」由 GUI 判定：已装读 profile 里的真实
+  manifest，未装用目录条目里核实过的 `client` 声明。
 - **`dsh-opencode-go-path`（OpenCode Go 路由）**：一站解决 OpenCode / OpenCode Go 路由的三件事——
   ① 给 `opencode-go` 路由声明 wire 协议（`api: openai-completions`），修掉目录外模型
   （如 `deepseek-v4.1-flash`）的 `needs an api` 报错与模型页保存被拒；② 引擎启动后若该路由存在
@@ -360,8 +368,7 @@ DeepSeek Harness 的全部用户数据都在 `$DSH_HOME`（默认 `~/.dsh`）下
 │  ├─ status.html         # 启动/更新状态页（跟随 Harness 主题）
 │  ├─ notice.html         # 持久更新角标
 │  └─ home-migrate.js     # 数据目录检测与迁移（纯 Node，可单测）
-├─ （v0.5.0 起本仓库不再包含 plugins/：四个随附插件已拆成独立仓库并发布到
-│    npm，见下方「相关仓库」）
+├─ plugins/               # 四个随附插件源码（随包内置，装 GUI 就有；见上方「随附插件」）
 ├─ scripts/               # 构建与测试脚本
 │  ├─ make-icons.mjs      # 官网 favicon → 各尺寸图标 + win 用的混合帧 icon.ico
 │  ├─ ico-info.cjs        # 检查任意 .ico 的帧构成与长度自洽性
@@ -443,6 +450,7 @@ npm run dist:linux    # Linux   → dist/DSH-READY-GUI-LINUX/ + .zip + .AppImage
 npm start                                   # 运行应用
 npm test                                    # 全部单测（含设置窗口内联 JS 语法/结构校验）
 npm run test:e2e                            # Windows 端到端（需先关闭正在运行的实例）
+npm run verify:builtin                      # 内置插件自愈的端到端验证（真引擎 + 真 pnpm，见下）
 # 分开跑：
 node src/test/engine-patch.test.cjs         # 引擎补丁工具纯函数单测
 node src/test/plugin-state.test.cjs         # 插件状态指纹（含启用/禁用维度）
@@ -450,6 +458,7 @@ node src/test/plugin-enable.test.cjs        # 启用/禁用：补丁层读写、
 node src/test/settings-ui.test.cjs          # 设置项/主题映射
 node src/test/plugin-manager.test.cjs       # profile 自愈/清理
 node scripts/check-settings-html.cjs        # 设置窗口内联 JS 语法 + 插件行结构约束
+node scripts/verify-builtin-plugins.cjs     # 内置插件自愈（临时 DSH_HOME，不碰你的数据）
 # Windows 端到端：
 powershell -File scripts/smoke-close.ps1 -Mode quit   # “直接退出”模式
 powershell -File scripts/smoke-close.ps1 -Mode tray   # “隐藏到托盘”模式
@@ -457,6 +466,12 @@ powershell -File scripts/smoke-modal.ps1              # 模态设置窗
 powershell -File scripts/smoke-profile-watch.ps1      # 插件市场禁用 → 设置窗口实时联动
 powershell -File scripts/smoke-plugin-enable.ps1      # 启用/禁用 ↔ 补丁层 + 市场 state.json 双向同步
 ```
+
+`verify:builtin` 是唯一会**真的装插件、真的启动引擎**的验证：它在一个临时 DSH_HOME 里
+伪造出「四个内置插件里三个登记在某个已消失的 checkout 上、第四个缺失」（也就是从 npm 装
+那条路留下的状态），然后检查启动维护把它们全部换回随包那一份、缺失的那个能装上、第二次
+启动不再重复安装、引擎带着四个插件正常起来。需要先有一份引擎（`--engine <dir>` 或
+`DSH_ENGINE_DIR`，默认用本应用下载的那份），首次运行还需要网络去取 pnpm。
 
 ---
 
