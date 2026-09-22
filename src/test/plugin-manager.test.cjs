@@ -364,42 +364,58 @@ function checkFileInstallDetection() {
     );
   try {
     write({
+      // v0.4.1's staging directory — the ONLY shape the migration may touch.
       "dsh-model-surplus": "file:C:/Users/x/.dsh-gui/bundled-plugins/dsh-model-surplus",
-      "dsh-gui-last-session": "file:../bundled/dsh-gui-last-session",
-      "dsh-opencode-go-path": "^1.0.0",
+      "dsh-gui-last-session": "file:C:\\Users\\x\\.dsh-gui\\bundled-plugins\\dsh-gui-last-session",
+      // A deliberate install from the user's own checkout: must be left alone.
+      "dsh-opencode-go-path": "file:D:/AI/WorkBook/dsh-opencode-go-path",
+      "dsh-keys-setting": "file:../somewhere/dsh-keys-setting",
       dshmarket: "latest",
+      "some-plugin": "^1.0.0",
     });
 
     assert.strictEqual(
-      pm.isFileInstall(home, "dsh-model-surplus"),
+      pm.isLegacyStagedInstall(home, "dsh-model-surplus"),
       true,
-      "an absolute file: spec is a legacy local install",
+      "a forward-slash path into .dsh-gui/bundled-plugins is the v0.4.1 staged install",
     );
     assert.strictEqual(
-      pm.isFileInstall(home, "dsh-gui-last-session"),
+      pm.isLegacyStagedInstall(home, "dsh-gui-last-session"),
       true,
-      "a relative file: spec counts too",
+      "a backslash path into .dsh-gui\\bundled-plugins counts too",
     );
     assert.strictEqual(
-      pm.isFileInstall(home, "dsh-opencode-go-path"),
+      pm.isLegacyStagedInstall(home, "dsh-opencode-go-path"),
+      false,
+      "a checkout path is NOT the staged install (removing it would delete the plugin)",
+    );
+    assert.strictEqual(
+      pm.isLegacyStagedInstall(home, "dsh-keys-setting"),
+      false,
+      "a relative file: path outside the staging directory is NOT the staged install",
+    );
+    assert.strictEqual(
+      pm.isLegacyStagedInstall(home, "some-plugin"),
       false,
       "a semver range is a registry install",
     );
-    assert.strictEqual(pm.isFileInstall(home, "dshmarket"), false, "a dist-tag is a registry install");
+    assert.strictEqual(pm.isLegacyStagedInstall(home, "dshmarket"), false, "a dist-tag is a registry install");
     assert.strictEqual(
-      pm.isFileInstall(home, "not-in-dependencies"),
+      pm.isLegacyStagedInstall(home, "not-in-dependencies"),
       false,
-      "an undeclared package is not a file: install",
+      "an undeclared package is not a staged install",
     );
-    assert.strictEqual(pm.profileDependencySpec(home, "dsh-opencode-go-path"), "^1.0.0");
+    assert.strictEqual(pm.profileDependencySpec(home, "some-plugin"), "^1.0.0");
 
     // Boot maintenance runs before the profile necessarily exists: must answer, not throw.
     assert.strictEqual(
-      pm.isFileInstall(path.join(root, "no-such-home"), "dsh-model-surplus"),
+      pm.isLegacyStagedInstall(path.join(root, "no-such-home"), "dsh-model-surplus"),
       false,
       "a missing profile answers false instead of throwing",
     );
-    console.log("ok - file: installs from v0.4.1 staging are detected; registry specs are left alone");
+    console.log(
+      "ok - only the v0.4.1 staging directory is migrated; deliberate local and registry installs are left alone",
+    );
   } finally {
     cleanup(root);
   }

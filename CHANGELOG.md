@@ -78,8 +78,14 @@ profile 的（profile 的 `dependencies` 里能看到 `file:C:/…/.dsh-gui/bund
 
 （另外三个插件的包名都变了，由上面那条改名迁移处理，走不到这条路径。）
 
-现在启动维护会识别这种「装是装了、但来源是本地路径」的条目（`isFileInstall`：读 profile
-`dependencies` 里那条 spec 是否 `file:` 开头）并换成 registry 版本。
+现在启动维护会识别这种「装是装了、但来源是 v0.4.1 的 staging 目录」的条目
+（`isLegacyStagedInstall`：读 profile `dependencies` 里那条 spec，必须是 `file:` 且路径落在
+`.dsh-gui/bundled-plugins` 里）并换成 registry 版本。
+
+**为什么只认那一个目录、不认任意 `file:`**：从自己的 checkout 安装（开发时，或 registry 上
+还没发布时的本地安装）是有意为之。把任意 `file:` 都当成旧版残留去 remove+add，而 registry 上
+又还没有这个包时，插件会被删掉且装不回来——在引擎 0.1.5-rc.2 上实测过：`remove` + `prune`
+成功、`add` 404，插件直接从 `dsh.profile.bundles` 里消失。所以判定收窄到 staging 目录。
 
 **实现上有个实测得出的坑**：不能指望 `dsh plugin add <name>` 原地改写那条 spec。在引擎
 0.1.5-rc.2 / pnpm 12 上实测——对一个已登记进 bundles 的包执行 `dsh plugin add <name>` 会
@@ -88,8 +94,10 @@ skipped*，`package.json` 里的 `file:` spec **原样保留**，等于什么都
 迁移完全相同的已验证路径：**remove → prune 残留登记 → 从 registry 装回来**。prune 不能省：
 只 remove 的话，残留的 `dependencies` 会被引擎的 reconcile 重新登记回 bundles。
 
-装失败不会留下半残状态：该包此时已从 bundles/dependencies 摘掉，下一次启动维护（`has`
-为 false）会再试一次。
+**换不成时会把原来那份装回去。** 走到这一步最常见的原因是 registry 上还没有这个包（npm 发布
+尚未完成、或本机连不上 registry）——那时旧副本虽然陈旧，但比「插件凭空消失」好得多。实测：
+`remove` + `prune` 之后 `add` 404，随即以原来的 `file:` spec 重装，插件仍在
+`dsh.profile.bundles` 里、spec 原样、文件重新落地。
 
 ## 🧹 顺带：删掉不再需要的 app.asar staging 机制
 

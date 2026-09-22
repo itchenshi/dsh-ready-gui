@@ -90,7 +90,9 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   到 `<home>\.dsh-gui\bundled-plugins` 后用 `file:` 装进 profile 的，所以
   `dsh-gui-last-session`（**包名没变的那个**）也会停在旧副本上、拿不到更新，而且
   staging 目录一旦被清就会让 profile 启动失败。启动维护会识别这类条目（profile 的
-  `dependencies` 里是 `file:` spec）并换成 npm 版本；名字变了的三个由改名迁移处理。
+  `dependencies` 里是 `file:` 且落在 `.dsh-gui/bundled-plugins` 里的 spec）并换成 npm 版本；
+  换不成时会把原来那份装回去，不会把插件弄丢。**只认那一个 staging 目录**——从自己的
+  checkout 有意安装的不动。名字变了的三个由改名迁移处理。
 - **🧹 移除 app.asar 内的插件 staging 机制**：该机制存在的唯一理由是子进程 pnpm
   读不到 app.asar 内部路径；插件走 registry 之后没有任何条目需要 `file:` 安装，
   相关代码（staging 目录、递归复制、8.3 短路径处理）整体删除。

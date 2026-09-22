@@ -392,22 +392,29 @@ function profileDependencySpec(dshHome, pkg) {
 }
 
 /**
- * 这个包是否是从**本地路径**（而不是 registry）装进来的？
+ * 这个包的安装来源是否是 v0.4.1 及更早的**随壳 staging 目录**？
  *
- * v0.4.1 及更早的版本把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用
- * `file:` 装进 profile。那些拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录
- * 不再被任何代码写入，所以：
+ * v0.4.1 把随附插件 staging 到 `<home>\.dsh-gui\bundled-plugins` 之后用 `file:` 装进
+ * profile。那些拷贝冻结在随旧版发布的版本上，而 v0.5.0 起 staging 目录不再被任何代码
+ * 写入，所以：
  *   - 留着它 = 这个插件永远拿不到 npm 上的更新（GUI 只按 bundles 判断「已装」）；
  *   - 一旦 staging 目录被清掉（用户清理、换机拷贝、家目录迁移），profile 会因为
  *     解析不到这个依赖而**启动失败**。
- * 因此启动维护把 `file:` 安装换成 registry 版本。
+ * 因此启动维护把这种安装换成 registry 版本。
+ *
+ * **只认那一个 staging 目录，不认任意 `file:` 安装。** 从自己的 checkout 装（开发时，
+ * 或者 registry 上还没发布时的本地安装）是有意为之；把它当旧版残留去 remove+add，而
+ * registry 上又还没有这个包时，插件会被删掉且装不回来——实测过（引擎 0.1.5-rc.2）。
  *
  * 名字变了的（`dsh-opencode-go` / `dsh-composer-keys` / `dsh-model-usage`）由
  * LEGACY_PLUGIN_PKGS 先处理，走不到这里；这里管的是**名字没变**的
- * `dsh-gui-last-session`——包名一样，只有安装来源从 `file:` 变成了 registry。
+ * `dsh-gui-last-session`——包名一样，只有安装来源从 staging 目录变成了 registry。
  */
-function isFileInstall(dshHome, pkg) {
-  return (profileDependencySpec(dshHome, pkg) ?? "").startsWith("file:");
+function isLegacyStagedInstall(dshHome, pkg) {
+  const spec = profileDependencySpec(dshHome, pkg) ?? "";
+  if (!spec.startsWith("file:")) return false;
+  // profile 里存的是 pnpm 规范化过的正斜杠路径，两种分隔符都判，大小写不敏感。
+  return /[/\\]\.dsh-gui[/\\]bundled-plugins[/\\]/iu.test(spec);
 }
 
 // ---------------------------------------------------------------------------
@@ -1743,10 +1750,12 @@ async function syncEnabledPlugins({
     }
 
     // 已装且被勾选 → 通常什么都不做：升级交给 dsh-market / `dsh plugin update`。
-    // 唯一的例外是 v0.4.1 及更早留下的 `file:` 安装（见 isFileInstall）——那些必须
-    // 换成 registry 版本，否则会永远停在随旧版发布的副本上。
-    if (has && !isFileInstall(dshHome, name)) continue;
-    if (has) log("replacing a file: install with the registry package:", name);
+    // 唯一的例外是 v0.4.1 及更早留下的 **staging 目录** 安装（见 isLegacyStagedInstall）
+    // ——那些必须换成 registry 版本，否则会永远停在随旧版发布的副本上。
+    // 注意只认那一个目录：从本地 checkout 有意安装的不动。
+    if (has && !isLegacyStagedInstall(dshHome, name)) continue;
+    const previousSpec = has ? profileDependencySpec(dshHome, name) : null;
+    if (has) log("replacing the v0.4.1 staged install with the registry package:", name, previousSpec);
     try {
       if (has) {
         // 必须**显式 remove**，不能指望 `add` 原地改写那条 spec。实测（引擎
@@ -1756,17 +1765,15 @@ async function syncEnabledPlugins({
         // `file:` spec **原样保留**——包不会重解析，等于什么都没做。
         // 所以走与 LEGACY_PLUGIN_PKGS 完全相同的已验证路径：remove → prune → add。
         const rm = await removePlugin({ engineDir, dshHome, pnpmBinDir, pkg: name, nodeExec, log });
-        if (!rm.ok) log("file: install removal did not succeed, pruning the registration:", name);
+        if (!rm.ok) log("staged install removal did not succeed, pruning the registration:", name);
         // 只 remove 不够：残留的 dependencies 会被引擎的 reconcile 重新登记回
         // bundles（实测过），旧的 `file:` 副本于是照旧生效。
         try {
           pruneProfilePackages(dshHome, [name]);
         } catch (error) {
-          log("file: install prune failed:", name, (error && error.message) || error);
+          log("staged install prune failed:", name, (error && error.message) || error);
         }
       }
-      // 装失败不会有半残状态：这个包已经从 bundles/dependencies 里摘掉了，下一次
-      // 启动维护（此时 isFileInstall 已是 false、has 也是 false）会再试一次。
       const res = await installPlugin({
         engineDir,
         dshHome,
@@ -1779,7 +1786,34 @@ async function syncEnabledPlugins({
       if (res.ok) {
         result.installed.push(entry.id);
         result.changed = true;
-      } else result.errors.push(`${name}: ${res.output.slice(-200)}`);
+      } else {
+        // 换不成 registry 版本时**把原来那份装回去**。走到这里最常见的原因是
+        // registry 上还没有这个包（npm 发布尚未完成、或本机连不上 registry）——
+        // 那时旧副本虽然陈旧，但比「插件凭空消失」好得多。实测过没有这一步的后果：
+        // remove + prune 成功、add 404，插件直接从 bundles 里没了。
+        result.errors.push(`${name}: ${res.output.slice(-200)}`);
+        if (previousSpec) {
+          try {
+            const back = await installPlugin({
+              engineDir,
+              dshHome,
+              pnpmBinDir,
+              pkg: previousSpec,
+              name,
+              nodeExec,
+              log,
+            });
+            log(
+              back.ok
+                ? "registry install failed; restored the previous staged install:"
+                : "registry install failed AND the previous install could not be restored:",
+              name,
+            );
+          } catch (error) {
+            log("restoring the previous install failed:", name, (error && error.message) || error);
+          }
+        }
+      }
     } catch (error) {
       result.errors.push(`${name}: ${(error && error.message) || error}`);
     }
@@ -1844,7 +1878,7 @@ module.exports = {
   writeProfileManifest,
   installedBundles,
   profileDependencySpec,
-  isFileInstall,
+  isLegacyStagedInstall,
   catalogStatus,
   pluginHasClientHalf,
   setPluginEnabled,

@@ -78,8 +78,11 @@ dsh plugin --profile web add dsh-model-surplus
   `<home>\.dsh-gui\bundled-plugins` and installed them with a `file:` spec, so `dsh-gui-last-session`
   (**the one whose name did not change**) would also stay frozen on the old copy and
   never get updates — and a cleaned-up staging directory would make the profile fail to boot. Boot
-  maintenance now detects those entries (a `file:` spec in the profile's `dependencies`) and replaces
-  them with the npm package; the three renamed ones go through the rename migration instead.
+  maintenance now detects those entries (a `file:` spec whose path is inside `.dsh-gui/bundled-plugins`)
+  and replaces them with the npm package — and if that replacement fails it restores the previous
+  install, so the plugin is never lost. **Only that one staging directory counts**: a deliberate
+  install from your own checkout is left alone. The three renamed ones go through the rename
+  migration instead.
 - **🧹 The app.asar staging machinery is gone**: it existed only because a child pnpm cannot read
   inside app.asar. With every entry coming from the registry, nothing needs a `file:` install.
 
