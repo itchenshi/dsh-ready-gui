@@ -76,11 +76,14 @@ the top by the plugin** — it is the first entry right after install, with noth
 ## Install
 
 **From a release** — download from [Releases](https://github.com/itchenshi/dsh-ready-gui/releases) and
-open it. **Installers are published on GitHub only** (producing Windows, macOS and Linux artifacts at
-once needs three kinds of runner, which only GitHub Actions provides);
-[Gitee](https://gitee.com/itchenshi/dsh-ready-gui) and
-[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui) are **code mirrors** — source and issues work
-there, but they carry no installers.
+open it.
+
+All three platforms have a release page, but **installers live on GitHub only**: producing Windows, macOS
+and Linux artifacts at once needs three kinds of runner, which only GitHub Actions provides.
+[Gitee](https://gitee.com/itchenshi/dsh-ready-gui/releases) and
+[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui/releases) publish **source archives and the release
+notes**; download the installer from GitHub (Gitee's free tier caps attachments at 100 MB per file and
+1 GB per repository, while our installers are 133–194 MB).
 
 **From source** (development only; needs [Node.js](https://nodejs.org/) ≥ 23 — packaged builds ship
 their own portable Node, so end users install nothing):

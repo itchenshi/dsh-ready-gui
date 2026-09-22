@@ -73,9 +73,11 @@ DSH 本体是一套开源 Agent 框架（`@deepseek-ai/dsh`），官方只给命
 ## 安装
 
 **用安装包** —— 到 [Releases](https://github.com/itchenshi/dsh-ready-gui/releases) 下载，装完打开即可。
-**安装包只发布在 GitHub**（要同时产出 Windows / macOS / Linux 三种产物，只有 GitHub Actions 能一次
-提供三种 runner）；[Gitee](https://gitee.com/itchenshi/dsh-ready-gui) 与
-[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui) 是**代码镜像**，源码与 Issue 可用，但没有安装包。
+
+三个平台都有 Release 页，但**安装包只在 GitHub**：要同时产出 Windows / macOS / Linux 三种产物，只有
+GitHub Actions 能一次提供三种 runner；[Gitee](https://gitee.com/itchenshi/dsh-ready-gui/releases) 与
+[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui/releases) 的 Release 提供**源码包与更新说明**，
+安装包请从 GitHub 下载（Gitee 免费版限制附件单文件 100MB、单仓库共 1GB，而我们的安装包是 133–194MB）。
 
 **从源码跑**（只有开发需要；要 [Node.js](https://nodejs.org/) ≥ 23，打包产物自带便携 Node，终端用户无需安装任何运行时）：
 
