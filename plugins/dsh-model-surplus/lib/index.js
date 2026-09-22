@@ -347,8 +347,15 @@ export async function writeLimitsCache(dshHome, { limits, fetchedAt }) {
   }
 }
 
-/** Cache lifetime: an upstream is polled only this often, even on many page loads. */
-const CACHE_TTL_MS = 60_000
+/**
+ * Cache lifetime: an upstream is polled only this often, even on many page loads.
+ *
+ * 必须**大于**客户端轮询周期（client/client.js 的 POLL_INTERVAL_MS = 60s，且它是在
+ * 响应到达之后才排下一次，所以两次请求的间隔 ≥ 60s + 一次 RTT）：两者相等时
+ * `now - cached.at < ttl` 恒为 false，缓存形同不存在 —— 单个页面每 60s 都真的打一次
+ * 上游（OpenCode 用量 + DeepSeek 余额各一次）。取 2× 轮询周期，等于把上游请求减半。
+ */
+const CACHE_TTL_MS = 120_000
 /** Minimum gap between upstream calls after a failure (avoid hammering a 401). */
 const FAILURE_TTL_MS = 30_000
 /** Upstream request timeout. */

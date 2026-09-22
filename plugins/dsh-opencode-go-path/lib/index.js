@@ -10,13 +10,15 @@
 //      openai-responses, so the shared fallback is undefined; catalog-unknown
 //      models therefore need the route-level `api`.
 //
-//   2. AUTO-ADD THE DEEPSEEK V4.1 MODELS (this file, settings half): once the
-//      `llm-pi-ai` settings namespace is registered, checks whether the user's
-//      model list carries an opencode-go route; if it does and no
-//      `deepseek-v4.1-*` model is listed yet, appends the known DeepSeek V4.1
-//      models via settings.update (the same write path the Models page uses, so
-//      the change lands in settings.yaml and re-runs the engine's strict
-//      validation — which passes because `api` is present on the base layer).
+//   2. PUT THE DEEPSEEK V4.1 MODELS FIRST (this file, settings half): once the
+//      `llm-pi-ai` settings namespace is registered, checks whether the user
+//      configured a model list for the opencode-go route; if they did, the known
+//      DeepSeek V4.1 models are placed at the FRONT of that list via
+//      settings.update (the same write path the Models page uses, so the change
+//      lands in settings.yaml and re-runs the engine's strict validation — which
+//      passes because `api` is present on the base layer). Position matters: the
+//      list order is the model picker's order and the picker preselects the
+//      first entry, so "out of the box" means V4.1 Flash is the default.
 //
 //   3. ATTACH `x-opencode-session` (this file, header half): OpenCode's relay
 //      pins every request sharing the same `x-opencode-session` value to the
@@ -49,7 +51,10 @@ export const inject = ['llm']
 // ---------------------------------------------------------------------------
 
 const SESSION_HEADER = 'x-opencode-session'
-const HEADER_VALUE_RE = /^[\x21-\x7e\x80-\u10ffff]+$/u
+// HTTP 头值只能是 ByteString（≤ 0xFF）：`Headers.set` 遇到码点 > 0xFF 会抛 TypeError。
+// 早先这里放行到 \u10ffff，于是「看起来安全」的中文/emoji 会话 id 会让一次本该正常发出
+// 的模型请求直接以 TypeError 失败。收紧到可见 ASCII —— 而这个头本来就只要求不透明。
+const HEADER_VALUE_RE = /^[\x21-\x7e]+$/u
 const UUID_TABLE_MAX = 4096
 
 // Provider routes OpenCode(Go) requests are served under.
@@ -353,19 +358,41 @@ export const V4_1_MODELS = [
 const NS_WAIT_TIMEOUT_MS = 10000
 const NS_WAIT_STEP_MS = 100
 
-/** True when the given model id looks like a DeepSeek V4.1 model. */
+/**
+ * True when the given model id looks like a DeepSeek V4.1 model (family prefix).
+ * The auto-add half keys off the EXACT ids in V4_1_MODELS instead: a future
+ * upstream `deepseek-v4.1-*` must not stop us from listing the ones we know.
+ */
 export function isV41(id) {
   return typeof id === 'string' && id.startsWith('deepseek-v4.1')
 }
 
 /**
- * The next models array with the DeepSeek V4.1 models appended.
- * @returns {Array|null} null when a v4.1 model is already listed (nothing to do).
+ * The next models array, with this plugin's DeepSeek V4.1 models FIRST and
+ * everything the user configured kept in its own relative order.
+ *
+ * Why first — and why this is not only about adding: the list order is the model
+ * picker's order, and the picker preselects the first entry. An earlier version
+ * of this plugin *appended* the models, so anyone who already has a v4.1 entry
+ * carries it at the END; leaving it there would make the plugin's own promise
+ * ("works out of the box") depend on the user dragging it up by hand. Moving it
+ * is part of the job, and it is idempotent: once the models sit at the front,
+ * this returns null.
+ *
+ * An entry the user already has for one of our ids is reused verbatim (they may
+ * have tuned its name or limits) and is never overwritten with our default.
+ *
+ * @param {Array} existing
+ * @returns {Array|null} the models array to write, or null when the list already
+ *   has exactly the shape this plugin maintains — so callers can skip the write,
+ *   which is also what stops the settings-updated event from looping.
  */
-export function appendV41Models(existing) {
+export function withV41ModelsFirst(existing) {
   const models = Array.isArray(existing) ? existing : []
-  if (models.some((m) => isV41(m?.id))) return null
-  return [...models, ...V4_1_MODELS.map((m) => ({ ...m }))]
+  const ours = V4_1_MODELS.map((def) => models.find((m) => m?.id === def.id) ?? { ...def })
+  const rest = models.filter((m) => !V4_1_MODELS.some((def) => def.id === m?.id))
+  const next = [...ours, ...rest]
+  return JSON.stringify(next) === JSON.stringify(models) ? null : next
 }
 
 /**
@@ -390,7 +417,7 @@ export function nextV41Models(userProfile) {
   if (userProfile === null || typeof userProfile !== 'object') return null
   const models = userProfile.models
   if (!Array.isArray(models) || models.length === 0) return null
-  return appendV41Models(models)
+  return withV41ModelsFirst(models)
 }
 
 async function waitForNamespace(settings) {
@@ -408,9 +435,9 @@ async function waitForNamespace(settings) {
 }
 
 /**
- * Ensure the opencode-go route lists the DeepSeek V4.1 models. No-ops when the
- * route is absent (only touch it when opencode-go exists) or when a v4.1 model
- * is already listed.
+ * Ensure the opencode-go route lists the DeepSeek V4.1 models FIRST. No-ops when
+ * the route is absent (only touch it when opencode-go exists) or when the list
+ * already has the shape this plugin maintains.
  */
 async function ensureV41Models(ctx, settings) {
   let resolved
@@ -438,9 +465,9 @@ async function ensureV41Models(ctx, settings) {
   // 只扩展用户自己配置过的 models 列表 —— 详见 nextV41Models 的说明（空列表写入会
   // 用我们这份列表整体替换引擎目录，导致模型选择器只剩一个模型）。
   const next = nextV41Models(userSection?.providers?.[PROVIDER])
-  if (next === null) return // not user-configured, or a DeepSeek V4.1 is already listed
+  if (next === null) return // not user-configured, or already in the shape we maintain
 
-  ctx.logger.info('[opencode-go] route exists; adding DeepSeek V4.1 models: %s', V4_1_MODELS.map((m) => m.id).join(', '))
+  ctx.logger.info('[opencode-go] route exists; putting DeepSeek V4.1 models first: %s', V4_1_MODELS.map((m) => m.id).join(', '))
   await settings.update(NS, { providers: { [PROVIDER]: { models: next } } })
 }
 
@@ -467,7 +494,7 @@ function installAutoModels(ctx) {
     })()
 
     // Re-run whenever the user edits the llm-pi-ai settings (Models page or
-    // file). Idempotent: once a v4.1 model is present, later calls no-op.
+    // file). Idempotent: once the models sit at the front, later calls no-op.
     const off = ctx.on('settings/document-updated', (ns) => {
       if (ns === NS) ensure()
     })

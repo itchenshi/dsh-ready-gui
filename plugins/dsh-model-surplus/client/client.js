@@ -400,7 +400,17 @@ window.__ModuleLoader__.load({
       const insufficient = balance.isAvailable === false
 
       if (infos.length === 0) {
-        // Documented shape: is_available:false with an empty balance_infos list.
+        // 两种形状都会走到这里：`is_available:false` 配空列表（真的没余额），以及
+        // `is_available:true` 配空列表（宿主侧允许：条目缺 total_balance 会被过滤掉）。
+        // 后者报「余额不足」是假告警 —— 用户会以为自己账号没钱。只有前者才是。
+        if (!insufficient) {
+          return jsx.jsx('span', {
+            className: 'model-usage',
+            title: t('titleDsUnavailable'),
+            style: S_WRAP,
+            children: jsx.jsx('span', { style: S_DIM, children: 'n/a' }),
+          })
+        }
         return jsx.jsx('span', {
           className: 'model-usage',
           title: t('insufficientHint'),

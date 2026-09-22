@@ -1,5 +1,8 @@
 # dsh-keys-setting
 
+[![English](https://img.shields.io/badge/README-English-green)](README.en.md)
+[![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
+
 在 **DSH 设置窗口 → 通用** 里配置输入框的快捷键：**Enter / Shift+Enter / Ctrl+Enter（macOS 为 ⌘）
 各自设为「发送消息」或「换行」**。
 
@@ -83,12 +86,33 @@ composer-keys:
 
 ## 安装
 
+> **npm 上暂时没有这个包 —— 现在只能从源码安装。**
+>
+> 原计划是把四个随附插件发布到 npm，那样在任何 DSH 宿主里 `dsh plugin add dsh-keys-setting` 就能装。
+> 但 npm 账号注册目前走不通：`www.npmjs.com` 的注册/登录页返回 Cloudflare 托管挑战
+> （`registry.npmjs.org` 本身是通的，卡在注册这一环），账号建不出来，包自然发不出去。
+> 所以：
+>
+> - **用 DSH Ready GUI**：这四个插件随 GUI 内置，打开「设置窗口 → 第三方插件」勾选即可，
+>   不需要命令行（在 GUI 里手动装自己的 checkout 会被启动维护换回随包那一份，这是有意设计）；
+> - **其它 DSH 宿主**（`dsh web`、CLI 等）：按下文从源码装。
+>
+> 等注册能走通了，会按原计划发布到 npm，那时 `dsh plugin --profile web add dsh-keys-setting` 即可。
+
+**方式一：DSH Ready GUI（推荐）** —— 这四个插件随 GUI 内置。打开 GUI → 设置窗口 → 第三方插件
+→ 勾选 **按键设置（dsh-keys-setting）**。安装、卸载、启用/禁用都在同一个窗口里，装完按提示重启引擎。
+
+**方式二：其它 DSH 宿主** —— 先把本仓库 clone 到本地，再按**目录**安装：
+
 ```sh
-dsh plugin --profile web add dsh-keys-setting
+git clone https://github.com/itchenshi/dsh-keys-setting.git
+dsh plugin --profile web add file:<clone 出来的绝对路径>
 ```
 
-装完**重启 `dsh web`**（或重开 DSH GUI），设置窗口「通用」页最下方即可看到
-「按键设置」。在 DSH GUI 里也可以在「设置窗口 → 第三方插件」里勾选同一个包。
+装的是磁盘上的真实目录，所以之后 `git pull` 更新的就是同一份代码；反过来，**换机或移动目录会
+让这条依赖失效**（那时重新 add 一次即可）。
+
+装完**重启 `dsh web`**（或重开 DSH GUI），设置窗口「通用」页最下方即可看到「按键设置」。
 
 > **关于包名**：本插件最初叫 `dsh-composer-keys`，但那个名字在 npm 上已被其他作者
 > 占用，现在的包名是 `dsh-keys-setting`。

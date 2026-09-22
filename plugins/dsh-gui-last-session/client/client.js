@@ -50,8 +50,6 @@ window.__ModuleLoader__.load({
     const WAIT_ATTEMPTS = 200 // ~30s — covers a slow cold start
     /** Grace period before recording arms when there is nothing to reopen. */
     const ARM_FALLBACK_MS = 4000
-    /** Don't re-POST the same id within this window. */
-    const RECORD_THROTTLE_MS = 1500
 
     /** Conservative session id shape; mirrors the host half's validation. */
     const SESSION_ID_RE = /^session-[A-Za-z0-9_-]{4,200}$/u
@@ -143,7 +141,6 @@ window.__ModuleLoader__.load({
       let armed = false
       let settled = false
       let lastRecorded = ''
-      let lastRecordedAt = 0
 
       const recordCurrent = () => {
         if (!armed) return
@@ -158,10 +155,14 @@ window.__ModuleLoader__.load({
         // Guard 2: a blank bootstrap session is never worth remembering.
         const row = state?.byId?.[current]
         if (row && row.blank === true) return
-        const now = Date.now()
-        if (current === lastRecorded && now - lastRecordedAt < RECORD_THROTTLE_MS) return
+        // 子会话（subagent）不是「上次所在会话」：它只在当前 lineage 链上才会被投影出来，
+        // 下次启动按 id 找不到 → 恢复静默失效（还会空转约 30s）。跳过它。
+        if (row && (row.origin === 'subagent' || row.parentId !== undefined)) return
+        // 只在**指针真的变了**时写：订阅源是会话列表投影，会话进行中它会持续变化
+        // （running/title/updatedAt…），按 1.5s 节流重写等于同一份指针被反复 POST，
+        // 宿主每次都要 mkdir + writeFile + rename —— 而客户端根本不读 updatedAt。
+        if (current === lastRecorded) return
         lastRecorded = current
-        lastRecordedAt = now
         Promise.resolve(io.storeLast(current)).catch(() => {})
       }
 

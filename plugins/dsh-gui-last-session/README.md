@@ -1,116 +1,127 @@
 # dsh-gui-last-session
 
-Reopen the conversation you were last in after restarting
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).
+[![English](https://img.shields.io/badge/README-English-green)](README.en.md)
+[![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
-This plugin replaces the DSH GUI's old **engine-file patch** for the same feature.
+重启 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）之后，
+自动回到你上一次所在的会话。
 
-## Why this is a plugin
+本插件取代了 DSH GUI 早先为同一功能使用的 **引擎文件补丁**。
 
-The previous implementation did not extend DSH — it *edited DSH's own files*. It
-rewrote `node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`,
-locating its insertion point by matching engine source text and gating on an
-exact engine version string.
+## 为什么做成插件
 
-That made the feature fail on **almost every engine update**:
+早先的实现并没有扩展 DSH —— 它*直接改写了 DSH 自己的文件*：重写了
+`node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`，
+靠匹配引擎源码文本来定位插入点，并用一个精确的引擎版本字符串做门禁。
 
-| Failure mode | Cause |
+于是这个功能在**几乎每次引擎更新**时都会失效：
+
+| 失效方式 | 原因 |
 |---|---|
-| Version gate | The patch refused to apply unless the engine version was *exactly* the one it was written against. |
-| Anchor drift | The insertion point was found by matching literal source lines; any rebuild, rename, or reformat broke it. |
-| Silent degradation | On failure it returned `{ ok: false }` and logged one line — so the feature just stopped working with no visible error. |
-| Re-install loss | Reinstalling the engine wiped the patch entirely. |
+| 版本门禁 | 只要引擎版本不是*正好*它编写时所针对的那一个，补丁就拒绝应用。 |
+| 锚点漂移 | 插入点是靠匹配字面源码行找到的；任何重新构建、改名或重新格式化都会让它失效。 |
+| 静默降级 | 失败时它返回 `{ ok: false }` 并只记一行日志 —— 功能就这么没了，没有任何可见的错误。 |
+| 重装即丢失 | 重装引擎会把补丁整个抹掉。 |
 
-A plugin lives in its own package and talks to the engine through its published
-service contract (`ctx.sessions`), so an engine update no longer deletes the
-feature. When the contract does change, the engine reports it loudly instead of
-quietly disabling the feature.
+插件住在自己的包里，通过引擎公开的服务契约（`ctx.sessions`）与引擎对话，
+因此引擎更新不再会删掉这个功能。契约真的变了的时候，引擎会**大声报错**，
+而不是悄悄把这个功能关掉。
 
-## Install
+## 安装
+
+> **npm 上暂时没有这个包 —— 现在只能从源码安装。**
+>
+> 原计划是把四个随附插件发布到 npm，那样在任何 DSH 宿主里 `dsh plugin add dsh-gui-last-session` 就能装。
+> 但 npm 账号注册目前走不通：`www.npmjs.com` 的注册/登录页返回 Cloudflare 托管挑战
+> （`registry.npmjs.org` 本身是通的，卡在注册这一环），账号建不出来，包自然发不出去。
+> 所以：
+>
+> - **用 DSH Ready GUI**：这四个插件随 GUI 内置，打开「设置窗口 → 第三方插件」勾选即可，
+>   不需要命令行（在 GUI 里手动装自己的 checkout 会被启动维护换回随包那一份，这是有意设计）；
+> - **其它 DSH 宿主**（`dsh web`、CLI 等）：按下文从源码装。
+>
+> 等注册能走通了，会按原计划发布到 npm，那时 `dsh plugin --profile web add dsh-gui-last-session` 即可。
+
+**方式一：DSH Ready GUI（推荐）** —— 这四个插件随 GUI 内置。打开 GUI → 设置窗口 → 第三方插件
+→ 勾选 **会话续接（dsh-gui-last-session）**。安装、卸载、启用/禁用都在同一个窗口里，装完按提示重启引擎。
+
+**方式二：其它 DSH 宿主** —— 先把本仓库 clone 到本地，再按**目录**安装：
 
 ```sh
-dsh plugin --profile web add dsh-gui-last-session
+git clone https://github.com/itchenshi/dsh-gui-last-session.git
+dsh plugin --profile web add file:<clone 出来的绝对路径>
 ```
 
-Restart `dsh web` (or reopen DSH GUI) afterwards. The same package can be installed
-from DSH GUI's Settings → Third-party plugins (listed as **会话续接**), or one-click
-from the [plugin marketplace](https://github.com/dsh-market/dsh-market).
+装的是磁盘上的真实目录，所以之后 `git pull` 更新的就是同一份代码；反过来，**换机或移动目录会
+让这条依赖失效**（那时重新 add 一次即可）。
 
-The engine's `plugin` command is a thin pnpm forwarder: the package is installed by
-its **true package name** and, because the manifest declares `dsh.bundle.patch`, it
-joins the profile's bundle layer stack automatically. Bundle layers are read at boot,
-so **restart the engine** afterwards.
+之后需要重启 `dsh web`（或重新打开 DSH GUI）。[插件市场](https://github.com/dsh-market/dsh-market)
+里的一键安装依赖 npm 上的包，而这个包还没发布，所以**现在市场里装不到它** —— 请用上面的两种
+方式之一；等发布到 npm 之后会照常可装。
 
-## Permissions, dependencies and failure bounds
+引擎的 `plugin` 命令是一个很薄的 pnpm 转发器：包是按**真实包名**安装的，
+而且因为清单里声明了 `dsh.bundle.patch`，它会自动加入该 profile 的 bundle 层栈。
+bundle 层是在启动时读取的，所以装完**要重启引擎**。
 
-Marketplaces that pin a commit (DSH STORE and similar) statically review the runtime
-source and report the permissions they detect. The facts:
+## 权限、依赖与失败边界
 
-- **Runtime dependencies:** none — Node built-ins only (`node:fs/promises`,
-  `node:crypto`, `node:path`, `node:os`).
-- **Files: yes, exactly one.** The host half keeps a small pointer document at
-  `<DSH_HOME>/last-session.json`, written atomically (unique temporary name + rename)
-  so a crash cannot leave a half-written file. It records one session id and nothing
-  else; no other file is read or written and no user file is touched.
-- **Local route: yes, one.** The host registers a single page-facing route so the page
-  half can read and update that pointer; it goes through the engine's trust fence (Host
-  allow-list plus browser session cookie) and **fails closed** when the fence is
-  unavailable.
-- **Outbound network: none.** The only `fetch` calls are same-origin requests to the
-  local route above.
-- **Credentials / commands / native artifacts / lifecycle scripts:** none.
-- **Failure bounds:** a missing, unreadable or corrupt pointer is treated as
-  "nothing to hand over" — the plugin logs it and the launch simply starts on the
-  normal screen. It never blocks engine startup, and removing the plugin restores the
-  plain behaviour with no leftover state beyond that one file.
+会锁定到具体 commit 的市场（DSH STORE 之类）会静态审查运行时源码，并报告它们检测到的权限。
+事实如下：
 
-## Two halves
+- **运行时依赖：**无 —— 只用 Node 内置模块（`node:fs/promises`、`node:crypto`、`node:path`、
+  `node:os`）。
+- **文件：有，且恰好一个。** 宿主那一半在 `<DSH_HOME>/last-session.json` 维护一份很小的指针文档，
+  采用原子写入（唯一临时名 + rename），所以崩溃不会留下写了一半的文件。它只记录一个 session id，
+  别的什么都不记；不读写任何其它文件，也不碰用户的文件。
+- **本地路由：有，一条。** 宿主注册唯一一条面向页面的路由，让页面那一半能读取和更新这个指针；
+  它走引擎的信任围栏（Host 白名单加上浏览器会话 cookie），围栏不可用时**失败即关闭**。
+- **对外网络：没有。** 唯一的 `fetch` 调用是发往上面那条本地路由的同源请求。
+- **凭据 / 命令 / 原生产物 / 生命周期脚本：**都没有。
+- **失败边界：** 指针缺失、读不出来或损坏，都按「没有可续接的东西」处理 —— 插件记一条日志，
+  启动就照常落在普通界面上。它绝不会阻断引擎启动；卸载插件即恢复原生行为，除了那一个文件之外
+  不留任何残留状态。
 
-| Half | File | Runs in | Job |
+## 两部分构成
+
+| 部分 | 文件 | 运行在 | 职责 |
 |---|---|---|---|
-| Host | `lib/index.js` | Node | Persists the pointer at `$DSH_HOME/last-session.json`; serves a tiny JSON route. |
-| Client | `client/client.js` | Browser | Records the current session; on load, reopens the stored one. |
+| 宿主 | `lib/index.js` | Node | 把指针持久化到 `$DSH_HOME/last-session.json`；提供一条很小的 JSON 路由。 |
+| 客户端 | `client/client.js` | 浏览器 | 记录当前会话；加载时重新打开已存下的那一个。 |
 
-The client half is a **hand-written, dependency-free bundle** — there is no build
-step and no bundler.
+客户端那一半是**手写的、无依赖的 bundle** —— 没有构建步骤，也没有打包器。
 
-### Bundle format (important)
+### Bundle 格式（重要）
 
-The engine's client module system does **not** consume plain ESM. A client bundle
-must register a lazy CJS factory:
+引擎的客户端模块系统**不**接受普通 ESM。客户端 bundle 必须注册一个惰性的 CJS 工厂：
 
 ```js
 window.__ModuleLoader__.load({
-  id: 'dsh-gui-last-session',            // must equal the package name
+  id: 'dsh-gui-last-session',            // 必须等于包名
   factory: (require) => ({ name, inject, apply, ... }),
 })
 ```
 
-Executing the bundle only *registers* the factory; every side effect must live
-inside the factory closure and runs at materialization (first import). Because
-this plugin needs nothing but `ctx.sessions`, a single hand-written file
-satisfies the contract with no `require()` of other modules.
+执行这个 bundle 只是*注册*工厂；所有副作用都必须放在工厂闭包里，在物化（第一次 import）时才运行。
+因为本插件除了 `ctx.sessions` 什么都不需要，所以一个手写文件就能满足契约，不必 `require()`
+任何其它模块。
 
-**Two inject mechanisms — don't confuse them:**
+**两套 inject 机制 —— 别搞混：**
 
-| Where | Values are | Purpose |
+| 位置 | 值是什么 | 作用 |
 |---|---|---|
-| `dsh.client.inject` in `package.json` | package names (e.g. `@deepseek-ai/dsh-api-session-controller`) | drive the browser module-graph **load order** |
-| exported `inject` from the bundle factory | **service names** (e.g. `['sessions']`) | drive the cordis fiber's inject for `apply(ctx)` |
+| `package.json` 里的 `dsh.client.inject` | 包名（例如 `@deepseek-ai/dsh-api-session-controller`） | 决定浏览器模块图的**加载顺序** |
+| bundle 工厂导出的 `inject` | **服务名**（例如 `['sessions']`） | 决定 cordis fiber 对 `apply(ctx)` 的 inject |
 
-Both are required. Omitting the exported `inject` makes `ctx.sessions` in
-`apply()` throw `cannot get property "sessions" without inject` the moment the
-page loads — the failure this plugin originally hit. The engine's own
-`dsh-client-ui-session` bundle does `exports.inject = ["sessions", "slots"]`,
-the same pattern.
+两者都必需。漏掉导出的 `inject`，页面一加载 `apply()` 里的 `ctx.sessions` 就会抛
+`cannot get property "sessions" without inject` —— 这正是本插件最初踩到的失败。引擎自己的
+`dsh-client-ui-session` bundle 写的是 `exports.inject = ["sessions", "slots"]`，同一个套路。
 
-`tests/test.mjs` loads the bundle through this exact contract, so either a
-regression back to plain ESM or a missing exported `inject` fails the suite
-rather than failing at runtime in the browser.
+`tests/test.mjs` 正是按这个契约加载 bundle 的，所以无论是退回普通 ESM 的回归，还是漏了导出的
+`inject`，都会让测试套件失败，而不是留到浏览器运行时才炸。
 
-## HTTP surface
+## HTTP 接口
 
-The host half registers exactly one route on the engine's own webserver:
+宿主那一半在引擎自己的 web 服务器上只注册一条路由：
 
 ```
 GET  /gui-last-session   -> { sessionId: string | null, updatedAt?: number }
@@ -118,91 +129,73 @@ POST /gui-last-session   -> { ok: true, sessionId, updatedAt }
      body: { "sessionId": "session-..." }
 ```
 
-Both directions validate the id against `/^session-[A-Za-z0-9_-]{4,200}$/`. A
-`POST` with anything else is rejected with `400` and the file is left untouched.
-The pointer is written atomically (temp file + rename), so a crash mid-write
-cannot leave a half-written file behind.
+两个方向都会用 `/^session-[A-Za-z0-9_-]{4,200}$/` 校验 id。`POST` 带了别的内容会被 `400` 拒绝，
+文件保持原样。指针是原子写入的（临时文件 + rename），所以写到一半崩溃也不会留下半个文件。
 
-## Configuration
+## 配置
 
-The plugin row lives in `cordis.patch.yml`; both keys are optional:
+插件那一行配置在 `cordis.patch.yml` 里；两个键都是可选的：
 
 ```yaml
 - insert:
     - id: gui-last-session
       name: dsh-gui-last-session
       config:
-        enabled: true   # master switch
-        quiet: false    # true = log nothing on activate
+        enabled: true   # 总开关
+        quiet: false    # true = 激活时不记任何日志
 ```
 
-To override configuration in a profile without editing the package, add a row
-with the same id in the profile's own `cordis.patch.yml` (it replaces the whole
-`config`, so restate every key).
+想在不改包的前提下覆盖某个 profile 里的配置，就在该 profile 自己的 `cordis.patch.yml` 里加一条
+id 相同的行（它会整体替换 `config`，所以每个键都要重新写全）。
 
-## Correctness notes
+## 正确性说明
 
-Two behaviours matter, and both are covered by tests:
+有两处行为很关键，且都有测试覆盖：
 
-1. **The blank bootstrap session is never recorded.** On page load the engine
-   itself navigates to a workspace and may create/select an *empty* session. If
-   that got recorded, the stored pointer would become "the empty session the
-   engine just made" and the next start would reopen nothing useful. This was a
-   real observed failure of the old patch. Two independent guards prevent it:
-   - Recording stays **disarmed** until the reopen attempt has settled (or a 4s
-     fallback timer fires), so the engine's bootstrap navigation happens while
-     the plugin is not yet listening for changes.
-   - Even once armed, a row flagged `blank: true` is never recorded.
+1. **引擎启动时的空白会话永远不会被记录。** 页面加载时，引擎自己会导航到一个工作区，并可能
+   创建/选中一个*空*会话。如果把它记下来，存下的指针就会变成「引擎刚建的那个空会话」，下次
+   启动就续接不到任何有用的东西。这是旧补丁真实出现过的失败。两道彼此独立的防线避免它：
+   - 记录在续接尝试落定（或 4s 兜底定时器触发）之前一直保持**未启用**，这样引擎的启动导航
+     发生时，插件还没开始监听变化。
+   - 即便已经启用，被标记 `blank: true` 的行也永远不会被记录。
 
-2. **Reopening waits for the target to become addressable.** The session list
-   arrives over the network after the page mounts. The contract says `open()`
-   on an unknown id fails loud, so the plugin polls the list snapshot (150ms
-   intervals, ~30s ceiling) until the row exists, then selects it.
+2. **续接会等目标变成可寻址的。** 会话列表是页面挂载之后才从网络上到的。契约规定对未知 id
+   调用 `open()` 会失败报错，所以插件轮询列表快照（150ms 一次，上限约 30s），直到那一行出现，
+   再选中它。
 
-A snapshot that throws (service tearing down, not ready yet) does not abort the
-wait — the poll simply continues.
+快照抛异常（服务正在拆除、还没就绪）不会中断等待 —— 轮询照常继续。
 
-## Compatibility
+## 兼容性
 
-This plugin depends on **published service contracts**, not on an engine version
-number, so it is deliberately **not** version-gated.
+本插件依赖的是**公开的服务契约**，而不是引擎版本号，所以它有意**不**做版本门禁。
 
-Verified working on **dsh 0.1.5-rc.1** (and the contract is identical on
-0.1.2-rc.1):
+已在 **dsh 0.1.5-rc.1** 上验证可用（该契约在 0.1.2-rc.1 上同样一致）：
 
-| Dependency | Contract used |
+| 依赖 | 用到的契约 |
 |---|---|
-| `ctx.sessions` (client) | `list` (ObservableSnapshot), `open(id)`, `binding(id)` |
+| `ctx.sessions`（客户端） | `list` (ObservableSnapshot), `open(id)`, `binding(id)` |
 | `SessionListState` | `current`, `byId`, `byId[id].blank` |
-| `ctx.webServer` (host) | `register({ kind, path, handler })` |
-| Injection package | `@deepseek-ai/dsh-api-session-controller` |
+| `ctx.webServer`（宿主） | `register({ kind, path, handler })` |
+| 注入包 | `@deepseek-ai/dsh-api-session-controller` |
 
-End-to-end check on 0.1.5-rc.1: the engine boots with the plugin installed,
-`GET /gui-last-session` returns the stored pointer, and
-`dsh-gui-last-session/client.js` is served inside the boot payload's plugin
-bundle (HTTP 200).
+0.1.5-rc.1 上的端到端检查：装上插件后引擎能启动，`GET /gui-last-session` 返回已存下的指针，
+并且 `dsh-gui-last-session/client.js` 被包含在启动载荷的插件 bundle 里一起下发（HTTP 200）。
 
-If a future engine breaks one of these contracts, activation **fails loudly**
-(the engine reports a plugin load failure) rather than silently disabling the
-feature — then update `dsh.client.inject` and the host route accordingly.
+如果将来的引擎打破了其中某个契约，激活会**大声失败**（引擎会报插件加载失败），而不是悄悄
+把这个功能关掉 —— 那时相应更新 `dsh.client.inject` 和宿主路由即可。
 
-> Note: this plugin is intentionally **not** given an `engineRange` in the DSH GUI
-> catalog. Version ranges are a poor fit here: npm semver excludes prereleases
-> from ranges unless the range names a prerelease at the exact
-> `[major,minor,patch]`, so a range like `>=0.1.2-0 <0.2.0` would wrongly block
-> `0.1.5-rc.1`. The plugin is also low-risk: its worst case is "the conversation
-> wasn't reopened", never a broken engine boot.
+> 说明：本插件有意**没有**在 DSH GUI 目录里写 `engineRange`。版本范围在这里并不合适：除非
+> 范围在精确的 `[major,minor,patch]` 上点名某个预发布版，npm semver 会把预发布版排除在范围
+> 之外，所以像 `>=0.1.2-0 <0.2.0` 这样的范围会错误地卡住 `0.1.5-rc.1`。何况这个插件风险
+> 很低：最坏情况是「会话没被续接」，绝不会导致引擎启动失败。
 
-## Migrating from the DSH GUI pointer
+## 从 DSH GUI 的指针迁移
 
-DSH GUI keeps its own pointer at `<userData>/last-session.json`. This plugin
-deliberately owns a **separate** file so it stays self-contained and works for
-anyone who installs it, not just DSH GUI users. DSH GUI performs this hand-off
-automatically at startup (one-way: it never overwrites a pointer the plugin
-already recorded). To do it by hand, copy the `sessionId` across — note the route
-is behind the engine's trust fence, so a bare `curl` now gets **401**
-(pass the engine's session cookie: open the engine URL printed by `dsh web` once,
-then reuse its cookie):
+DSH GUI 自己的指针放在 `<userData>/last-session.json`。本插件有意使用**另一个**文件，以便保持
+自包含，并对任何安装它的人都有效，而不只是 DSH GUI 用户。DSH GUI 会在启动时自动完成这次交接
+（单向：它绝不会覆盖插件已经记录下的指针）。要手动做，把 `sessionId` 拷过去即可 —— 注意这条
+路由在引擎的信任围栏之后，所以裸 `curl` 现在会得到 **401**（要带上引擎的会话 cookie：先用
+`dsh web` 打印出的引擎 URL 打开一次，然后复用它的 cookie）：
 
 ```sh
 curl -X POST http://127.0.0.1:<port>/gui-last-session \
@@ -211,26 +204,23 @@ curl -X POST http://127.0.0.1:<port>/gui-last-session \
      -d '{"sessionId":"session-..."}'
 ```
 
-## Development
+## 开发
 
 ```sh
 node --check lib/index.js
-npm test        # local behaviour tests (no network, no engine)
+npm test        # 本地行为测试（不联网、不需要引擎）
 ```
 
-`npm test` also asserts the client bundle registers under the engine's
-`__ModuleLoader__` contract with the correct package id.
+`npm test` 还会断言客户端 bundle 按引擎的 `__ModuleLoader__` 契约、以正确的包 id 完成注册。
 
-The package is plain JavaScript with zero dependencies.
+这个包是零依赖的普通 JavaScript。
 
-## Notes / limitations
+## 说明 / 限制
 
-- The plugin relies on `ctx.sessions` (client) and `ctx.webServer` (host). If a
-  future DSH version renames either service, activation reports the failure
-  instead of silently disabling the feature — update `package.json`'s
-  `dsh.client.inject` accordingly.
-- Reopening is best-effort: if the remembered session was deleted, the plugin
-  gives up quietly and leaves the engine's own startup behaviour in place.
+- 插件依赖 `ctx.sessions`（客户端）和 `ctx.webServer`（宿主）。如果将来的 DSH 版本改了其中任一
+  服务的名字，激活会报出失败，而不是悄悄关掉这个功能 —— 那时相应更新 `package.json` 的
+  `dsh.client.inject`。
+- 续接是尽力而为的：如果记住的会话已被删除，插件会安静放弃，把引擎自己的启动行为留在原地。
 
 ## License
 
