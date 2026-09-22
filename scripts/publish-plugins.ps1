@@ -42,7 +42,7 @@ $OfficialRegistry = 'https://registry.npmjs.org'
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 $Parent = Split-Path $RepoRoot -Parent
 
-# Display order = the order the DSH GUI lists them in (see src/plugin-manager.js).
+# Display order = the order the DSH Ready GUI lists them in (see src/plugin-manager.js).
 $Packages = @(
   'dsh-model-surplus',
   'dsh-gui-last-session',
@@ -263,6 +263,6 @@ else {
   Write-Host 'next steps:'
   Write-Host '  1. git tag v<version> && git push origin v<version> in each plugin repo, if you'
   Write-Host '     want the GitHub Actions workflow (OIDC + provenance) to own later releases.'
-  Write-Host '  2. then push the DSH GUI v0.5.0 commit -- it installs these four from npm, so'
+  Write-Host '  2. then push the DSH Ready GUI v0.5.0 commit -- it installs these four from npm, so'
   Write-Host '     pushing it earlier would make existing users install packages that do not exist.'
 }

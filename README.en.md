@@ -1,22 +1,22 @@
-# DSH GUI
+# DSH Ready GUI
 
 > A desktop shell for DeepSeek Harness — embedded Web UI, always-latest engine, portable data directory, and a system tray.
 
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
-[![license](https://img.shields.io/github/license/itchenshi/DeepSeekHarnessGUI)](LICENSE)
-[![release](https://img.shields.io/github/v/release/itchenshi/DeepSeekHarnessGUI)](https://github.com/itchenshi/DeepSeekHarnessGUI/releases)
-[![stars](https://img.shields.io/github/stars/itchenshi/DeepSeekHarnessGUI)](https://github.com/itchenshi/DeepSeekHarnessGUI/stargazers)
+[![license](https://img.shields.io/github/license/itchenshi/dsh-ready-gui)](LICENSE)
+[![release](https://img.shields.io/github/v/release/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/releases)
+[![stars](https://img.shields.io/github/stars/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)]()
-[![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/DeepSeekHarnessGUI)
-[![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/DeepSeekHarnessGUI)
-[![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/DeepSeekHarnessGUI)
+[![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/dsh-ready-gui)
+[![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/dsh-ready-gui)
+[![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/dsh-ready-gui)
 
-DSH GUI is an **unofficial** desktop shell for [DeepSeek Harness](https://www.deepseek.com/harness/) (DeepSeek's open-source agent framework, `@deepseek-ai/dsh`, currently a technical preview). It wraps Harness's Web UI in a native window: out-of-the-box, tray-resident, self-updating — while keeping 100% of Harness's capabilities because the shell runs the official engine untouched.
+DSH Ready GUI is an **unofficial** desktop shell for [DeepSeek Harness](https://www.deepseek.com/harness/) (DeepSeek's open-source agent framework, `@deepseek-ai/dsh`, currently a technical preview). It wraps Harness's Web UI in a native window: out-of-the-box, tray-resident, self-updating — while keeping 100% of Harness's capabilities because the shell runs the official engine untouched.
 
 ```
 ┌────────────────────────────────────────────┐
-│  DSH GUI (Electron App Shell)             │
+│  DSH Ready GUI (Electron App Shell)             │
 │  ├─ Embedded window (Harness UI via dsh web)│
 │  ├─ System tray (Open window / Settings / Exit) │
 │  ├─ Engine updater (startup + periodic checks) │
@@ -26,13 +26,13 @@ DSH GUI is an **unofficial** desktop shell for [DeepSeek Harness](https://www.de
 
 ## 🔗 Repositories
 
-The three repositories are mirrors of each other; installers are published on [GitHub Releases](https://github.com/itchenshi/DeepSeekHarnessGUI/releases).
+The three repositories are mirrors of each other; installers are published on [GitHub Releases](https://github.com/itchenshi/dsh-ready-gui/releases).
 
 | Platform | URL | Clone |
 |---|---|---|
-| GitHub (primary) | https://github.com/itchenshi/DeepSeekHarnessGUI | `git clone https://github.com/itchenshi/DeepSeekHarnessGUI.git` |
-| Gitee (mirror) | https://gitee.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitee.com/itchenshi/DeepSeekHarnessGUI.git` |
-| GitCode (mirror) | https://gitcode.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitcode.com/itchenshi/DeepSeekHarnessGUI.git` |
+| GitHub (primary) | https://github.com/itchenshi/dsh-ready-gui | `git clone https://github.com/itchenshi/dsh-ready-gui.git` |
+| Gitee (mirror) | https://gitee.com/itchenshi/dsh-ready-gui | `git clone https://gitee.com/itchenshi/dsh-ready-gui.git` |
+| GitCode (mirror) | https://gitcode.com/itchenshi/dsh-ready-gui | `git clone https://gitcode.com/itchenshi/dsh-ready-gui.git` |
 
 ## 📦 Related repositories (bundled plugins)
 
@@ -62,7 +62,7 @@ dsh plugin --profile web add dsh-model-surplus
 
 - **📦 Plugins split out and published to npm**: the four bundled plugins (model surplus,
   session resume, OpenCode Go routes, key bindings) are **no longer packaged with this
-  repository**. Each is its own repository and an npm package, and DSH GUI now installs them from the
+  repository**. Each is its own repository and an npm package, and DSH Ready GUI now installs them from the
   registry like `dsh-market` does. Plugin updates no longer wait for a shell release, and the plugins
   work in any DSH host.
 - **⚠️ Three package names changed**: `dsh-opencode-go` → **`dsh-opencode-go-path`** and
@@ -90,7 +90,7 @@ dsh plugin --profile web add dsh-model-surplus
 
 - **🔐 Security fixes (everyone should upgrade)**: the three plugins' **browser routes had no authentication at all** — a request with no credentials returned your **account usage and DeepSeek balance**, and even wrote settings (a forged `Host` worked too, the DNS-rebinding shape). This release also adds the **navigation fence** (the engine page could previously walk the window — preload bridge included — onto a remote origin), a **permission fence** (microphone/camera/geolocation/notifications were auto-granted), **sender checks on every privileged IPC channel**, and closes "any third-party plugin can disable the engine's own rows".
 - **🛠 Reliability**: patch-layer writes now use a **cross-process lock + atomic write + post-write verify** (3 concurrent processes × 40 rows used to **silently lose 17–28 rows while reporting success**; now 120/120 survive). A failed write no longer flips the market state, a plugin that is registered but missing on disk is actually reinstalled, and a bundled plugin only replaces an installed one when it is genuinely newer (no more unattended downgrades).
-- **🔄 DSH GUI now checks for its own updates**: after launch, automatically, notifying when a newer version exists and staying silent when offline — **nothing to configure**. The check **handles mainland and international networks automatically**: Gitee → GitCode → GitHub on a mainland network and the reverse elsewhere, per-source timeout with fallback and the last working source remembered (measured here: Gitee answered on the first try in 251 ms).
+- **🔄 DSH Ready GUI now checks for its own updates**: after launch, automatically, notifying when a newer version exists and staying silent when offline — **nothing to configure**. The check **handles mainland and international networks automatically**: Gitee → GitCode → GitHub on a mainland network and the reverse elsewhere, per-source timeout with fallback and the last working source remembered (measured here: Gitee answered on the first try in 251 ms).
 - **⌨️ New plugin "Key bindings"** (`dsh-keys-setting`): configure whether Enter / Shift+Enter / Ctrl+Enter **send** or **insert a line break**, from the settings window's General page. Defaults match the engine, so nothing about your habits changes.
 
 Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.1.md](RELEASE-NOTES-v0.4.1.md).
@@ -119,14 +119,14 @@ Full details: [CHANGELOG.md](CHANGELOG.md) and [RELEASE-NOTES-v0.4.1.md](RELEASE
 
 - **Embedded window**: the shell spawns `dsh web --no-open --port 0`, parses the authenticated loopback URL from stdout, and loads it into the embedded Electron window. No external browser needed.
 - **Main window starts maximized**, with no size flicker while hidden.
-- **System tray**: right-click menu "Open window / Check DSH GUI update… / Settings / Exit"; closing the window hides to tray by default, or can be set to "quit directly" (which removes the tray icon too).
-- **Window title shows the app version** (`DSH GUI v<version>`); the tray tooltip shows both the GUI and engine versions.
+- **System tray**: right-click menu "Open window / Check DSH Ready GUI update… / Settings / Exit"; closing the window hides to tray by default, or can be set to "quit directly" (which removes the tray icon too).
+- **Window title shows the app version** (`DSH Ready GUI v<version>`); the tray tooltip shows both the GUI and engine versions.
 
 ### ⚡ Engine lifecycle management
 
 - **Always the latest Harness**: checks the npm registry version table at startup and every **fixed 30 minutes** while running (frequency is not adjustable). On a new version it follows the policy: **ask before updating (default) / silent update / notify only**; updates install into the app's private directory and a **persistent badge** pops up bottom-right when done.
-- **GUI update vs engine update are separate**: the engine update is handled in the background by the GUI per the configured policy; **DSH GUI itself checks for a newer version after launch**, notifying through the notice window when one exists (never interrupting), silent when up to date or offline, and never notifying twice for the same version. **A launch-time check alone is not enough** — this GUI is often left running for days, so it also re-checks in the background every 6 hours, while the startup check itself is throttled to once an hour (so repeated restarts do not hammer the network). The check **covers mainland and international networks automatically**: it uses the GitHub / Gitee / GitCode releases, trying Gitee → GitCode → GitHub on a mainland network (`zh-CN` or an Asia/Shanghai-style time zone) and the reverse elsewhere, with a per-source timeout, source-by-source fallback, and the source that last worked remembered and preferred — so a mainland user never burns a timeout on GitHub first. **There is nothing to configure**; the tray item "Check DSH GUI update…" is the manual entry point and opens the download page of whichever platform actually answered. Measured here (Asia/Shanghai): Gitee answered on the first try in 251 ms (both GitHub and Gitee allow 60 unauthenticated API requests per hour per IP, so one check an hour uses 1/60 — and a rate-limited source is treated as a failure and skipped).
-- **GUI-hosted engine restart**: dsh runs as a child process of DSH GUI, so an in-page "restart" cannot restart it. To make plugins (or the engine itself) take effect, use "Restart engine to apply" in the settings window, the page bridge `window.__dshGui.restartEngine()`, or simply relaunch DSH GUI. After the engine is ready, unexpected exits are auto-respawned (auto-restart stops after 3 consecutive failures and notifies).
+- **GUI update vs engine update are separate**: the engine update is handled in the background by the GUI per the configured policy; **DSH Ready GUI itself checks for a newer version after launch**, notifying through the notice window when one exists (never interrupting), silent when up to date or offline, and never notifying twice for the same version. **A launch-time check alone is not enough** — this GUI is often left running for days, so it also re-checks in the background every 6 hours, while the startup check itself is throttled to once an hour (so repeated restarts do not hammer the network). The check **covers mainland and international networks automatically**: it uses the GitHub / Gitee / GitCode releases, trying Gitee → GitCode → GitHub on a mainland network (`zh-CN` or an Asia/Shanghai-style time zone) and the reverse elsewhere, with a per-source timeout, source-by-source fallback, and the source that last worked remembered and preferred — so a mainland user never burns a timeout on GitHub first. **There is nothing to configure**; the tray item "Check DSH Ready GUI update…" is the manual entry point and opens the download page of whichever platform actually answered. Measured here (Asia/Shanghai): Gitee answered on the first try in 251 ms (both GitHub and Gitee allow 60 unauthenticated API requests per hour per IP, so one check an hour uses 1/60 — and a rate-limited source is treated as a failure and skipped).
+- **GUI-hosted engine restart**: dsh runs as a child process of DSH Ready GUI, so an in-page "restart" cannot restart it. To make plugins (or the engine itself) take effect, use "Restart engine to apply" in the settings window, the page bridge `window.__dshGui.restartEngine()`, or simply relaunch DSH Ready GUI. After the engine is ready, unexpected exits are auto-respawned (auto-restart stops after 3 consecutive failures and notifies).
 - **Auto-recovery from plugin-caused startup failures**: a plugin auto-installed this launch that breaks dsh startup is removed and unchecked automatically; suspected plugin failures pop a diagnostic dialog where you can disable them and restart with one click.
 
 ### 🔌 Third-party plugin management
@@ -162,7 +162,7 @@ A plugin has **two orthogonal states**. The settings window gives each its own c
 
 ### 🌐 Language & appearance
 
-- **Language is chosen on the Harness page; the shell follows**: there is **no** separate language/appearance section in the settings window (removed in v0.3.0 — it lives on the engine side). Change the language (follow system / 中文 / English) or theme (light / dark / system) in Harness's own settings and the DSH GUI shell — settings window, tray menu, dialogs, window theme — **follows immediately**, no restart.
+- **Language is chosen on the Harness page; the shell follows**: there is **no** separate language/appearance section in the settings window (removed in v0.3.0 — it lives on the engine side). Change the language (follow system / 中文 / English) or theme (light / dark / system) in Harness's own settings and the DSH Ready GUI shell — settings window, tray menu, dialogs, window theme — **follows immediately**, no restart.
 - **How "follow system" resolves**: with `locale: system` (the default), the engine's `locale.preference` in `$DSH_HOME/settings.yaml` (the one the Harness page uses) wins; only then does it fall back to Electron's OS language.
 - **Hot-published**: the main process watches `settings.yaml`, so a change on the page applies at once; values the GUI itself writes are skipped when equal, so there is no loop.
 - **One consistent skin**: with `appearance: engine` (the default) the window theme matches Harness's `ui-theme.preference` — never a dark page in a light shell.
@@ -208,7 +208,7 @@ A plugin has **two orthogonal states**. The settings window gives each its own c
 
 ### Language & appearance
 
-> **Not in the DSH GUI settings window**: the "Language" and "Appearance" rows were removed in v0.3.0 and now live in **Harness's own settings page**; the shell follows (see "Language & appearance" above). The settings window keeps: close behaviour, data directory, engine updates, third-party plugins.
+> **Not in the DSH Ready GUI settings window**: the "Language" and "Appearance" rows were removed in v0.3.0 and now live in **Harness's own settings page**; the shell follows (see "Language & appearance" above). The settings window keeps: close behaviour, data directory, engine updates, third-party plugins.
 
 > Settings persist to `<userData>/settings.json` and save on change; also reachable via menu `Settings → Open settings window…` (modal) or the tray "Settings" item.
 
@@ -220,7 +220,7 @@ Prerequisite (only for development / running from source): [Node.js](https://nod
 
 ```sh
 npm install        # install electron / build dependencies
-npm start          # start DSH GUI
+npm start          # start DSH Ready GUI
 ```
 
 On first launch, the DeepSeek Harness engine is installed automatically (about 1–2 minutes, progress shown on the status page); after that it's only re-installed when Harness ships a new version.
@@ -321,11 +321,11 @@ npm run bundle:node   # ensure portable Node is unpacked (idempotent: skips when
 npm run ensure:electron # cache the Electron release zip locally (downloaded once
                       #   and SHA-256 verified; dist:win then feeds it to
                       #   electron-builder with zero network)
-npm run dist:win      # Windows → dist/DSH-GUI-WIN/ + .zip + NSIS installer + portable zip
+npm run dist:win      # Windows → dist/DSH-READY-GUI-WIN/ + .zip + NSIS installer + portable zip
                       #   (Electron comes from the local cached zip — no "Downloading…" each run)
 npm run dist          # combined win + linux build (platform limits apply — see below)
-npm run dist:mac      # macOS   → dist/DSH-GUI-MAC/ + .zip + .dmg (requires macOS)
-npm run dist:linux    # Linux   → dist/DSH-GUI-LINUX/ + .zip + .AppImage
+npm run dist:mac      # macOS   → dist/DSH-READY-GUI-MAC/ + .zip + .dmg (requires macOS)
+npm run dist:linux    # Linux   → dist/DSH-READY-GUI-LINUX/ + .zip + .AppImage
 ```
 
 > After changing the icon, **reinstall/replace the build output**: Explorer caches
@@ -333,7 +333,7 @@ npm run dist:linux    # Linux   → dist/DSH-GUI-LINUX/ + .zip + .AppImage
 > `%LocalAppData%\IconCache.db`). `node scripts/ico-info.cjs build/icon.ico` prints
 > the .ico's frames.
 
-- **Directory naming**: electron-builder's `*-unpacked` dirs are renamed to `DSH-GUI-WIN` / `DSH-GUI-MAC` / `DSH-GUI-LINUX` by `scripts/fix-unpacked.mjs`, which also produces same-named **`.zip`** files (unzip = ready-to-run directory).
+- **Directory naming**: electron-builder's `*-unpacked` dirs are renamed to `DSH-READY-GUI-WIN` / `DSH-READY-GUI-MAC` / `DSH-READY-GUI-LINUX` by `scripts/fix-unpacked.mjs`, which also produces same-named **`.zip`** files (unzip = ready-to-run directory).
 - **Bundled Node**: downloaded per platform by `scripts/bundle-node.mjs` (default v26; the engine's session persistence needs Node ≥ 23's zstd API). `scripts/after-pack.js` copies it into the app in full before packaging (`extraResources` can't be used — it drops `node_modules`, leaving bundled Node without npm). If the bundled Node has no npm, `npm` falls back to the host Node's npm-cli automatically.
 - **Platform limits**: AppImage's `mksquashfs` only runs on Linux/macOS, so the linux step of `npm run dist` on Windows fails with `ENOENT`; build each platform on its own OS or in CI/Docker (e.g. `electronuserland/builder`).
 - **Cross-arch macOS**: CI builds the x64 macOS package on an Apple Silicon runner by setting `DSH_NODE_ARCH=x64` (see `.github/workflows/build-all.yml`), so each dmg bundles a Node matching its architecture.

@@ -1,9 +1,75 @@
-# DSH GUI v0.5.0 更新说明
+# DSH Ready GUI v0.5.0 更新说明
 
-**发布日：2026-09-21** · 从 v0.4.1 累积的所有改动。
+**发布日：2026-09-22** · 从 v0.4.1 累积的所有改动。
 
-> 一句话：**插件拆仓 + 发布 npm** —— 四个随附插件不再随本仓库打包，各自独立成仓库
-> 并发布到 npm，DSH GUI 改为从 registry 安装它们。
+> 一句话：**改名为 DSH Ready GUI，并把四个随附插件拆成独立仓库** —— 应用身份、产物名
+> 与三平台仓库名同步更新；壳不再打包插件，改为从 registry 安装；已有安装的数据目录会
+> 自动迁移，不会看起来像全新安装。
+
+---
+
+## 🏷 改名为 DSH Ready GUI
+
+应用从 **DSH GUI** 改名为 **DSH Ready GUI**，仓库从 `DeepSeekHarnessGUI` 改为
+`dsh-ready-gui`（GitHub / Gitee / GitCode 三处同步）。
+
+### 为什么改
+
+旧名字既不唯一、也不说明自己是什么：
+
+- `dsh-gui` 在 GitHub 上已被**四个别人的仓库**占用（8★ / 4★ / 4★ / 3★），另有
+  `LAN-TINA-WS/dsh-gui-customization`（18★）；
+- 更要紧的是 `ScannerVpn/DeepSeekHarnessGui`（6★）与旧仓库名**只差大小写**，GitHub
+  搜索视为同一个名字，而它星数是旧仓库的两倍——搜这个关键词的人先看到的是别人；
+- npm 上 `dsh-gui`、`deepseek-harness-gui`、`dsh-desktop` 也全被占。
+
+新名字 `dsh-ready-gui` 实测三项全零：npm 空闲、GitHub 无同名仓库、DSH 生态注册表
+（4000+ 条目）里也没有占用。「ready」对应这个项目的定位——**打开就用**；「gui」说明它
+是图形界面而不是命令行。
+
+### 改了什么
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 应用显示名 | `DSH GUI` | `DSH Ready GUI` |
+| 应用身份 `appId` | `com.dsh.guishell` | `com.dshready.gui` |
+| 仓库名（三平台） | `DeepSeekHarnessGUI` | `dsh-ready-gui` |
+| 包名 | `dsh-gui-shell` | `dsh-ready-gui` |
+| 构建产物 | `DSH-GUI-WIN/MAC/LINUX` | `DSH-READY-GUI-WIN/MAC/LINUX` |
+| 窗口标题 / 托盘提示 | `DSH GUI v0.5.0` | `DSH Ready GUI v0.5.0` |
+
+### ⚠️ 数据目录会自动迁移
+
+Electron 的 `userData` 目录由 `productName` 推导，所以改名会把目录从
+`<appData>\DSH GUI` 变成 `<appData>\DSH Ready GUI` —— 而**引擎、`dsh-home`、
+`settings.json`、`pnpm-tools` 全在旧目录里**。不处理的话，已有安装会看起来像全新安装：
+重新下载引擎（数百 MB）、丢掉模型配置与会话历史。
+
+启动时会在**任何代码读取 userData 之前**做一次性迁移（`src/userdata-migrate.js`）：把旧
+目录里「新目录还没有」的条目搬过去；只 rename、绝不删除；幂等；迁移失败绝不让应用起不来
+（最坏情况是当作全新安装）。新目录会留下 `legacy-userdata-migrated.txt` 作为记录。该模块
+有 7 项单测，其中一条专门守住「旧目录名必须是 `DSH GUI`」——一次批量改名曾把它也替换成
+新名，使迁移静默失效（`legacy` 与 `current` 变成同一个目录）。
+
+### 刻意**没有**改的东西
+
+这些字符串里的 `dsh-gui` 是内部标识符或历史契约，改了会坏事：
+
+- **`// dsh-gui:`** —— 引擎补丁写进引擎自身文件的标记，必须与旧版写下的内容一致，否则
+  识别不出、也清理不掉旧补丁；
+- **`<home>\.dsh-gui\bundled-plugins`** —— v0.4.1 的插件 staging 目录，是磁盘上真实存在
+  的路径（迁移逻辑按它匹配）；
+- **`dsh-gui-last-session`** —— 那是另一个项目的名字（四个随附插件之一）；
+- **`DSH_SHELL_*` 环境变量**（13 个，README 里公开的接口）与 **`dsh-gui:*` IPC 通道**
+  —— 内部/接口标识，用户看不到，改名只会制造破坏。
+
+所以 `grep dsh-gui` 在新代码里仍会命中这些地方，那是有意保留的。
+
+### 对已有安装的影响
+
+`appId` 变了，操作系统会视为**另一个应用**：新版不会覆盖旧安装，装完后需要卸载旧的
+「DSH GUI」。数据目录会自动迁移（见上），所以卸载旧的不会丢配置 —— 但**先启动一次新版
+完成迁移，再卸载旧的**更稳妥。
 
 ---
 

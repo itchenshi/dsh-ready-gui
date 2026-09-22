@@ -1,10 +1,10 @@
-# electron-builder configuration for DSH GUI Shell.
+# electron-builder configuration for DSH Ready GUI Shell.
 # Portable Node is bundled first: `npm run bundle:node` unpacks the current
 # platform's Node into resources/node, which extraResources ships with the app.
 # Icons are generated from the official harness favicon by `npm run make-icons`.
 
-appId: com.dsh.guishell
-productName: DSH GUI
+appId: com.dshready.gui
+productName: DSH Ready GUI
 directories:
   output: dist
   buildResources: build
@@ -57,4 +57,4 @@ linux:
   target:
     - AppImage
   category: Development
-  maintainer: dsh-gui-shell
+  maintainer: dsh-ready-gui

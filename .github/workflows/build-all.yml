@@ -1,4 +1,4 @@
-# Build DSH GUI for Windows / macOS (x64 + arm64) / Linux and attach binaries
+# Build DSH Ready GUI for Windows / macOS (x64 + arm64) / Linux and attach binaries
 # to releases. Each GitHub-hosted runner provides the platform/arch its dist
 # script needs: macOS dmg or Linux AppImage cannot be built on a Windows host
 # (see README), and each macOS arch is built on a matching runner so the
@@ -24,23 +24,23 @@ jobs:
           - name: win-x64
             os: windows-latest
             script: dist:win
-            artifact: DSH-GUI-WIN
+            artifact: DSH-READY-GUI-WIN
           - name: mac-arm64
             os: macos-latest
             script: dist:mac:arm64
-            artifact: DSH-GUI-MAC-ARM64
+            artifact: DSH-READY-GUI-MAC-ARM64
             node_arch: ''
           - name: mac-x64
             # Cross-built on the Apple Silicon runner (x64 node bundled via
             # DSH_NODE_ARCH); Intel-only runners are no longer reliable.
             os: macos-latest
             script: dist:mac:x64
-            artifact: DSH-GUI-MAC-X64
+            artifact: DSH-READY-GUI-MAC-X64
             node_arch: x64
           - name: linux-x64
             os: ubuntu-latest
             script: dist:linux
-            artifact: DSH-GUI-LINUX
+            artifact: DSH-READY-GUI-LINUX
             node_arch: ''
     runs-on: ${{ matrix.os }}
     steps:

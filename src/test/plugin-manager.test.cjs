@@ -89,7 +89,7 @@ function run() {
         console.log("ok - pruneProfileBundles removes and is idempotent");
 
         // atomic write leaves a parseable manifest, no temp residue.
-        assert.ok(!fs.existsSync(path.join(t.profile, "package.json.dsh-gui-heal.tmp")));
+        assert.ok(!fs.existsSync(path.join(t.profile, "package.json.dsh-ready-gui-heal.tmp")));
         console.log("ok - atomic manifest write leaves no temp residue");
       });
     });

@@ -31,8 +31,8 @@
 
 $ErrorActionPreference = "Stop"
 
-$root = "D:\AI\WorkBook\DeepSeekHarnessGUI"
-$liveUd = "C:\Users\31352\AppData\Roaming\DSH GUI"
+$root = "D:\AI\WorkBook\dsh-ready-gui"
+$liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 
 $PLUGIN = "dsh-model-surplus"
 $ROWID = "model-usage"

@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * plugin-manager.js — DSH GUI 对 dsh 引擎 web profile 的第三方插件管理。
+ * plugin-manager.js — DSH Ready GUI 对 dsh 引擎 web profile 的第三方插件管理。
  *
  * 引擎从 0.1.2-rc.1 起内置官方插件机制：在 <DSH_HOME>/profiles/web 里用 pnpm
  * 安装声明 `dsh.bundle` 的 npm 包，并把包名登记进该 profile 的 package.json
@@ -1465,7 +1465,7 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
 /** 原子写回 profile manifest（先写临时文件再 rename，中途崩溃不会留下残缺 JSON）。 */
 function writeProfileManifest(dshHome, manifest) {
   const file = path.join(profileDir(dshHome), "package.json");
-  const tmp = `${file}.dsh-gui-heal.tmp`;
+  const tmp = `${file}.dsh-ready-gui-heal.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
   fs.renameSync(tmp, file);
 }

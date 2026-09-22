@@ -24,7 +24,7 @@ param(
   [string]$SecretsFile = '',
   [string[]]$Skip = @(),
   [string]$Owner = 'itchenshi',
-  [string]$Repo = 'DeepSeekHarnessGUI'
+  [string]$Repo = 'dsh-ready-gui'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +39,7 @@ function Write-Warn2([string]$m) { Write-Host "[warn]  $m" -ForegroundColor Yell
 if (-not (Test-Path $NotesFile)) { throw "notes file not found: $NotesFile" }
 $notesPath = (Resolve-Path $NotesFile).Path
 $notesText = [System.IO.File]::ReadAllText($notesPath)
-if (-not $Title) { $Title = "DSH GUI $($Tag.TrimStart('v'))" }
+if (-not $Title) { $Title = "DSH Ready GUI $($Tag.TrimStart('v'))" }
 Write-Step "tag=$Tag title='$Title' notes=$notesPath ($($notesText.Length) chars)"
 
 # Stage the body as UTF-8 (no BOM) so curl reads it byte-for-byte; a PowerShell

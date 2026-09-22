@@ -4,7 +4,7 @@
 // "reopen last conversation" patch and GUI-managed engine restart use:
 //   window.__dshGui = { setLastSession, getLastSession, restartEngine }
 // Recording/reading happens in the main process (userData/last-session.json);
-// restartEngine asks the DSH GUI main process to kill + respawn the dsh engine
+// restartEngine asks the DSH Ready GUI main process to kill + respawn the dsh engine
 // (the dsh page itself cannot restart the GUI-hosted engine process).
 
 const { contextBridge, ipcRenderer } = require("electron");

@@ -64,7 +64,7 @@ function hangingFetch() {
 
   await check("parseTag reads all three platforms' payloads", () => {
     // The real shape: {"tag_name":"v0.4.0"} — verified live on GitHub, Gitee, GitCode.
-    assert.equal(parseTag('{"tag_name":"v0.4.0","name":"DSH GUI 0.4.0"}'), "0.4.0");
+    assert.equal(parseTag('{"tag_name":"v0.4.0","name":"DSH Ready GUI 0.4.0"}'), "0.4.0");
     assert.equal(parseTag('{"tag_name":"0.4.0"}'), "0.4.0");
     assert.equal(parseTag('{"tag_name": "v0.5.0-rc.1"}'), "0.5.0-rc.1");
     assert.equal(parseTag("v0.4.0"), "0.4.0"); // plain-text endpoint

@@ -22,9 +22,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $remotes = @(
-  @{ Name = 'origin';  Url = 'https://github.com/itchenshi/DeepSeekHarnessGUI.git' },
-  @{ Name = 'gitee';   Url = 'https://gitee.com/itchenshi/DeepSeekHarnessGUI.git' },
-  @{ Name = 'gitcode'; Url = 'https://gitcode.com/itchenshi/DeepSeekHarnessGUI.git' }
+  @{ Name = 'origin';  Url = 'https://github.com/itchenshi/dsh-ready-gui.git' },
+  @{ Name = 'gitee';   Url = 'https://gitee.com/itchenshi/dsh-ready-gui.git' },
+  @{ Name = 'gitcode'; Url = 'https://gitcode.com/itchenshi/dsh-ready-gui.git' }
 )
 
 # Load secrets (KEY=VALUE lines)

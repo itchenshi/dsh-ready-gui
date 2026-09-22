@@ -43,8 +43,8 @@ public static class Win32Modal {
 }
 "@
 
-$root = "D:\AI\WorkBook\DeepSeekHarnessGUI"
-$ud = "C:\Users\31352\AppData\Roaming\DSH GUI"
+$root = "D:\AI\WorkBook\dsh-ready-gui"
+$ud = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-modal-home-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $homeDir | Out-Null
 $log = Join-Path $env:TEMP ("dsh-modal-" + [guid]::NewGuid().ToString("N") + ".log")

@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * DSH GUI Shell — main process.
+ * DSH Ready GUI Shell — main process.
  *
  * Responsibilities:
  *  1. Ensure the DeepSeek Harness engine (@deepseek-ai/dsh) is the LATEST
@@ -50,6 +50,7 @@ const { statusFingerprint } = require("./plugin-state");
 const { acceptableEngineUrl, sameOrigin } = require("./engine-url");
 const { preferredOrder, fetchLatestRelease, likelyMainland } = require("./update-sources");
 const { defaultDshHome, hasHomeData, moveHomeData } = require("./home-migrate");
+const { migrateLegacyUserData } = require("./userdata-migrate");
 const { ensureEnginePatches } = require("./engine-patch");
 const {
   CATALOG: PLUGIN_CATALOG,
@@ -90,13 +91,13 @@ const UPDATE_CHANNELS = {
 };
 
 /**
- * DSH GUI 应用自身的更新来源：三个开源平台的 Release（仅检测 + 打开下载页）。
+ * DSH Ready GUI 应用自身的更新来源：三个开源平台的 Release（仅检测 + 打开下载页）。
  *
  * 国内/国外网络差异很大（GitHub 在国内常超时，Gitee/GitCode 反之），所以不写死单一
  * 平台：见 src/update-sources.js —— 按「上次成功的源 → 地区默认顺序」逐个尝试，每个源
  * 单独限时，任何一个先答上来就用它。GUI_RELEASES_URL 只作为兜底下载页。
  */
-const GUI_RELEASES_URL = "https://github.com/itchenshi/DeepSeekHarnessGUI/releases/latest";
+const GUI_RELEASES_URL = "https://github.com/itchenshi/dsh-ready-gui/releases/latest";
 
 /** 检查来源的取值由 src/update-sources.js 自行择优，不再作为可配置项。 */
 
@@ -154,7 +155,7 @@ const UI_STRINGS = {
   zh: {
     // tray / menu
     "tray.open": "打开窗口",
-    "tray.guiUpdate": "检查 DSH GUI 更新…",
+    "tray.guiUpdate": "检查 DSH Ready GUI 更新…",
     "tray.settings": "设置",
     "tray.quit": "退出",
     "menu.settings": "设置",
@@ -179,7 +180,7 @@ const UI_STRINGS = {
     "settings.autoRestore": "启动后自动回到最近一次对话（关闭后每次启动从空白/新会话开始）",
     "settings.autoRestore.hint": "记录你最后打开/使用的会话，重启 DeepSeek Harness 后自动切回",
     "settings.saved": "已保存",
-    "settings.titleBar": "设置 — DSH GUI",
+    "settings.titleBar": "设置 — DSH Ready GUI",
     // status page
     "status.checking": "正在检查版本…",
     // update flows
@@ -192,7 +193,7 @@ const UI_STRINGS = {
     "update.upToDate.msg": "DeepSeek Harness 已是最新版本 v{0}",
     "update.found.title": "发现新版本",
     "update.found.msg": "可更新到 DeepSeek Harness v{0}",
-    "update.found.detail": "当前版本：v{0}。\n是否立即下载更新，并在完成后重启 DSH GUI 以使用新版本？",
+    "update.found.detail": "当前版本：v{0}。\n是否立即下载更新，并在完成后重启 DSH Ready GUI 以使用新版本？",
     "update.notInstalled.detail": "引擎尚未安装。是否立即下载最新版本并安装？",
     "update.nowRestart": "立即更新并重启",
     "update.later": "暂不更新",
@@ -200,23 +201,23 @@ const UI_STRINGS = {
     "update.installProgress": "下载并安装 DeepSeek Harness",
     "update.done.title": "更新完成",
     "update.done.msg": "已更新到 DeepSeek Harness v{0}",
-    "update.done.detail": "重启 DSH GUI 后即使用新版本。现在重启吗？",
+    "update.done.detail": "重启 DSH Ready GUI 后即使用新版本。现在重启吗？",
     "update.restartNow": "立即重启",
     "update.restartLater": "稍后重启",
     "update.failed.title": "更新失败",
     "update.failed.msg": "更新 DeepSeek Harness 失败",
     "update.failed.willUseCurrent": "将使用当前版本 v{0} 启动。",
     "update.gui.title": "发现新版本",
-    "update.gui.msg": "DSH GUI 可更新到 v{0}",
+    "update.gui.msg": "DSH Ready GUI 可更新到 v{0}",
     "update.gui.detail": "当前版本：v{0}。\n是否打开下载页面（{1}）？",
     "update.gui.open": "打开下载页",
     "update.gui.cancel": "取消",
     "update.gui.cant.title": "无法检查更新",
     "update.gui.cant.msg": "无法连接更新来源（GitHub / Gitee / GitCode 均不可达）",
-    "update.gui.upToDate": "DSH GUI 已是最新版本 v{0}（来源：{1}）",
+    "update.gui.upToDate": "DSH Ready GUI 已是最新版本 v{0}（来源：{1}）",
     "update.notice.found": "发现新版本 v{0}",
     "update.notice.nextLaunch": "将于下次启动时更新",
-    "update.gui.available": "DSH GUI 可更新到 v{0}（来源：{1}）",
+    "update.gui.available": "DSH Ready GUI 可更新到 v{0}（来源：{1}）",
     "update.notice.updated": "已更新到 v{0}",
     "update.notice.thisLaunch": "本次启动已使用最新版本",
     "update.notice.detailAuto": "可在设置中改为自动更新",
@@ -248,7 +249,7 @@ const UI_STRINGS = {
     "plugin.excluded.title": "插件导致启动失败，已自动剔除",
     "plugin.excluded.msg": "刚自动安装的插件导致 dsh 无法启动，已移除并在设置中取消勾选：{0}。下次启动将不再自动安装。",
     // 引擎意外退出 / GUI 托管重启
-    "engine.autoRestartGaveUp": "引擎多次意外退出（已尝试 {0} 次自动重启），请检查日志或重启 DSH GUI",
+    "engine.autoRestartGaveUp": "引擎多次意外退出（已尝试 {0} 次自动重启），请检查日志或重启 DSH Ready GUI",
     "engine.crash.title": "引擎意外退出",
     "engine.crash.msg": "dsh 多次意外退出（退出码 {0}），已停止自动重启。可在设置窗口点「重启引擎」手动重试。",
     // 启动失败诊断
@@ -294,7 +295,7 @@ const UI_STRINGS = {
   en: {
     // tray / menu
     "tray.open": "Open Window",
-    "tray.guiUpdate": "Check for DSH GUI Updates…",
+    "tray.guiUpdate": "Check for DSH Ready GUI Updates…",
     "tray.settings": "Settings",
     "tray.quit": "Quit",
     "menu.settings": "Settings",
@@ -307,7 +308,7 @@ const UI_STRINGS = {
     "settings.title": "Settings",
     "settings.autoSave": "Changes are saved automatically",
     "settings.language": "Language",
-    "settings.language.hint": "Applies to the settings window, tray & menus, in-page DSH GUI features, and the embedded Harness UI",
+    "settings.language.hint": "Applies to the settings window, tray & menus, in-page DSH Ready GUI features, and the embedded Harness UI",
     "settings.dataDir": "Data Folder",
     "settings.home.system": "Follow system ~/.dsh (default)",
     "settings.home.app": "App folder (settings / sessions / workspace records travel with the app)",
@@ -319,7 +320,7 @@ const UI_STRINGS = {
     "settings.autoRestore": "Automatically reopen the last conversation on launch (off = always start blank/new)",
     "settings.autoRestore.hint": "Remembers the conversation you last opened so it is reopened after restarting DeepSeek Harness",
     "settings.saved": "Saved",
-    "settings.titleBar": "Settings — DSH GUI",
+    "settings.titleBar": "Settings — DSH Ready GUI",
     // status page
     "status.checking": "Checking for updates…",
     // update flows
@@ -332,7 +333,7 @@ const UI_STRINGS = {
     "update.upToDate.msg": "DeepSeek Harness is already up to date (v{0})",
     "update.found.title": "Update Available",
     "update.found.msg": "DeepSeek Harness v{0} is available",
-    "update.found.detail": "Installed: v{0}.\nDownload and update now, then restart DSH GUI to use it?",
+    "update.found.detail": "Installed: v{0}.\nDownload and update now, then restart DSH Ready GUI to use it?",
     "update.notInstalled.detail": "The engine is not installed yet. Download and install the latest version now?",
     "update.nowRestart": "Update & Restart",
     "update.later": "Not Now",
@@ -340,23 +341,23 @@ const UI_STRINGS = {
     "update.installProgress": "Downloading and installing DeepSeek Harness",
     "update.done.title": "Update Complete",
     "update.done.msg": "Updated to DeepSeek Harness v{0}",
-    "update.done.detail": "DSH GUI will use the new version after restart. Restart now?",
+    "update.done.detail": "DSH Ready GUI will use the new version after restart. Restart now?",
     "update.restartNow": "Restart Now",
     "update.restartLater": "Later",
     "update.failed.title": "Update Failed",
     "update.failed.msg": "Failed to update DeepSeek Harness",
-    "update.failed.willUseCurrent": "DSH GUI will start with the current version v{0}.",
+    "update.failed.willUseCurrent": "DSH Ready GUI will start with the current version v{0}.",
     "update.gui.title": "Update Available",
-    "update.gui.msg": "DSH GUI v{0} is available",
+    "update.gui.msg": "DSH Ready GUI v{0} is available",
     "update.gui.detail": "Installed: v{0}.\nOpen the download page ({1})?",
     "update.gui.open": "Open Download Page",
     "update.gui.cancel": "Cancel",
     "update.gui.cant.title": "Cannot Check for Updates",
     "update.gui.cant.msg": "Cannot reach any update source (GitHub / Gitee / GitCode)",
-    "update.gui.upToDate": "DSH GUI is already up to date (v{0}, via {1})",
+    "update.gui.upToDate": "DSH Ready GUI is already up to date (v{0}, via {1})",
     "update.notice.found": "New version v{0} available",
     "update.notice.nextLaunch": "Will update on next launch",
-    "update.gui.available": "DSH GUI v{0} is available (via {1})",
+    "update.gui.available": "DSH Ready GUI v{0} is available (via {1})",
     "update.notice.updated": "Updated to v{0}",
     "update.notice.thisLaunch": "This launch already uses the latest version",
     "update.notice.detailAuto": "You can switch to automatic updates in Settings",
@@ -388,7 +389,7 @@ const UI_STRINGS = {
     "plugin.excluded.title": "Plugin broke startup — auto-excluded",
     "plugin.excluded.msg": "A plugin auto-installed this launch prevented dsh from starting. It was removed and unchecked in settings: {0}. It will not be auto-installed again.",
     // engine unexpected exit / GUI-managed restart
-    "engine.autoRestartGaveUp": "Engine exited unexpectedly several times (auto-restarted {0}×) — check the logs or restart DSH GUI",
+    "engine.autoRestartGaveUp": "Engine exited unexpectedly several times (auto-restarted {0}×) — check the logs or restart DSH Ready GUI",
     "engine.crash.title": "Engine exited unexpectedly",
     "engine.crash.msg": "dsh exited unexpectedly (code {0}); auto-restart was stopped. Use “Restart Engine” in the settings window to retry.",
     // startup-failure diagnosis
@@ -447,6 +448,32 @@ function fmt(template, ...args) {
 // of packaged builds. Must run before anything reads app paths.
 if (process.env.DSH_SHELL_USERDATA) {
   app.setPath("userData", process.env.DSH_SHELL_USERDATA);
+}
+
+/**
+ * 一次性迁移：这个应用在 v0.5.0 之前叫「DSH GUI」。
+ *
+ * Electron 的 userData 由 productName 推导，所以改名会把旧目录留在原地、新目录空着
+ * ——而**引擎、dsh-home、settings.json、pnpm-tools 全在旧目录里**。不迁移的话，已有
+ * 安装会看起来像全新安装：重新下载引擎、丢掉模型配置与会话历史。
+ *
+ * 实现在 `./userdata-migrate`（纯 Node、可单测）；`DSH_SHELL_USERDATA` 显式重定向时
+ * （隔离冒烟测试）整体跳过。必须在任何代码读取 userData 之前运行。
+ */
+if (!process.env.DSH_SHELL_USERDATA) {
+  const legacyUserData = migrateLegacyUserData({
+    appDataDir: app.getPath("appData"),
+    currentDir: app.getPath("userData"),
+    log: (...args) => console.error(...args),
+  });
+  if (legacyUserData.error) {
+    console.error("legacy userData migration skipped:", legacyUserData.error);
+  } else if (legacyUserData.moved.length > 0) {
+    console.log(
+      `migrated ${legacyUserData.moved.length} entr(y|ies) from the pre-rename userData directory ` +
+        `(${legacyUserData.legacyDir}) -> ${legacyUserData.currentDir}`,
+    );
+  }
 }
 
 const DEFAULT_SETTINGS = {
@@ -572,15 +599,15 @@ function installedVersionNow() {
   }
 }
 
-/** 主窗口标题显示 DSH GUI 应用版本；托盘提示同时给出 GUI 与引擎版本。 */
+/** 主窗口标题显示 DSH Ready GUI 应用版本；托盘提示同时给出 GUI 与引擎版本。 */
 function applyEngineVersionChrome() {
   const appV = app.getVersion() || "0.0.0";
   const engV = engineVersion ?? installedVersionNow();
-  const label = `DSH GUI v${appV}`;
+  const label = `DSH Ready GUI v${appV}`;
   if (win && !win.isDestroyed()) win.setTitle(label);
   if (tray && !tray.isDestroyed()) {
     const engineLabel = resolveUiLang() === "zh" ? "引擎" : "engine";
-    tray.setToolTip(engV ? `DSH GUI v${appV} · ${engineLabel} v${engV}` : `DSH GUI v${appV}`);
+    tray.setToolTip(engV ? `DSH Ready GUI v${appV} · ${engineLabel} v${engV}` : `DSH Ready GUI v${appV}`);
   }
   return engV;
 }
@@ -1232,7 +1259,7 @@ function killProcessTree(child, done) {
 
 /**
  * GUI 托管的“重启引擎”：杀掉当前 dsh 子进程，再按既有流程重新拉起（重新加载
- * web profile → 新装/变更的插件在此生效）。与 app.relaunch 不同，不退出 DSH GUI，
+ * web profile → 新装/变更的插件在此生效）。与 app.relaunch 不同，不退出 DSH Ready GUI，
  * 会话数据都在 $DSH_HOME 下，不受影响。
  */
 function restartEngineNow(reason) {
@@ -1309,7 +1336,7 @@ function startupErrorLogPath(tag) {
 async function writeStartupErrorLog(file, { code, signal, tail }) {
   try {
     const lines = [
-      `DSH GUI startup error log`,
+      `DSH Ready GUI startup error log`,
       `time: ${new Date().toISOString()}`,
       `version: ${app.getVersion()}`,
       `engine: ${engineVersion ?? "unknown"}`,
@@ -2427,7 +2454,7 @@ let appUpdateChecksStarted = false;
 let appUpdateTimer = null;
 
 /**
- * 后台检查 DSH GUI 自身是否有新版本：有新版才用通知窗口提醒（不打断用户）。
+ * 后台检查 DSH Ready GUI 自身是否有新版本：有新版才用通知窗口提醒（不打断用户）。
  * 完全离线 / 三个源都不通时静默跳过 —— 自动检查不该弹出错误。
  *
  * 同一个新版本**只提醒一次**：启动时会查、长会话期间还会每 6 小时复查，不做去重就会反复弹。
@@ -2494,7 +2521,7 @@ function stopAppUpdateChecks() {
   }
 }
 
-/** 托盘/设置“检查 DSH GUI 更新…”：查三个开源平台，有新版则询问并打开下载页。 */
+/** 托盘/设置“检查 DSH Ready GUI 更新…”：查三个开源平台，有新版则询问并打开下载页。 */
 async function runGuiUpdate() {
   if (guiCheckBusy) return;
   guiCheckBusy = true;
@@ -3709,7 +3736,7 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DSH_SHELL_TEST_OPEN_SETTINGS) {
       setImmediate(() => openSettingsWindow());
     }
-    // 启动后检查 DSH GUI 自身更新：不阻塞启动；长会话期间每 6 小时复查一次。
+    // 启动后检查 DSH Ready GUI 自身更新：不阻塞启动；长会话期间每 6 小时复查一次。
     setImmediate(() => {
       startAppUpdateChecks();
     });

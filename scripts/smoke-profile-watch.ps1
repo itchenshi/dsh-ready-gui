@@ -24,8 +24,8 @@
 
 $ErrorActionPreference = "Stop"
 
-$root = "D:\AI\WorkBook\DeepSeekHarnessGUI"
-$liveUd = "C:\Users\31352\AppData\Roaming\DSH GUI"
+$root = "D:\AI\WorkBook\dsh-ready-gui"
+$liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 
 $ud = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-profw-ud-" + [guid]::NewGuid().ToString("N"))
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-profw-home-" + [guid]::NewGuid().ToString("N"))

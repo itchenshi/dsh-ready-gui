@@ -18,8 +18,8 @@ public static class Win32Close {
 }
 "@
 
-$root = "D:\AI\WorkBook\DeepSeekHarnessGUI"
-$ud = "C:\Users\31352\AppData\Roaming\DSH GUI"
+$root = "D:\AI\WorkBook\dsh-ready-gui"
+$ud = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-e2e-home-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $homeDir | Out-Null
 $log = Join-Path $env:TEMP ("dsh-e2e-" + $Mode + "-" + [guid]::NewGuid().ToString("N") + ".log")

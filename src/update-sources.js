@@ -22,7 +22,7 @@
  */
 
 const REPO_OWNER = "itchenshi";
-const REPO_NAME = "DeepSeekHarnessGUI";
+const REPO_NAME = "dsh-ready-gui";
 
 const SOURCES = Object.freeze([
   Object.freeze({

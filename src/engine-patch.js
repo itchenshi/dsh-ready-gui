@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * engine-patch.js — DSH GUI 对安装好的引擎客户端做的小补丁。
+ * engine-patch.js — DSH Ready GUI 对安装好的引擎客户端做的小补丁。
  *
  * 现仅保留一个：“重启后自动回到最近一次对话”的页内逻辑。它挂在引擎自带的
  * dsh-client-ui-conversation 的 apply(ctx) 开头（该模块已注入 sessions 服务）：

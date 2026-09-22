@@ -3,9 +3,9 @@
  * fix-unpacked.mjs — rename electron-builder's unpacked output dirs to their
  * branded platform names and produce a zip archive of each program dir.
  *
- *   win-unpacked  -> DSH-GUI-WIN   + dist/DSH-GUI-WIN.zip
- *   mac-unpacked  -> DSH-GUI-MAC   + dist/DSH-GUI-MAC.zip
- *   linux-unpacked-> DSH-GUI-LINUX + dist/DSH-GUI-LINUX.zip
+ *   win-unpacked  -> DSH-READY-GUI-WIN   + dist/DSH-READY-GUI-WIN.zip
+ *   mac-unpacked  -> DSH-READY-GUI-MAC   + dist/DSH-READY-GUI-MAC.zip
+ *   linux-unpacked-> DSH-READY-GUI-LINUX + dist/DSH-READY-GUI-LINUX.zip
  *
  * electron-builder hardcodes the "-unpacked" suffix and offers no config for
  * it, so we rename (and archive) after the build finishes.
@@ -30,9 +30,9 @@ const DIST = join(ROOT, "dist");
 const FORCE = process.argv.includes("--force");
 
 const MAPPINGS = [
-  ["win-unpacked", "DSH-GUI-WIN"],
-  ["mac-unpacked", "DSH-GUI-MAC"],
-  ["linux-unpacked", "DSH-GUI-LINUX"],
+  ["win-unpacked", "DSH-READY-GUI-WIN"],
+  ["mac-unpacked", "DSH-READY-GUI-MAC"],
+  ["linux-unpacked", "DSH-READY-GUI-LINUX"],
 ];
 
 /** Zip `dirPath` (as top-level entry `name`) into `zipPath`. */

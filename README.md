@@ -1,24 +1,24 @@
-# DSH GUI
+# DSH Ready GUI
 
 > DeepSeek Harness 桌面壳 —— 内嵌 Web UI、自动保持最新引擎、自带数据目录管理与系统托盘。
 
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
-[![license](https://img.shields.io/github/license/itchenshi/DeepSeekHarnessGUI)](LICENSE)
-[![release](https://img.shields.io/github/v/release/itchenshi/DeepSeekHarnessGUI)](https://github.com/itchenshi/DeepSeekHarnessGUI/releases)
-[![stars](https://img.shields.io/github/stars/itchenshi/DeepSeekHarnessGUI)](https://github.com/itchenshi/DeepSeekHarnessGUI/stargazers)
+[![license](https://img.shields.io/github/license/itchenshi/dsh-ready-gui)](LICENSE)
+[![release](https://img.shields.io/github/v/release/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/releases)
+[![stars](https://img.shields.io/github/stars/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)]()
-[![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/DeepSeekHarnessGUI)
-[![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/DeepSeekHarnessGUI)
-[![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/DeepSeekHarnessGUI)
+[![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/dsh-ready-gui)
+[![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/dsh-ready-gui)
+[![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/dsh-ready-gui)
 
-DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent 框架，
+DSH Ready GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent 框架，
 `@deepseek-ai/dsh`）的非官方桌面外壳。它把 Harness 的 Web UI 装进原生窗口中，
 开箱即用、常驻托盘、自动更新，而你依然拥有完整的 Harness 能力。
 
 ```
 ┌────────────────────────────────────────────┐
-│  DSH GUI (Electron App Shell)             │
+│  DSH Ready GUI (Electron App Shell)             │
 │  ├─ 内嵌窗口 (嵌入 dsh web 的 Harness UI)   │
 │  ├─ 系统托盘 (打开窗口 / GUI 更新 / 设置)    │
 │  ├─ 引擎更新 (每 30 分钟 + 三档策略)        │
@@ -30,11 +30,11 @@ DSH GUI 是 [DeepSeek Harness](https://www.deepseek.com/harness/)（开源 Agent
 
 | 平台 | 地址 | 克隆 |
 |---|---|---|
-| GitHub（主仓库） | https://github.com/itchenshi/DeepSeekHarnessGUI | `git clone https://github.com/itchenshi/DeepSeekHarnessGUI.git` |
-| Gitee（镜像） | https://gitee.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitee.com/itchenshi/DeepSeekHarnessGUI.git` |
-| GitCode（镜像） | https://gitcode.com/itchenshi/DeepSeekHarnessGUI | `git clone https://gitcode.com/itchenshi/DeepSeekHarnessGUI.git` |
+| GitHub（主仓库） | https://github.com/itchenshi/dsh-ready-gui | `git clone https://github.com/itchenshi/dsh-ready-gui.git` |
+| Gitee（镜像） | https://gitee.com/itchenshi/dsh-ready-gui | `git clone https://gitee.com/itchenshi/dsh-ready-gui.git` |
+| GitCode（镜像） | https://gitcode.com/itchenshi/dsh-ready-gui | `git clone https://gitcode.com/itchenshi/dsh-ready-gui.git` |
 
-三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/DeepSeekHarnessGUI/releases) 为准。
+三平台仓库互为镜像；安装包以 [GitHub Releases](https://github.com/itchenshi/dsh-ready-gui/releases) 为准。
 
 ## 📦 相关仓库（随附插件）
 
@@ -75,7 +75,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 
 - **📦 插件拆仓 + 发布 npm**：四个随附插件（模型余量、会话续接、
   OpenCode Go 路由、按键设置）**不再随本仓库打包**，各自独立成仓库并发布到
-  npm；DSH GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
+  npm；DSH Ready GUI 改为像 `dsh-market` 一样从 registry 安装它们。好处是插件的更新
   不再需要等壳发版，且在任何 DSH 宿主（官方桌面端、Tauri 客户端、`dsh web`、CLI）
   里都能装。
 - **⚠️ 三个插件的包名变了**：`dsh-opencode-go` → **`dsh-opencode-go-path`**、
@@ -107,7 +107,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 - **🛠 可靠性修复**：补丁层写入改为**跨进程锁 + 原子 + 写后校验**（实测 3 进程并发写 40 行此前会
   **丢掉 17–28 行却报成功**，修复后 120/120 全部保留）；写失败不再翻转市场状态；登记在案但文件已丢
   的插件会真的重装；随包版本比已装旧时才重装（不再无人值守降级）。
-- **🔄 自动检查 DSH GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
+- **🔄 自动检查 DSH Ready GUI 新版本**：启动后自动查、有新版通知、离线静默，**无需配置**。检查会
   **自动兼顾国内外网络** —— 国内先试 Gitee → GitCode → GitHub，国外反之，逐源限时回退并记住上次
   可用的源（实测本机 Gitee 首次尝试 251ms 命中）。
 - **⌨️ 新插件「按键设置」**（`dsh-keys-setting`）：在设置窗口「通用」页配置
@@ -140,9 +140,9 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 - **内嵌窗口**：壳进程启动 `dsh web --no-open --port 0`，解析 stdout 中的带认证
   loopback URL，加载到内嵌 Electron 窗口。不依赖外部浏览器。
 - **主窗口启动即最大化**，隐藏时无普通尺寸闪烁。
-- **系统托盘**：右键菜单「打开窗口 / 检查 DSH GUI 更新… / 设置 / 退出」；
+- **系统托盘**：右键菜单「打开窗口 / 检查 DSH Ready GUI 更新… / 设置 / 退出」；
   关闭窗口默认**隐藏到托盘**，也可设「直接退出」（退出时托盘一并移除）。
-- **窗口标题显示应用版本**：标题为 `DSH GUI v<应用版本>`；托盘提示同时给出
+- **窗口标题显示应用版本**：标题为 `DSH Ready GUI v<应用版本>`；托盘提示同时给出
   GUI 版本与引擎版本。
 
 ### ⚡ 引擎生命周期管理
@@ -151,19 +151,19 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
   registry 的版本表（更新频率不可调），发现新版按策略处理：**询问后再更新
   （默认）/ 静默更新 / 仅提示**；更新安装到应用私有目录，完成后右下角弹出
   **持久角标**。
-- **GUI 与引擎更新分家**：引擎更新由 GUI 后台按设置策略自动处理；**DSH GUI 自身启动后
+- **GUI 与引擎更新分家**：引擎更新由 GUI 后台按设置策略自动处理；**DSH Ready GUI 自身启动后
   会自动检查有没有新版本**，有则用通知窗口提醒（不打断使用），无新版或离线时静默，同一个
   新版本只提醒一次。**只在启动时查一次不够**——这个 GUI 常常开着不关，所以长会话期间每
   6 小时还会后台复查一遍；启动检查本身 1 小时内不重复（避免频繁重启连着打网络）。检查
   **自动兼顾国内外网络**：同时使用 GitHub / Gitee / GitCode 三个开源平台的 Release，国内
   网络（`zh-CN` 或 Asia/Shanghai 等时区）先试 Gitee → GitCode → GitHub，国外反之，每个源单独
   限时、逐个回退，并记住上次可用的源优先使用 —— 国内用户不会先在 GitHub 上白等一次超时。
-  **来源无需用户配置**；手动入口是托盘「检查 DSH GUI 更新…」，会打开实际答上来的那个平台的
+  **来源无需用户配置**；手动入口是托盘「检查 DSH Ready GUI 更新…」，会打开实际答上来的那个平台的
   下载页。实测：本机（Asia/Shanghai）Gitee 首次尝试 251ms 命中（两家的未认证 API 都是每 IP
   每小时 60 次，1 小时 1 次仅占 1/60；真被限流会当该源失败并自动换源）。
-- **GUI 托管的引擎重启**：dsh 由 DSH GUI 作为子进程托管，页面/插件内建的
+- **GUI 托管的引擎重启**：dsh 由 DSH Ready GUI 作为子进程托管，页面/插件内建的
   “重启”无法重启它。需要重启使插件（或引擎自身）生效时，用设置窗口「重启
-  引擎使生效」、页面桥 `window.__dshGui.restartEngine()`，或直接重启 DSH GUI；
+  引擎使生效」、页面桥 `window.__dshGui.restartEngine()`，或直接重启 DSH Ready GUI；
   引擎就绪后意外退出时 GUI 会自动重拉（连续 3 次仍失败则停止并提示）。
 - **第三方插件引起的启动失败自动恢复**：刚自动安装的插件若导致 dsh 无法启动，
   会自动剔除并取消勾选；疑似插件导致的失败会弹出诊断对话框，可一键禁用并重启。
@@ -246,7 +246,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 
 - **语言在 Harness 页面里选，外壳跟着走**：设置窗口**没有**独立的语言/外观栏（v0.3.0 起移除，
   统一到引擎侧）——在 Harness 页面的设置里改语言（跟随系统 / 中文 / English）或主题
-  （light / dark / system），DSH GUI 外壳（设置窗口、托盘菜单、对话框、窗口主题）**实时跟随**，无需重启。
+  （light / dark / system），DSH Ready GUI 外壳（设置窗口、托盘菜单、对话框、窗口主题）**实时跟随**，无需重启。
 - **跟随系统时的解析顺序**：`locale: system`（默认）时优先跟随引擎设置文件
   `$DSH_HOME/settings.yaml` 里的 `locale.preference`（即 Harness 页面用的那个），其次才按 Electron 系统语言解析。
 - **热发布**：主进程 watch `settings.yaml`，页面上改完立刻生效；GUI 自己写回的值因相等自动跳过，不会循环。
@@ -296,7 +296,7 @@ powershell -File scripts/publish-plugins.ps1           # 发布全部四个
 
 ### 语言与外观
 
-> **不在 DSH GUI 设置窗口里改**：v0.3.0 起已移除「语言」「外观」两栏，统一在
+> **不在 DSH Ready GUI 设置窗口里改**：v0.3.0 起已移除「语言」「外观」两栏，统一在
 > **Harness 页面（引擎设置）** 修改，外壳实时跟随（见上文「多语言与外观」）。
 > 设置窗口只保留：关闭窗口行为、数据目录、引擎更新、第三方插件。
 
@@ -313,7 +313,7 @@ Node，终端用户无需安装任何运行时。
 
 ```sh
 npm install        # 安装 electron / 构建依赖
-npm start          # 启动 DSH GUI
+npm start          # 启动 DSH Ready GUI
 ```
 
 首次启动会自动联网安装 DeepSeek Harness 引擎（约 1–2 分钟，状态页有进度）；
@@ -412,11 +412,11 @@ npm run bundle:node   # 便携 Node 就位检查（幂等：版本/平台一致�
                       #   加 --force 强制重新下载）
 npm run ensure:electron # electron 发行 zip 本地缓存（首次下载并 SHA-256 校验，
                       #   之后 dist:win 直接喂给 electron-builder，零网络）
-npm run dist:win      # Windows → dist/DSH-GUI-WIN/ + .zip + NSIS 安装包 + 便携 zip
+npm run dist:win      # Windows → dist/DSH-READY-GUI-WIN/ + .zip + NSIS 安装包 + 便携 zip
                       #   （electron 走本地缓存 zip，不再每轮 Downloading）
 npm run dist          # 合并构建 win + linux（注意平台限制，见下）
-npm run dist:mac      # macOS   → dist/DSH-GUI-MAC/ + .zip + .dmg（需 macOS）
-npm run dist:linux    # Linux   → dist/DSH-GUI-LINUX/ + .zip + .AppImage
+npm run dist:mac      # macOS   → dist/DSH-READY-GUI-MAC/ + .zip + .dmg（需 macOS）
+npm run dist:linux    # Linux   → dist/DSH-READY-GUI-LINUX/ + .zip + .AppImage
 ```
 
 > 改完图标记得**重新安装/复制构建产物**：Windows 资源管理器会缓存旧图标，
@@ -425,8 +425,8 @@ npm run dist:linux    # Linux   → dist/DSH-GUI-LINUX/ + .zip + .AppImage
 > 检查 .ico 的帧构成。
 
 - **程序目录命名**：electron-builder 的 `*-unpacked` 目录由
-  `scripts/fix-unpacked.mjs` 改名为 `DSH-GUI-WIN` / `DSH-GUI-MAC` /
-  `DSH-GUI-LINUX`，并同步生成同名 **`.zip`**（解压即程序目录）。
+  `scripts/fix-unpacked.mjs` 改名为 `DSH-READY-GUI-WIN` / `DSH-READY-GUI-MAC` /
+  `DSH-READY-GUI-LINUX`，并同步生成同名 **`.zip`**（解压即程序目录）。
 - **捆绑 Node**：由 `scripts/bundle-node.mjs` 按平台下载（默认 v26；引擎的会话
   持久化需要 Node ≥ 23 的 zstd API），`scripts/after-pack.js` 在封包前完整拷入
   应用（不能用 `extraResources`——它会丢弃 `node_modules`，导致捆绑 Node 缺 npm）。

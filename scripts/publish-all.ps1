@@ -86,7 +86,7 @@ else {
 $package = Get-Content (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json
 $version = [string]$package.version
 $tag = "v$version"
-$releaseName = "DSH GUI $version"
+$releaseName = "DSH Ready GUI $version"
 Write-Step "version: $version (release tag: $tag)"
 
 # ---------------------------------------------------------------- push -----
@@ -133,16 +133,16 @@ else {
 # --------------------------------------------------------- collect assets ----
 function Get-ReleaseAssets([string]$platform) {
   $patterns = switch ($platform) {
-    'win'   { @('*.exe', '*.zip', 'DSH-GUI-WIN*') }
-    'mac'   { @('*.dmg', '*.zip', 'DSH-GUI-MAC*') }
-    'linux' { @('*.AppImage', '*.zip', 'DSH-GUI-LINUX*') }
+    'win'   { @('*.exe', '*.zip', 'DSH-READY-GUI-WIN*') }
+    'mac'   { @('*.dmg', '*.zip', 'DSH-READY-GUI-MAC*') }
+    'linux' { @('*.AppImage', '*.zip', 'DSH-READY-GUI-LINUX*') }
   }
   $found = @()
   foreach ($p in $patterns) {
     $found += Get-ChildItem -Path $DistDir -Filter $p -File -ErrorAction SilentlyContinue
   }
   # De-dupe by full name (the per-platform folder zips created by
-  # fix-unpacked.mjs are DSH-GUI-WIN.zip / DSH-GUI-MAC.zip / DSH-GUI-LINUX.zip
+  # fix-unpacked.mjs are DSH-READY-GUI-WIN.zip / DSH-READY-GUI-MAC.zip / DSH-READY-GUI-LINUX.zip
   # and match the platform patterns too).
   $seen = @{}
   $assets = @()
@@ -173,7 +173,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
   $notes = Get-Content $NotesFile -Raw -Encoding UTF8
 }
 if (-not $notes) {
-  $notes = "DSH GUI $version`n`nRelease artifacts: $($assets.Name -join ', ')"
+  $notes = "DSH Ready GUI $version`n`nRelease artifacts: $($assets.Name -join ', ')"
 }
 
 # The body must reach curl as raw UTF-8 bytes. Passing it through a PS 5.1
@@ -429,7 +429,7 @@ function Publish-GitHubRelease {
 }
 
 $owner = 'itchenshi'
-$repo  = 'DeepSeekHarnessGUI'
+$repo  = 'dsh-ready-gui'
 
 Write-Step "publishing release $tag to GitHub / Gitee / GitCode"
 Write-Ok "assets: $($assets.Name -join ', ')"

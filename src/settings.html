@@ -2,7 +2,7 @@
 <html data-theme="dark" lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>设置 — DSH GUI</title>
+  <title>设置 — DSH Ready GUI</title>
   <style>
     :root { color-scheme: dark; }
     [data-theme="light"] { color-scheme: light; }
@@ -296,7 +296,7 @@
     const I18N = {
       zh: {
         "settings.title": "设置",
-        "settings.autoSave": "DSH GUI — 修改后自动保存",
+        "settings.autoSave": "DSH Ready GUI — 修改后自动保存",
         "settings.dataDir": "数据目录",
         "settings.home.system": "跟随系统 ~/.dsh（默认）",
         "settings.home.app": "应用目录（设置 / 会话 / 工作区记录随应用携带）",
@@ -305,7 +305,7 @@
         "settings.close.tray": "隐藏到托盘（默认，从托盘恢复）",
         "settings.close.quit": "直接退出（关闭窗口即退出，托盘一并移除）",
         "settings.engineUpdate": "引擎（dsh）更新",
-        "settings.engineUpdate.sub": "由 DSH GUI 管理引擎的自动更新：更新策略 / 版本通道 / 自动检查。检查频率固定为 30 分钟，发现新版后按策略静默安装、询问或仅提示。",
+        "settings.engineUpdate.sub": "由 DSH Ready GUI 管理引擎的自动更新：更新策略 / 版本通道 / 自动检查。检查频率固定为 30 分钟，发现新版后按策略静默安装、询问或仅提示。",
         "settings.update.policy": "更新策略",
         "settings.update.policy.auto": "静默更新（每次使用最新版）",
         "settings.update.policy.ask": "询问后再更新（默认）",
@@ -346,7 +346,7 @@
       },
       en: {
         "settings.title": "Settings",
-        "settings.autoSave": "DSH GUI — changes are saved automatically",
+        "settings.autoSave": "DSH Ready GUI — changes are saved automatically",
         "settings.dataDir": "Data Folder",
         "settings.home.system": "Follow system ~/.dsh (default)",
         "settings.home.app": "App folder (settings / sessions / workspace records travel with the app)",
@@ -355,7 +355,7 @@
         "settings.close.tray": "Hide to tray (default; restore from tray)",
         "settings.close.quit": "Quit (closing the window quits and removes the tray)",
         "settings.engineUpdate": "Engine (dsh) Updates",
-        "settings.engineUpdate.sub": "DSH GUI manages automatic engine (dsh) updates: update policy / version channel / auto-check. The check interval is fixed at 30 minutes; on a new version it installs silently, asks, or notifies per the policy.",
+        "settings.engineUpdate.sub": "DSH Ready GUI manages automatic engine (dsh) updates: update policy / version channel / auto-check. The check interval is fixed at 30 minutes; on a new version it installs silently, asks, or notifies per the policy.",
         "settings.update.policy": "Update Policy",
         "settings.update.policy.auto": "Silently update (always use the latest)",
         "settings.update.policy.ask": "Ask before updating (default)",
@@ -406,7 +406,7 @@
         if (table[key] !== undefined) el.textContent = table[key];
       });
       document.documentElement.lang = uiLang === "en" ? "en" : "zh-CN";
-      document.title = uiLang === "en" ? "Settings — DSH GUI" : "设置 — DSH GUI";
+      document.title = uiLang === "en" ? "Settings — DSH Ready GUI" : "设置 — DSH Ready GUI";
     }
 
     // ---- 第三方插件列表（数据来自主进程 payload） ----
