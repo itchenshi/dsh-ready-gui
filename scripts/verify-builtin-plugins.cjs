@@ -269,51 +269,89 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   );
 
   // ---------------------------------------------------------------------------
-  // 6) an already-installed bundled plugin whose version is behind gets replaced.
+  // 6) EVERY bundled plugin whose installed copy is behind gets replaced.
   //
-  // This is the user-visible promise behind "the GUI updated, so my bundled plugins
-  // did too" — and the case that was reported as not working after a data-directory
-  // switch. Downgrade one installed copy the way another home would have it, run the
-  // same pass the startup maintenance runs, and assert the copy comes back at the
-  // shipped version (never the other way round: the plan refuses to downgrade).
+  // The promise is "the GUI updated, so my bundled plugins did too" — and the
+  // reported failure was that it seemed to happen for one plugin and not others.
+  // So this downgrades ALL of them at once (the way a second data directory would
+  // hold them) and asserts each comes back at its shipped version, in a single
+  // pass. Covering one plugin would leave "is this generic or specific to
+  // dsh-model-surplus?" unproven — which is exactly the question being asked.
+  // The old marketplace entry has no `localSource` and must be left alone.
   // ---------------------------------------------------------------------------
-  console.log("\n6) a bundled plugin older than the shipped copy is updated in place");
-  const TARGET = "dsh-model-surplus";
-  const entry = entryOf(TARGET);
-  const installedPkgFile = path.join(profile, "node_modules", TARGET, "package.json");
-  const shippedVersion = JSON.parse(fs.readFileSync(path.join(pm.bundledSourceDir(entry), "package.json"), "utf8")).version;
-  const behind = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
-  const olderVersion = "0.0.1";
-  behind.version = olderVersion;
-  fs.writeFileSync(installedPkgFile, JSON.stringify(behind, null, 2));
+  console.log("\n6) every bundled plugin older than the shipped copy is updated in place");
+  const bundled = pm.CATALOG.filter((e) => e.localSource);
+  const OLD_VERSION = "0.0.1";
+  const pkgFileOf = (pkg) => path.join(profile, "node_modules", pkg, "package.json");
+  const shippedVersionOf = (e) => JSON.parse(fs.readFileSync(path.join(pm.bundledSourceDir(e), "package.json"), "utf8")).version;
+  const setVersion = (pkg, version) => {
+    const meta = JSON.parse(fs.readFileSync(pkgFileOf(pkg), "utf8"));
+    meta.version = version;
+    fs.writeFileSync(pkgFileOf(pkg), JSON.stringify(meta, null, 2));
+  };
+
+  check(bundled.length >= 4, `precondition: ${bundled.length} bundled entries in the catalog`);
+  for (const e of bundled) setVersion(e.pkg, OLD_VERSION);
   check(
-    pm.catalogStatus(home)[entry.id].version === olderVersion,
-    `precondition: ${TARGET} reports the older version ${olderVersion}`,
+    bundled.every((e) => pm.catalogStatus(home)[e.id].version === OLD_VERSION),
+    `precondition: all ${bundled.length} bundled plugins report the older version`,
   );
 
   const bumped = await sync([...ALL], (...a) => console.log("      [pm]", ...a));
   console.log(`      installed=${JSON.stringify(bumped.installed)} errors=${JSON.stringify(bumped.errors)}`);
-  check(bumped.installed.includes(entry.id), `${TARGET}: the bundled copy was reinstalled`);
-  check(
-    pm.catalogStatus(home)[entry.id].version === shippedVersion,
-    `${TARGET}: now reports the shipped version ${shippedVersion}`,
-  );
+  check(bumped.errors.length === 0, "the update pass reported no errors");
+  for (const e of bundled) {
+    const shipped = shippedVersionOf(e);
+    check(bumped.installed.includes(e.id), `${e.pkg}: reinstalled at the shipped version`);
+    check(
+      pm.catalogStatus(home)[e.id].version === shipped,
+      `${e.pkg}: now reports v${shipped}`,
+    );
+  }
 
-  // And the reverse is refused: an install that is AHEAD must be left alone.
-  const ahead = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
-  const aheadVersion = "99.0.0";
-  ahead.version = aheadVersion;
-  fs.writeFileSync(installedPkgFile, JSON.stringify(ahead, null, 2));
+  // The reverse is refused: an install that is AHEAD must be left alone.
+  const aheadEntry = bundled[0];
+  const AHEAD_VERSION = "99.0.0";
+  setVersion(aheadEntry.pkg, AHEAD_VERSION);
   const kept = await sync([...ALL]);
   check(kept.installed.length === 0, "a newer installed copy is not touched (no unattended downgrade)");
   check(
-    pm.catalogStatus(home)[entry.id].version === aheadVersion,
-    `${TARGET}: the newer installed version survives`,
+    pm.catalogStatus(home)[aheadEntry.id].version === AHEAD_VERSION,
+    `${aheadEntry.pkg}: the newer installed version survives`,
   );
+
+  // A non-bundled catalog entry (the marketplace plugin) has no shipped source to
+  // compare against, so the pass must never touch its version. Fabricated here —
+  // registered + materialised but with no `localSource` — because that is precisely
+  // the shape the guard `if (has && entry.localSource)` excludes, and this costs no
+  // pnpm run (nothing needs installing).
+  const marketEntry = pm.CATALOG.find((e) => !e.localSource && e.pkg === "dshmarket");
+  check(marketEntry !== undefined, "the catalog still carries a non-bundled (marketplace) entry");
+  if (marketEntry) {
+    const marketDir = path.join(profile, "node_modules", marketEntry.pkg);
+    fs.mkdirSync(marketDir, { recursive: true });
+    fs.writeFileSync(path.join(marketDir, "package.json"), JSON.stringify({ name: marketEntry.pkg, version: "1.2.3" }, null, 2));
+    const withMarket = JSON.parse(fs.readFileSync(path.join(profile, "package.json"), "utf8"));
+    if (!withMarket.dsh.profile.bundles.includes(marketEntry.pkg)) withMarket.dsh.profile.bundles.push(marketEntry.pkg);
+    fs.writeFileSync(path.join(profile, "package.json"), JSON.stringify(withMarket, null, 2));
+    check(
+      pm.catalogStatus(home)[marketEntry.id].installed === true,
+      "precondition: the marketplace plugin is installed (but not bundled)",
+    );
+
+    const untouched = await sync([...ALL]);
+    check(
+      !untouched.installed.includes(marketEntry.id),
+      "the non-bundled marketplace plugin is not version-managed by the GUI",
+    );
+    check(
+      pm.catalogStatus(home)[marketEntry.id].version === "1.2.3",
+      "it keeps whatever version it has (updates come from the marketplace, not the shell)",
+    );
+  }
+
   // Leave the home in the state the earlier phases expect.
-  const restored = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
-  restored.version = shippedVersion;
-  fs.writeFileSync(installedPkgFile, JSON.stringify(restored, null, 2));
+  for (const e of bundled) setVersion(e.pkg, shippedVersionOf(e));
 
   console.log("\nfinal deps = " + JSON.stringify(readDeps(), null, 2));
   if (keep) console.log(`\nkept: ${root}`);
