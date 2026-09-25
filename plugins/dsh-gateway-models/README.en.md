@@ -73,14 +73,14 @@ explicitly in the row's `commandcodeProviders`.
 ## Install and go
 
 - **Using DSH Ready GUI (recommended)**: the plugin **ships inside the GUI**. Open the GUI → Settings
-  → Third-party plugins → tick **OpenCode Go routes**, then restart the engine as prompted.
+  → Third-party plugins → tick **Gateway routes**, then restart the engine as prompted.
 - **Any other DSH host** (`dsh web`, the CLI) — either route works:
 
   ```sh
   # Recommended: install straight from GitHub (recorded in your profile, updatable)
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
-  # Fallback: install the release tarball (use this if github.com is unreachable for you)
+  # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
   dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tar.gz
   ```
 

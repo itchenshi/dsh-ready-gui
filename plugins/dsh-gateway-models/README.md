@@ -64,14 +64,14 @@ Command Code 不在引擎自带的 pi-ai 目录里（随包 40 个 provider，�
 ## 装上就能用
 
 - **用 DSH Ready GUI（推荐）**：插件**随 GUI 内置**。打开 GUI → 设置窗口 → 第三方插件 → 勾选
-  **OpenCode Go 路由**，装完按提示重启引擎。
+  **网关路由**，装完按提示重启引擎。
 - **其它 DSH 宿主**（`dsh web` / CLI）—— 两条路都行，任选一条：
 
   ```sh
   # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
-  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
+  # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
   dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tar.gz
   ```
 
