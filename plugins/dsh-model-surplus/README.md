@@ -36,7 +36,7 @@
   # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
   dsh plugin --profile web add github:itchenshi/dsh-model-surplus
 
-  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
+  # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
   dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.0/dsh-model-surplus-0.4.0.tar.gz
   ```
 

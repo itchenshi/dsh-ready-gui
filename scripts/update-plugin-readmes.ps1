@@ -17,20 +17,35 @@
 #>
 [CmdletBinding()]
 param(
-  [string] $ReposRoot = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'plugin-repos'),
+  # 留空则按脚本位置推导（理由同 release-plugin-tarballs.ps1：本机只有 PowerShell 5.1，
+  # 而 param 默认值里的 $PSScriptRoot 在那里是空的）。
+  [string] $ReposRoot = '',
   [switch] $WhatIfOnly
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# 每个插件的 tarball 版本（与本仓库 release 上的资产名对应）
+if ([string]::IsNullOrWhiteSpace($ReposRoot)) {
+  $ReposRoot = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'plugin-repos'
+}
+
+# 每个插件：仓库名 + 两个显示名。**版本号不写在这里**，改为读各自的 package.json ——
+# 原先写死过 `dsh-model-surplus 0.3.2` / `dsh-opencode-go-path 0.1.4`，一旦某个插件
+# 发了新版而这里没跟着改，重跑本脚本就会把 README 的 tarball 链接**改回旧版本**
+# （实测踩过：README 写着 0.4.0、release 上只有 0.3.2，链接 404）。
 $Plugins = @(
-  @{ Name = 'dsh-model-surplus';    Version = '0.3.2'; Display = '模型余量'; DisplayEn = 'Model surplus' },
-  @{ Name = 'dsh-gui-last-session'; Version = '0.1.2'; Display = '会话续接'; DisplayEn = 'Session resume' },
-  @{ Name = 'dsh-opencode-go-path'; Version = '0.1.4'; Display = 'OpenCode Go 路由'; DisplayEn = 'OpenCode Go route' },
-  @{ Name = 'dsh-keys-setting';     Version = '0.2.0'; Display = '按键设置'; DisplayEn = 'Key bindings' }
+  @{ Name = 'dsh-model-surplus';    Display = '模型余量'; DisplayEn = 'Model surplus' },
+  @{ Name = 'dsh-gui-last-session'; Display = '会话续接'; DisplayEn = 'Session resume' },
+  @{ Name = 'dsh-gateway-models';   Display = '网关路由'; DisplayEn = 'Gateway routes' },
+  @{ Name = 'dsh-keys-setting';     Display = '按键设置'; DisplayEn = 'Key bindings' }
 )
+
+# 仓库目录里出现了清单外的插件 → 多半是刚改过名，提醒一句，别让它悄悄漏掉。
+$listed = $Plugins | ForEach-Object { $_.Name }
+Get-ChildItem -Path $ReposRoot -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -notin $listed -and (Test-Path (Join-Path $_.FullName 'cordis.patch.yml')) } |
+  ForEach-Object { Write-Host "WARN 目录 $($_.Name) 不在清单里 —— 改过名？请更新本脚本的 `$Plugins" -ForegroundColor Yellow }
 
 $ReposRoot = (Resolve-Path $ReposRoot).Path
 
@@ -44,7 +59,7 @@ function New-InstallBlockZh($name, $version) {
   # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
   @@GH@@
 
-  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
+  # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
   dsh plugin --profile web add @@TAR@@
   ```
 
@@ -63,7 +78,7 @@ function New-InstallBlockEn($name, $version) {
   # Recommended: install straight from GitHub (recorded in your profile, updatable)
   @@GH@@
 
-  # Fallback: install the release tarball (use this if github.com is unreachable for you)
+  # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
   dsh plugin --profile web add @@TAR@@
   ```
 
@@ -78,6 +93,13 @@ foreach ($p in $Plugins) {
   $dir = Join-Path $ReposRoot $name
   Write-Host "`n>>> $name" -ForegroundColor Cyan
   if (-not (Test-Path $dir)) { Write-Host "    目录不存在，跳过" -ForegroundColor Yellow; continue }
+
+  # 版本以该插件的 package.json 为准（唯一事实来源），避免清单与 README 各说各话。
+  $pkgPath = Join-Path $dir 'package.json'
+  if (-not (Test-Path $pkgPath)) { Write-Host "    没有 package.json，跳过" -ForegroundColor Yellow; continue }
+  $version = (Get-Content $pkgPath -Raw | ConvertFrom-Json).version
+  if (-not $version) { Write-Host "    package.json 里没有 version，跳过" -ForegroundColor Yellow; continue }
+  Write-Host "    version = $version（取自 package.json）" -ForegroundColor DarkGray
 
   foreach ($pair in @(@{ File='README.md'; En=$false }, @{ File='README.en.md'; En=$true })) {
     $path = Join-Path $dir $pair.File

@@ -1,4 +1,4 @@
-# smoke-close.ps1 — E2E test for the "close window" behavior.
+﻿# smoke-close.ps1 — E2E test for the "close window" behavior.
 # Uses WM_CLOSE (the same message the X button sends) against the main
 # window, then asserts the app either exits (quit mode) or hides to the
 # tray and keeps running (tray mode).

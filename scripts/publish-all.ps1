@@ -1,4 +1,4 @@
-# publish-all.ps1 -- three-platform release: push code, build this platform's
+﻿# publish-all.ps1 -- three-platform release: push code, build this platform's
 # artifacts, then publish the release + assets to GitHub / Gitee / GitCode.
 #
 # Flow:

@@ -31,7 +31,10 @@
 #>
 [CmdletBinding()]
 param(
-  [string] $ReposRoot = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'plugin-repos'),
+  # 留空则按脚本位置推导。默认值里**不用** $PSScriptRoot：实测在 Windows PowerShell 5.1 下，
+  # 这个脚本的 param 默认值拿到的 $PSScriptRoot 是空的，Split-Path 直接抛「Path 是空字符串」，
+  # 脚本一行都跑不了（本机没有 pwsh，只有 5.1，所以必须在这里就稳）。
+  [string] $ReposRoot = '',
   [string[]] $Only = @(),
   [switch] $WhatIfOnly
 )
@@ -39,8 +42,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+if ([string]::IsNullOrWhiteSpace($ReposRoot)) {
+  $ReposRoot = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'plugin-repos'
+}
+
 $Owner = 'itchenshi'
-$Plugins = @('dsh-model-surplus', 'dsh-gui-last-session', 'dsh-opencode-go-path', 'dsh-keys-setting')
+# 插件清单**从磁盘推导**，不写死名字：写死的清单在改名后会静默失效（本脚本原先列着
+# `dsh-opencode-go-path`，改名成 `dsh-gateway-models` 后它既找不到目录、也永远不会
+# 为新名字发 tarball，而输出里只有一行 WARN）。判据就是这个仓库自己的收录前提：
+# 有 package.json、有 cordis.patch.yml。
+$Plugins = @(
+  Get-ChildItem -Path $ReposRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+      (Test-Path (Join-Path $_.FullName 'package.json')) -and
+      (Test-Path (Join-Path $_.FullName 'cordis.patch.yml'))
+    } |
+    Select-Object -ExpandProperty Name |
+    Sort-Object
+)
 
 # tarball 里必须包含的东西（收录与加载的前提）
 $RequiredEntries = @('package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')

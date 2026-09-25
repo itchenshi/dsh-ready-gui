@@ -1,3 +1,49 @@
+# DSH Ready GUI v0.6.0 更新说明
+
+**发布日：2026-09-25** · 从 v0.5.0 累积的所有改动。
+
+> 一句话：**随包插件从「OpenCode Go 专用」扩展成「OpenCode Go + Command Code」** —— 其中一个插件
+> 因此改名（`dsh-opencode-go-path` → `dsh-gateway-models`），GUI 负责把老用户的旧插件**自动换成新的**
+> 并保住他的启用/禁用选择；顺带修好发布工具链（含中文的 `.ps1` 缺 BOM 导致根本跑不起来）。
+
+## 🔌 随包插件
+
+- **`dsh-gateway-models` 0.2.0**（原 `dsh-opencode-go-path`）：新增 Command Code —— 补丁层声明
+  `commandcode` 路由的协议**和地址**（用户不必再手填 API 地址），启动时从上游**公开目录**补全模型
+  清单（81 个，不需要密钥），只增不改、幂等；路由按**接口地址**识别而非名字。默认路由名改为
+  `commandcode`（不带档位后缀），**一个名字覆盖 Go / GOAT / Pro / MAX**。
+- **`dsh-model-surplus` 0.4.0**：会话标题右侧新增 Command Code 的 5 小时 / 周窗口百分比与剩余额度。
+  响应体形状按**实测**校正（`credits` 与 `windowLimits` 是平级，原先按第三方实现的包装结构写成嵌套，
+  会让解析返回 null、界面静默显示「用量不可用」）。
+- 两个插件都**不显示月度百分比**：接口不给套餐月度总额度，凭空算就是猜。
+
+## 🔄 旧插件自动替换
+
+启动维护检测到 profile 里还有旧包名时：走引擎卸载 → **bundles 与 `dependencies` 都摘干净**
+（只摘 bundles 会被引擎 reconcile 装回来）→ 清残留补丁行与市场禁用项 → 装上替代条目 →
+**共用同一行 id `opencode-go`，用户的启用/禁用选择不变**。
+
+本版修掉一个「清理不完整」的缺陷：旧包的 staging 拷贝原先只在「后面恰好有东西要 staging」时才清，
+于是「替代条目早就装着」的那次启动会永远留着它（而它正是让残留 `file:` 依赖保持可解析、进而让引擎
+把旧包重新登记回去的东西）。现在这一步由旧插件清理自己完成，不再依赖执行顺序。
+
+## 🛠 工具链与测试
+
+- `scripts/release-plugin-tarballs.ps1`：**去掉写死的插件清单**（改为从磁盘推导），版本从各插件
+  `package.json` 读 —— 原先写死的名字在改名后静默失效、写死的版本会把 README 的 tarball 链接改回旧版
+  （实测踩过 404）。四个插件 README 的链接现已全部 200。
+- **含中文的 `.ps1` 补 UTF-8 BOM**：本机只有 Windows PowerShell 5.1，按 ANSI 读无 BOM 脚本会把中文
+  解成乱码，`release-plugin-tarballs.ps1` 直接 **14 个语法错误、一行都跑不了**；另加
+  `scripts/check-ps1-encoding.cjs` 接进 `npm test` 防回归。
+- `npm run verify:builtin` 增加第 5 幕：真实引擎下完成「装着旧包名 → 换成新包」的端到端验证。
+- `plugin-enable` 用例 17 → 18；新增「改名记录覆盖 `dsh-opencode-go-path` → `dsh-gateway-models`」。
+
+## 📦 下载
+
+见 GitHub Release 页：https://github.com/itchenshi/dsh-ready-gui/releases/tag/v0.6.0
+
+---
+
 # DSH Ready GUI v0.5.0 更新说明
 
 **发布日：2026-09-22** · 从 v0.4.1 累积的所有改动。

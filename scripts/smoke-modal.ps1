@@ -1,4 +1,4 @@
-# smoke-modal.ps1 — E2E test for the modal settings window.
+﻿# smoke-modal.ps1 — E2E test for the modal settings window.
 #
 # While the settings window is open, the main window must be non-operable
 # (Win32-enabled = false) and must NOT close. After closing settings, the main

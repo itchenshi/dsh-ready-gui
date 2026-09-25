@@ -39,7 +39,7 @@ shows or hides it immediately, with no refresh.
   # Recommended: install straight from GitHub (recorded in your profile, updatable)
   dsh plugin --profile web add github:itchenshi/dsh-model-surplus
 
-  # Fallback: install the release tarball (use this if github.com is unreachable for you)
+  # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
   dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.0/dsh-model-surplus-0.4.0.tar.gz
   ```
 
