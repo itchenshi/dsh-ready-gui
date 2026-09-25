@@ -49,9 +49,9 @@ select — OpenCode Go plan usage (rolling / weekly / monthly percentages plus r
 **active model's** total cap, Command Code 5-hour / weekly window usage with remaining credits, or your
 DeepSeek account balance.
 
-| OpenCode Go usage and model cap | DeepSeek balance |
-|---|---|
-| ![OpenCode Go usage and model cap](screenshots/主窗口-opencode-go余量与模型总额-english.png) | ![DeepSeek balance](screenshots/主窗口-deepseek余额-english.png) |
+| OpenCode Go usage and model cap | Command Code usage and remaining credits | DeepSeek balance |
+|---|---|---|
+| ![OpenCode Go usage and model cap](screenshots/主窗口-opencode-go余量与模型总额-english.png) | ![Command Code usage and remaining credits](screenshots/主窗口-commandcode余量与模型总额-english.png) | ![DeepSeek balance](screenshots/主窗口-deepseek余额-english.png) |
 
 **Settings window**: engine updates, third-party plugins, and data & desktop, all in one place.
 

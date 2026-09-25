@@ -46,9 +46,9 @@ DSH 本体是一套开源 Agent 框架（`@deepseek-ai/dsh`），官方只给命
 （滚动 / 周 / 月百分比 + 重置时间）和**当前模型**的总额上限，用 Command Code 时显示 5 小时 / 周两个
 窗口的用量与剩余额度，用 DeepSeek 时显示账户余额。
 
-| OpenCode Go 余量与模型总额 | DeepSeek 余额 |
-|---|---|
-| ![OpenCode Go 余量与模型总额](screenshots/主窗口-opencode-go余量与模型总额.png) | ![DeepSeek 余额](screenshots/主窗口-deepseek余额.png) |
+| OpenCode Go 余量与模型总额 | Command Code 余量与剩余额度 | DeepSeek 余额 |
+|---|---|---|
+| ![OpenCode Go 余量与模型总额](screenshots/主窗口-opencode-go余量与模型总额.png) | ![Command Code 余量与剩余额度](screenshots/主窗口-commandcode余量与模型总额.png) | ![DeepSeek 余额](screenshots/主窗口-deepseek余额.png) |
 
 **设置窗口**：引擎更新、第三方插件、数据与桌面，一个窗口管完。
 
