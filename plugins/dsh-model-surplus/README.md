@@ -37,7 +37,7 @@
   dsh plugin --profile web add github:itchenshi/dsh-model-surplus
 
   # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.0/dsh-model-surplus-0.4.0.tar.gz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.1/dsh-model-surplus-0.4.1.tar.gz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。

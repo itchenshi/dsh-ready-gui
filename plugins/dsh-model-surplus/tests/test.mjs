@@ -14,6 +14,7 @@ import {
   fetchBalance,
   fetchCommandCode,
   commandCodeApiRoot,
+  credentialRefsFor,
   normalizeCommandCodeWindow,
   normalizeCommandCodeCredits,
   normalizeCommandCodeUsage,
@@ -388,6 +389,45 @@ await check('fetchCommandCode hits the quota API with the Bearer key', async () 
   // An empty baseUrl fails closed rather than fetching a relative URL.
   const noBase = await fetchCommandCode({ baseUrl: '', apiKey: 'k', fetchImpl })
   assert.equal(noBase.reason, 'bad-config')
+})
+
+await check('credentialRefsFor follows the ROUTE, falling back to the configured ref', () => {
+  const section = { apiKeyRef: 'COMMANDCODE_GOAT_API_KEY', providers: ['commandcode-goat', 'commandcode'] }
+
+  // The real case this was written for: a route named `commandcode` (the name this
+  // plugin's own patch declares) whose key the GUI stored as COMMANDCODE_API_KEY.
+  // Following the route is what stops the widget from claiming "no key" while the
+  // engine authenticates chat with that very key.
+  assert.deepEqual(
+    credentialRefsFor(section, { commandcode: { apiKeyEnv: 'COMMANDCODE_API_KEY' } }),
+    ['COMMANDCODE_API_KEY', 'COMMANDCODE_GOAT_API_KEY'],
+    'the route beats the built-in guess, which stays as the fallback',
+  )
+  // The legacy route name still wins when it is the one configured.
+  assert.deepEqual(
+    credentialRefsFor(section, { 'commandcode-goat': { apiKeyEnv: 'COMMANDCODE_GOAT_API_KEY' } }),
+    ['COMMANDCODE_GOAT_API_KEY'],
+    'a ref that appears twice is reported once',
+  )
+  // Several configured routes -> every one is a candidate, in section order.
+  assert.deepEqual(
+    credentialRefsFor(section, {
+      commandcode: { apiKeyEnv: 'CC_MAIN' },
+      'commandcode-goat': { apiKeyEnv: 'CC_GOAT' },
+    }),
+    ['CC_GOAT', 'CC_MAIN', 'COMMANDCODE_GOAT_API_KEY'],
+  )
+  // No settings service / no route entry / junk -> the configured ref alone.
+  assert.deepEqual(credentialRefsFor(section, null), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor(section, undefined), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor(section, {}), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor(section, { commandcode: {} }), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor(section, { commandcode: { apiKeyEnv: '   ' } }), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor(section, { commandcode: { apiKeyEnv: 42 } }), ['COMMANDCODE_GOAT_API_KEY'])
+  assert.deepEqual(credentialRefsFor({ providers: ['x'] }, { x: { apiKeyEnv: 'ONLY_ROUTE' } }), ['ONLY_ROUTE'])
+  assert.deepEqual(credentialRefsFor({}, null), [])
+  assert.deepEqual(credentialRefsFor(null, null), [])
+  assert.deepEqual(credentialRefsFor(undefined, undefined), [])
 })
 
 await check('resolveSections applies defaults and validates providers', () => {

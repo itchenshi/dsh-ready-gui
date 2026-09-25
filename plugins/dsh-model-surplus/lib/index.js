@@ -471,7 +471,76 @@ export function normalizeBalance(body) {
   return { isAvailable: body.is_available !== false, infos }
 }
 
-/** True when a provider route should show the widget. */
+/**
+ * The `llm-pi-ai` provider map, or null when this host has no settings service.
+ *
+ * Read lazily rather than injected: a host without `settings` must still get the
+ * widget (it just falls back to the configured ref), and a missing service must
+ * never keep the plugin from loading.
+ */
+function credentialRoutes(ctx) {
+  try {
+    return ctx?.get?.('settings')?.get?.('llm-pi-ai')?.providers ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Candidate credential references for a section, most authoritative first.
+ *
+ * The route's own `apiKeyEnv` comes FIRST because that is what the engine
+ * authenticates with — following it is what makes the widget unable to disagree
+ * with the model that actually works. The section's `apiKeyRef` stays as the
+ * fallback for a host with no `llm-pi-ai` namespace, or a route that declares no
+ * `apiKeyEnv`.
+ *
+ * Why this is not just belt-and-braces: the ref used to be a fixed guess
+ * (`COMMANDCODE_GOAT_API_KEY`, named after the plan its route was first
+ * configured under). A route named `commandcode` — the name this plugin's own
+ * patch declares — gets the GUI's DERIVED ref `COMMANDCODE_API_KEY`, so the guess
+ * missed and the widget reported "no key configured" while the very same key
+ * authenticated chat requests fine.
+ *
+ * @param section - one resolved section (`{ apiKeyRef, providers }`).
+ * @param llmProviders - `llm-pi-ai.providers` as the engine resolves it.
+ * @returns refs in priority order, de-duplicated.
+ */
+export function credentialRefsFor(section, llmProviders) {
+  const refs = []
+  const providers = llmProviders !== null && typeof llmProviders === 'object' ? llmProviders : null
+  if (providers !== null) {
+    for (const route of Array.isArray(section?.providers) ? section.providers : []) {
+      const env = providers[route]?.apiKeyEnv
+      if (typeof env === 'string' && env.trim() !== '') refs.push(env.trim())
+    }
+  }
+  const own = section?.apiKeyRef
+  if (typeof own === 'string' && own.trim() !== '') refs.push(own.trim())
+  return [...new Set(refs)]
+}
+
+/**
+ * First ref that resolves to a non-empty secret, or null.
+ *
+ * A ref that fails to resolve must not abort the search — that is the whole
+ * point of having candidates.
+ */
+async function firstResolvableKey(ctx, refs) {
+  for (const ref of refs) {
+    try {
+      const resolved = await ctx.credentials.resolve(ref)
+      const value = resolved?.value
+      if (typeof value === 'string' && value.length > 0) return value
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null
+}
+
+/**
+ * True when a provider route should show the widget. */
 export function isTrackedProvider(provider, tracked) {
   if (typeof provider !== 'string' || provider.length === 0) return false
   return tracked.has(provider)
@@ -819,10 +888,12 @@ export function apply(ctx, config = {}) {
     const run = (async () => {
       let value
       try {
-        const resolved = await ctx.credentials.resolve(section.apiKeyRef)
-        const apiKey = resolved?.value
-        if (typeof apiKey !== 'string' || apiKey.length === 0) {
-          value = { ok: false, reason: 'no-key', apiKeyRef: section.apiKeyRef }
+        const refs = credentialRefsFor(section, credentialRoutes(ctx))
+        const apiKey = await firstResolvableKey(ctx, refs)
+        if (apiKey === null) {
+          // Report every ref we tried: the useful diagnostic is "which names did
+          // you look under", not just the one we guessed.
+          value = { ok: false, reason: 'no-key', apiKeyRef: refs.length > 0 ? refs.join(' / ') : section.apiKeyRef }
         } else {
           const log = (...a) => ctx.logger?.info?.(...a)
           if (section.kind === 'balance') {

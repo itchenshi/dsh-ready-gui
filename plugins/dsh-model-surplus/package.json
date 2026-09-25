@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-surplus",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "DeepSeek Harness plugin: shows model usage, plan quota and account balance in the session header — OpenCode Go plan usage (rolling / weekly / monthly) with the selected model's monthly cap, DeepSeek account balance, and Command Code 5-hour / weekly windows with remaining credits — each only while a matching model is the active selection.",
   "type": "module",
   "main": "lib/index.js",
