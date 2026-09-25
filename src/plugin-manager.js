@@ -2227,20 +2227,21 @@ function reconcilePluginEnabled({ dshHome, log = () => {} }) {
   return { healed, refused, changed: healed.length > 0 };
 }
 
+// 只导出**别的模块真的会用**的东西（main.js 的 IPC handler 与测试套件）。
+// 这里曾经多导出 10 个只在文件内使用的内部函数（catalogByPkg / profileDir /
+// profileDependencySpec / readEngineVersion / writeProfileManifest / marketStatePath /
+// userPatchPath / readMarketDisabled / readUserPatchState / runDshPlugin）—— 它们不是死代码
+// （内部都在用），但对外暴露会让「这个模块的公共面」看起来比实际大，也邀请调用方去依赖
+// 内部实现。逐个 grep 确认没有任何外部引用后移除。
 module.exports = {
   CATALOG,
   CATALOG_IDS,
-  catalogByPkg,
   catalogEngineCompat,
-  readEngineVersion,
   readProfilePnpmManager,
   ensurePnpm,
   engineBin,
-  profileDir,
   readProfileManifest,
-  writeProfileManifest,
   installedBundles,
-  profileDependencySpec,
   bundledSourceDir,
   planBundledPluginUpdate,
   bundledStagedSpec,
@@ -2254,16 +2255,11 @@ module.exports = {
   removePatchRows,
   LEGACY_PLUGIN_PKGS,
   packageRowIds,
-  readMarketDisabled,
-  readUserPatchState,
-  marketStatePath,
-  userPatchPath,
   bundleResolveDir,
   pruneProfileBundles,
   pruneProfilePackages,
   isRegisteredInProfile,
   healProfileBundles,
-  runDshPlugin,
   installPlugin,
   removePlugin,
   syncEnabledPlugins,

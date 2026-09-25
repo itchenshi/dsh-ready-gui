@@ -2,8 +2,13 @@
 
 // Preload for the settings window only — exposes a narrow, safe API for
 // reading/updating the persisted settings and triggering a manual engine
-// update check. The main dsh window has no preload, so the harness page
-// never sees this.
+// update check.
+//
+// The main window gets a DIFFERENT, even narrower preload (workspace-preload.js:
+// setLastSession / getLastSession / restartEngine). It must never receive this
+// one: the main window renders the harness page, which runs third-party plugin
+// client halves, while this bridge carries plugin install/uninstall and settings
+// writes.
 
 const { contextBridge, ipcRenderer } = require("electron");
 

@@ -827,6 +827,46 @@ export async function fetchCommandCodeCatalog({
   }
 }
 
+// ---------------------------------------------------------------------------
+// Catalog memo
+// ---------------------------------------------------------------------------
+
+/** A successful read is reused for this long. */
+const CC_CATALOG_OK_TTL_MS = 10 * 60 * 1000
+/** A FAILED read is retried no sooner than this — short, but not per settings write. */
+const CC_CATALOG_FAIL_TTL_MS = 60 * 1000
+
+/** Last catalog result (success or failure) plus when it was taken. */
+let ccCatalogMemo = null
+
+/**
+ * Is the memoized catalog result still usable?
+ *
+ * Split out as a pure function because the two TTLs are the whole point and are
+ * easy to get backwards: a failed read must expire QUICKLY (the provider may come
+ * back) while a successful one may be reused for a long time (the catalog barely
+ * changes, and every settings write would otherwise re-fetch it).
+ *
+ * @returns the memoized value, or null when it must be re-read.
+ */
+export function catalogMemoValue(memo, now, okTtlMs = CC_CATALOG_OK_TTL_MS, failTtlMs = CC_CATALOG_FAIL_TTL_MS) {
+  if (memo === null || typeof memo !== 'object') return null
+  if (!Number.isFinite(memo.at) || !Number.isFinite(now)) return null
+  // Clock jumps backwards -> treat as stale rather than "fresh forever".
+  const age = now - memo.at
+  if (age < 0) return null
+  return age < (memo.ok === true ? okTtlMs : failTtlMs) ? memo.value : null
+}
+
+/** Read the catalog through the memo above. */
+async function readCatalogMemoized(log) {
+  const cached = catalogMemoValue(ccCatalogMemo, Date.now())
+  if (cached !== null) return cached
+  const value = await fetchCommandCodeCatalog({ log })
+  ccCatalogMemo = { at: Date.now(), ok: value.ok === true, value }
+  return value
+}
+
 /**
  * The patch to write for a Command Code route, or null when it already has the
  * shape this plugin maintains.
@@ -983,8 +1023,12 @@ async function ensureCommandCodeModels(ctx, settings, config = {}) {
   const ids = commandCodeRouteIds(userProviders, resolvedSection?.providers, config.commandcodeProviders)
   if (ids.length === 0) return // no Command Code route is in use
 
-  // One catalog serves every route, so it is fetched once and shared.
-  const catalog = await fetchCommandCodeCatalog({ log: (...a) => ctx.logger?.warn?.(...a) })
+  // One catalog serves every route, so it is resolved once and shared. The memo
+  // matters: this pass runs on EVERY `llm-pi-ai` settings change — and the theme
+  // and UI language live in settings too, so a user fiddling with appearance would
+  // otherwise hit the provider once per change. Failures are memoized too, on a
+  // much shorter TTL, so a provider outage is not retried on every keystroke.
+  const catalog = await readCatalogMemoized((...a) => ctx.logger?.warn?.(...a))
   if (catalog.ok !== true) {
     ctx.logger?.warn(
       '[gateway-models] could not read the Command Code model catalog (%s); leaving the list(s) alone',

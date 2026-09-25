@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { CC_PROVIDER, V4_1_MODELS, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
+import { CC_PROVIDER, V4_1_MODELS, catalogMemoValue, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -523,6 +523,28 @@ check('the shipped patch declares exactly the route the code names', () => {
   assert.ok(patch.includes('api: openai-completions'), 'the patched route needs its protocol')
   // The plan-specific name must no longer be the declared default.
   assert.ok(!/^\s{6}commandcode-goat:\s*$/m.test(patch), 'the default route must not be plan-specific')
+})
+
+check('catalogMemoValue: a failure expires fast, a success is reused', () => {
+  const OK = 600_000
+  const FAIL = 60_000
+  // Nothing memoized yet.
+  assert.equal(catalogMemoValue(null, 1000), null)
+  assert.equal(catalogMemoValue({}, 1000), null)
+  assert.equal(catalogMemoValue({ at: 0, ok: true, value: 'x' }, Number.NaN), null)
+  // A success lives for the long TTL.
+  assert.equal(catalogMemoValue({ at: 1000, ok: true, value: 'ok' }, 1000 + OK - 1, OK, FAIL), 'ok')
+  assert.equal(catalogMemoValue({ at: 1000, ok: true, value: 'ok' }, 1000 + OK, OK, FAIL), null)
+  // A failure must NOT be reused for the long TTL — the provider may be back.
+  assert.equal(catalogMemoValue({ at: 1000, ok: false, value: 'bad' }, 1000 + FAIL - 1, OK, FAIL), 'bad')
+  assert.equal(catalogMemoValue({ at: 1000, ok: false, value: 'bad' }, 1000 + FAIL, OK, FAIL), null)
+  assert.equal(
+    catalogMemoValue({ at: 1000, ok: false, value: 'bad' }, 1000 + OK - 1, OK, FAIL),
+    null,
+    'a failure is still stale well before the success TTL',
+  )
+  // A backwards clock jump counts as stale, never as "fresh forever".
+  assert.equal(catalogMemoValue({ at: 5000, ok: true, value: 'ok' }, 1000, OK, FAIL), null)
 })
 
 await Promise.resolve()

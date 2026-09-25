@@ -37,6 +37,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
+const { randomBytes } = require("node:crypto");
 const { fileURLToPath } = require("node:url");
 const semver = require("semver");
 const YAML = require("yaml");
@@ -524,6 +525,10 @@ let lastEngineUrl = null;
 let engineOrigin = null;
 // 本次启动刚自动安装的插件 id（用于“引擎启动失败 → 剔除”兜底）。
 let pluginsInstalledThisLaunch = [];
+// 本次启动真正「更新」了哪些内置插件（已装过、这次换成随包的新版本、或改名迁移过来）。
+// 与 pluginsInstalledThisLaunch 的区别：后者含首次安装，用于启动失败的自动剔除 ——
+// 首装一样可能把引擎弄崩，所以它必须保留全集；而提示只看前者。
+let bundledPluginsUpdatedThisLaunch = [];
 // 本次启动已经提示过插件更新没有（onUrl 每次引擎（重）启动都会跑，只提示第一次）。
 let pluginUpdateNoticeShown = false;
 let pluginFailureRecoveryDone = false;
@@ -2644,8 +2649,13 @@ async function writeAppUpdateCache(next) {
     await fsp.mkdir(path.dirname(appUpdateCacheFile()), { recursive: true });
     // 原子写（tmp + rename）：并发读到的可能是写了一半的 JSON，那样 readAppUpdateCache
     // 会静默退回 {}，节流随之失效、下一次又要打网络。
+    //
+    // 临时名必须**唯一**：`<file>.<pid>.tmp` 只在跨进程时够用，而这里同一个进程里就有两个
+    // 写者 —— 后台的 checkAppUpdateInBackground（有 appUpdateInFlight 闸）和用户点「立即更新」
+    // 触发的 runGuiUpdate（**不在闸内**）。两者撞上时，一方 rename 发布的会是另一方的字节。
+    // 与补丁层/清单写入采用的是同一条规则（见 plugin-manager.js 的说明）。
     const target = appUpdateCacheFile();
-    const tmp = `${target}.${process.pid}.tmp`;
+    const tmp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     await fsp.writeFile(tmp, JSON.stringify(next, null, 2), "utf8");
     await fsp.rename(tmp, target);
   } catch (error) {
@@ -3164,6 +3174,7 @@ async function startEngine(nodeExec) {
   // 非目录/用户手动装的额外 bundle 一律不动（交给“启动失败诊断”弹窗处理）。
   // 没有已装的目录插件时跳过整个对账（省掉一次 pnpm 自举）。
   pluginsInstalledThisLaunch = [];
+  bundledPluginsUpdatedThisLaunch = [];
   startupDiagnosisDone = false;
   // 「本次刚装的插件已剔除过」也要复位：它原先只被置 true、从不复位，于是**一次**剔除
   // 之后，之后所有启动的看门狗路径都再也不会走诊断重试（看门狗判断里会用到它）。
@@ -3221,10 +3232,17 @@ async function startEngine(nodeExec) {
   const installedCatalogIds = PLUGIN_CATALOG.filter((entry) => bootStatus[entry.id] && bootStatus[entry.id].installed).map(
     (entry) => entry.id,
   );
+  // 本次对账前就装着哪些 —— 用来把「真的更新了」和「第一次装上」分开。
+  // 首次安装（全新环境）时四个插件都会走安装路径，若一并当成更新去提示，用户会看到
+  // 「内置插件已更新」而困惑「更新了什么」。
+  const installedBeforeSync = new Set(installedCatalogIds);
   // 被旧插件替代的条目视为「用户本来就要用」——原样装上，别让改名把功能弄丢。
   for (const id of legacyPlugins.replaced) {
     if (!installedCatalogIds.includes(id)) installedCatalogIds.push(id);
   }
+  // 改名迁移也算「更新」：removeLegacyPlugins 只在旧包**确实装着**时才报告替代条目，
+  // 所以用户原本是有的，换成新包对他而言就是更新。
+  const previouslyInstalled = new Set([...installedBeforeSync, ...legacyPlugins.replaced]);
   if (installedCatalogIds.length > 0) {
     try {
       const syncResult = await syncEnabledPlugins({
@@ -3239,7 +3257,14 @@ async function startEngine(nodeExec) {
       });
       if (syncResult.installed.length > 0) {
         pluginsInstalledThisLaunch = syncResult.installed;
-        log("updated bundled plugins:", syncResult.installed.join(", "));
+        // 只有「本来就有、这次换成了随包的新版本」才值得提示；首装不提示。
+        bundledPluginsUpdatedThisLaunch = syncResult.installed.filter((id) => previouslyInstalled.has(id));
+        const fresh = syncResult.installed.filter((id) => !previouslyInstalled.has(id));
+        log(
+          "bundled plugins reconciled:",
+          syncResult.installed.join(", "),
+          fresh.length > 0 ? `(first install: ${fresh.join(", ")})` : "",
+        );
         // 测试钩子：破坏刚装的插件 bundle（模拟“坏插件导致引擎启动失败”）。
         // 会真删文件 → 只在未打包构建里生效（见 UNPACKAGED_TEST_HOOKS）。
         if (UNPACKAGED_TEST_HOOKS && process.env.DSH_SHELL_TEST_BREAK_PLUGIN) {
@@ -3292,6 +3317,9 @@ async function startEngine(nodeExec) {
     clearWatchdog();
     const ids = [...pluginsInstalledThisLaunch];
     pluginsInstalledThisLaunch = [];
+    // 插件正在被剔除、马上要弹「插件导致启动失败」—— 那条提示比「插件已更新」重要得多，
+    // 所以顺手清掉更新提示的待发列表（onUrl 在重试成功后还会跑一次）。
+    bundledPluginsUpdatedThisLaunch = [];
     if (ids.length === 0) return;
     log("engine start failed after plugin auto-install (" + reason + ") — excluding plugins:", ids.join(", "));
     // 同样落一份启动错误日志（即使走自动剔除）。
@@ -3379,9 +3407,9 @@ async function startEngine(nodeExec) {
       // 引擎页就绪后其 document.title 可能覆盖窗口标题，稍后把“标题+版本号”固定回去。
       setTimeout(() => applyEngineVersionChrome(), 1500);
       // 引擎带着更新后的插件正常起来了 —— 现在提示插件更新才有意义（见 showPluginUpdateNotice）。
-      if (pluginsInstalledThisLaunch.length > 0) {
+      if (bundledPluginsUpdatedThisLaunch.length > 0) {
         try {
-          showPluginUpdateNotice([...pluginsInstalledThisLaunch]);
+          showPluginUpdateNotice([...bundledPluginsUpdatedThisLaunch]);
         } catch (error) {
           err("plugin update notice failed:", error.message);
         }
@@ -3920,9 +3948,11 @@ function registerIpc() {
   });
 
   // 设置窗口内容自适应高度：由页面在内容尺寸变化时上报（语言切换/主题等）。
-  ipcMain.handle("settings:autosize", (_event, height) => {
+  ipcMain.handle("settings:autosize", (event, height) => {
+    // 走与其它特权通道同一条判定：不同写法会在下一次审计时被漏掉（这次审计里
+    // 它就是因为 `event.sender` 比较写在别的行上而没被认出来）。
+    if (rejectForeignSender(event, isFromSettingsWindow, "settings:autosize")) return;
     if (!settingsWin || settingsWin.isDestroyed()) return;
-    if (_event.sender !== settingsWin.webContents) return;
     const workArea = screen.getPrimaryDisplay().workAreaSize;
     const target = Math.min(Math.max(480, Math.round(Number(height) || 560)), Math.max(480, workArea.height - 40));
     settingsWin.setContentSize(800, target);

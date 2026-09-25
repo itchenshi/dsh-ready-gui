@@ -7,6 +7,7 @@ const {
   indentOf,
   versionOf,
   stripInjectedBlocks,
+  injectedState,
   LAST_MARKER,
   SUPPORTED_ENGINE,
 } = require("../engine-patch.js");
@@ -106,6 +107,33 @@ check("常量 LAST_MARKER/版本", typeof LAST_MARKER === "string" && LAST_MARKE
   // 有注入块但找不到结束行（引擎布局变了）→ false，同样不删。
   const noEnd = [...anchor, ...legacy, "\tconst slotsRenamed = ctx.slots;"];
   check("stripInjectedBlocks 结束行缺失返回 false", stripInjectedBlocks(noEnd, anchor) === false);
+
+  // injectedState 是「这个兜底补丁现在处于什么状态」的唯一判据（注入过没有、是哪个版本），
+  // 而它此前只有生产调用、没有用例。它的两个计数各有精确契约，写错就会让补丁要么重复注入、
+  // 要么以为没注入而跳过。
+  check("injectedState 干净文件为 0/0", JSON.stringify(injectedState(["const a = 1;", "", "// 普通注释"])) === '{"blocks":0,"markers":0}');
+
+  const withBlocks = [
+    "\t// dsh-gui: injected block one",
+    "\tconst x = 1;",
+    "\t// dsh-gui: injected block two",
+    "\t// dsh-gui-last-session-patch v1",
+    "\t// dsh-gui-last-session-patch v7",
+    "\t// dsh-gui: 中文注释也算（按前缀判定，不看内容）",
+    "\t// dsh-gui-last-session-patch v",
+  ];
+  const state = injectedState(withBlocks);
+  check("injectedState 数 `// dsh-gui:` 前缀块（含缩进与中文）", state.blocks === 3, `got ${state.blocks}`);
+  check("injectedState 只数带数字版本号的标记", state.markers === 2, `got ${state.markers}`);
+
+  // 关键不变量：在**真实夹具**上清理之后计数必须归零 —— 这正是「可以安全再次注入」的前提。
+  // （用一个不存在的锚点去调用会被正确地拒绝，那样什么都不会变，所以必须复用上面的 anchor。）
+  const before = injectedState([...anchor, ...legacy, ...duplicate, ...tail]);
+  check("injectedState 在真实夹具上看到注入痕迹", before.blocks === 2 && before.markers === 1, JSON.stringify(before));
+  const cleaned = [...anchor, ...legacy, ...duplicate, ...tail];
+  stripInjectedBlocks(cleaned, anchor);
+  const after = injectedState(cleaned);
+  check("injectedState 在 strip 之后归零", after.blocks === 0 && after.markers === 0, JSON.stringify(after));
 }
 
 console.log(`\n${failed === 0 ? "all" : failed + " failed"}`);

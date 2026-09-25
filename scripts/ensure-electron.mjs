@@ -22,13 +22,16 @@ import {existsSync} from "node:fs";
 import {mkdir, readFile, readdir, rename, rm, stat, writeFile} from "node:fs/promises";
 import {dirname, join, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
+import {randomBytes} from "node:crypto";
 import {download, sha256Of} from "./lib/download.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CACHE_DIR = join(ROOT, "resources", ".electron-cache");
 const DIST_ZIP = join(CACHE_DIR, "dist.zip");
 const DIST_INFO = join(CACHE_DIR, "dist.info");
-const TMP = join(CACHE_DIR, ".tmp-download.zip");
+// 下载临时名带 pid + 随机段：固定名在两个构建并行跑（CI 矩阵 / 本地同时开两条命令）时
+// 会互相覆盖，最后 rename 出来的 zip 可能是两者拼起来的字节。与补丁层 / 清单写入同一条规则。
+const TMP = join(CACHE_DIR, `.tmp-download.${process.pid}.${randomBytes(4).toString("hex")}.zip`);
 const FORCE = process.argv.includes("--force") || process.env.DSH_ELECTRON_REFRESH === "1";
 
 // 平台/架构命名与 electron 发行版一致：win32-x64 / darwin-arm64 / linux-x64 …
