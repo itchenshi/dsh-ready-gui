@@ -1,0 +1,6 @@
+# Storefront screenshots live in this repository and are read straight from it:
+# the plugin market fetches them from raw.githubusercontent.com/<repo>/HEAD/...
+# They are never used at runtime, so keep them out of `git archive` output, which
+# is what our release tarballs are built from (and what GitHub's "Download ZIP"
+# produces). The installed plugin does not need them.
+assets/ export-ignore
