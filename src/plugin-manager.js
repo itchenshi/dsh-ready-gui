@@ -544,6 +544,32 @@ async function stageBundledPlugin(entry, { stagingRoot, log = () => {} }) {
 }
 
 /**
+ * 已装着的内置插件要不要重装？（GUI 换版本后随包插件有更新时的自动更新判定）
+ *
+ * 抽成纯函数是为了能被测：这段判定此前**没有任何用例**，而它是「GUI 更新后内置插件自动更新」
+ * 的**唯一**开关 —— 写错一个不等号，要么用户永远拿不到新插件，要么每次启动都被无人值守地
+ * 降级回随包那份（应用回滚过、市场侧更新过、或手工换过更新的副本时都会发生）。
+ *
+ * @param sameSource - 已装的那份是不是我们 staging 出来的随包拷贝。指向别处（开发 checkout、
+ *   旧版 staging、npm/git 安装）都算 false —— 那时应用不再自包含：实测过依赖指向某个 checkout、
+ *   目录一没了应用就装不上插件。
+ * @param sourceVersion - 随包源码 package.json 里的版本。
+ * @param installedVersion - 已装那份 package.json 里的版本。
+ * @returns `{ wantsUpdate, reason }`；reason 供调用方打日志（`same-version` 不打）。
+ */
+function planBundledPluginUpdate({ sameSource, sourceVersion, installedVersion }) {
+  if (!sameSource) return { wantsUpdate: true, reason: "foreign-source" };
+  // 任一侧读不到版本就什么都不做：猜不出新旧，宁可不动现有的安装。
+  if (!sourceVersion || !installedVersion) return { wantsUpdate: false, reason: "unknown-version" };
+  // 只在**随包更新**时重装。`!==` 会让「已装版本比随包新」也触发 remove+add —— 那是降级。
+  // 版本号不可解析时才退回不等式。
+  const bothValid = semver.valid(sourceVersion) !== null && semver.valid(installedVersion) !== null;
+  const newer = bothValid ? semver.gt(sourceVersion, installedVersion) : sourceVersion !== installedVersion;
+  if (newer) return { wantsUpdate: true, reason: "bundled-newer" };
+  return { wantsUpdate: false, reason: installedVersion === sourceVersion ? "same-version" : "keeping-newer" };
+}
+
+/**
  * 清掉 staging 目录里**已不在目录里**的旧插件拷贝。
  *
  * 这些残留不只是占磁盘：profile 里若有指向它们的 `file:` 依赖，它们让那条依赖始终
@@ -2065,24 +2091,20 @@ async function syncEnabledPlugins({
     let wantsUpdate = false;
     if (has && entry.localSource) {
       const currentSpec = profileDependencySpec(dshHome, name);
-      if (!isBundledStagedSpec(currentSpec, entry, bundledStagingRoot)) {
-        wantsUpdate = true;
+      const sourceVersion = readPackageVersion(bundledSourceDir(entry));
+      const installedVersion = installedBundleVersion(dshHome, name);
+      const plan = planBundledPluginUpdate({
+        sameSource: isBundledStagedSpec(currentSpec, entry, bundledStagingRoot),
+        sourceVersion,
+        installedVersion,
+      });
+      wantsUpdate = plan.wantsUpdate;
+      if (plan.reason === "foreign-source") {
         log("plugin is installed from somewhere other than the bundled copy; reinstalling:", name, currentSpec);
-      } else {
-        const sourceVersion = readPackageVersion(bundledSourceDir(entry));
-        const installedVersion = installedBundleVersion(dshHome, name);
-        if (sourceVersion && installedVersion) {
-          // 只在**随包版本更新**时重装。`!==` 会让「已装版本比随包新」也触发 remove+add ——
-          // 那是一次无人值守的**降级**（应用回滚过、市场侧更新过、或手工换过更新的副本时
-          // 都会发生）。版本号不可解析时才退回不等式。
-          const bothValid = semver.valid(sourceVersion) !== null && semver.valid(installedVersion) !== null;
-          wantsUpdate = bothValid ? semver.gt(sourceVersion, installedVersion) : sourceVersion !== installedVersion;
-          if (wantsUpdate) {
-            log("bundled plugin is newer:", name, installedVersion, "->", sourceVersion);
-          } else if (installedVersion !== sourceVersion) {
-            log("keeping the newer installed plugin:", name, installedVersion, "(bundled " + sourceVersion + ")");
-          }
-        }
+      } else if (plan.reason === "bundled-newer") {
+        log("bundled plugin is newer:", name, installedVersion, "->", sourceVersion);
+      } else if (plan.reason === "keeping-newer") {
+        log("keeping the newer installed plugin:", name, installedVersion, "(bundled " + sourceVersion + ")");
       }
     }
     if (has && !wantsUpdate) continue;
@@ -2220,6 +2242,7 @@ module.exports = {
   installedBundles,
   profileDependencySpec,
   bundledSourceDir,
+  planBundledPluginUpdate,
   bundledStagedSpec,
   isBundledStagedSpec,
   stageBundledPlugin,

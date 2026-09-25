@@ -18,7 +18,7 @@ public static class Win32Close {
 }
 "@
 
-$root = "D:\AI\WorkBook\dsh-ready-gui"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ud = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-e2e-home-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $homeDir | Out-Null

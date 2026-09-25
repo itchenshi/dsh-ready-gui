@@ -57,6 +57,7 @@ const {
   CATALOG_IDS: pluginCatalogIds,
   catalogStatus: pluginCatalogStatus,
   catalogEngineCompat: pluginEngineCompat,
+  bundledSourceDir,
   installedBundles: readInstalledProfileBundles,
   readProfilePnpmManager: readProfilePnpmManagerFn,
   syncEnabledPlugins,
@@ -248,6 +249,9 @@ const UI_STRINGS = {
     // 第三方插件：启动失败自动剔除
     "plugin.excluded.title": "插件导致启动失败，已自动剔除",
     "plugin.excluded.msg": "刚自动安装的插件导致 dsh 无法启动，已移除并在设置中取消勾选：{0}。下次启动将不再自动安装。",
+    // 第三方插件：随包版本更新后自动重装（本次启动已生效，不需要重启）
+    "plugin.updated.title": "内置插件已更新",
+    "plugin.updated.msg": "{0}（本次启动已生效）",
     // 引擎意外退出 / GUI 托管重启
     "engine.autoRestartGaveUp": "引擎多次意外退出（已尝试 {0} 次自动重启），请检查日志或重启 DSH Ready GUI",
     "engine.crash.title": "引擎意外退出",
@@ -392,6 +396,9 @@ const UI_STRINGS = {
     // third-party plugin start-failure exclusion
     "plugin.excluded.title": "Plugin broke startup — auto-excluded",
     "plugin.excluded.msg": "A plugin auto-installed this launch prevented dsh from starting. It was removed and unchecked in settings: {0}. It will not be auto-installed again.",
+    // bundled plugin auto-reinstalled because the shipped copy is newer (already live)
+    "plugin.updated.title": "Bundled plugins updated",
+    "plugin.updated.msg": "{0} (already live this launch)",
     // engine unexpected exit / GUI-managed restart
     "engine.autoRestartGaveUp": "Engine exited unexpectedly several times (auto-restarted {0}×) — check the logs or restart DSH Ready GUI",
     "engine.crash.title": "Engine exited unexpectedly",
@@ -517,6 +524,8 @@ let lastEngineUrl = null;
 let engineOrigin = null;
 // 本次启动刚自动安装的插件 id（用于“引擎启动失败 → 剔除”兜底）。
 let pluginsInstalledThisLaunch = [];
+// 本次启动已经提示过插件更新没有（onUrl 每次引擎（重）启动都会跑，只提示第一次）。
+let pluginUpdateNoticeShown = false;
 let pluginFailureRecoveryDone = false;
 let pluginReadyWatchdog = null;
 // 插件特权操作（安装/卸载/启用开关/修复）的主进程互斥：并发调用会对同一个 profile 的
@@ -2083,7 +2092,52 @@ async function syncEngineUI(patch) {
 // persistent update notice (corner badge window)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// persistent update notice (corner badge window)
+// ---------------------------------------------------------------------------
+
 let noticeWin = null;
+
+/**
+ * 内置插件被自动重装后的角标提示。
+ *
+ * 为什么要提示：插件更新是**无人值守**发生的 —— GUI 换了版本、随包插件版本更高时，启动维护会
+ * remove → prune → add 把它换掉。此前这件事只进日志，用户完全不知道自己的插件被动过；而
+ * 「启动失败自动剔除」那条路径反而有提示，等于只有坏消息会说话。
+ *
+ * 时机：引擎**成功就绪之后**（onUrl）才提示。装插件是在引擎启动之前做的，所以此时更新已经
+ * 生效（不需要重启），但如果新插件把引擎搞崩，就轮不到这条提示 —— 会走 plugin.excluded。
+ *
+ * 与引擎更新提示的关系：两者共用同一个角标，showUpdateNotice 每次都会关掉上一条。这里**只在
+ * 当前没有角标时**才显示，避免把「引擎已更新」这种更重要的消息顶掉；反过来，引擎提示随后出现
+ * 会替换掉这条（信息会丢，但不误导）。
+ */
+function showPluginUpdateNotice(ids) {
+  const lang = resolveUiLang();
+  const parts = ids.map((id) => {
+    const entry = PLUGIN_CATALOG.find((c) => c.id === id);
+    if (!entry) return id;
+    const name = lang === "en" ? entry.en ?? entry.pkg : entry.zh ?? entry.pkg;
+    // 版本号取随包源码那份（就是刚装上去的），拿不到就只报名字。
+    const version = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(bundledSourceDir(entry), "package.json"), "utf8")).version ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    return version ? `${name} v${version}` : name;
+  });
+  log("bundled plugins auto-updated this launch:", parts.join(", "));
+  if (pluginUpdateNoticeShown) return;
+  if (noticeWin && !noticeWin.isDestroyed()) {
+    // 已有角标（多半是引擎更新的消息）—— 让给它，更新内容仍写进日志。
+    log("skipping the plugin update notice: another notice is on screen");
+    return;
+  }
+  pluginUpdateNoticeShown = true;
+  showUpdateNotice(L("plugin.updated.title"), L("plugin.updated.msg", parts.join(lang === "en" ? ", " : "、")));
+}
 
 function showUpdateNotice(title, sub) {
   if (!win || win.isDestroyed()) return;
@@ -3324,6 +3378,14 @@ async function startEngine(nodeExec) {
       }
       // 引擎页就绪后其 document.title 可能覆盖窗口标题，稍后把“标题+版本号”固定回去。
       setTimeout(() => applyEngineVersionChrome(), 1500);
+      // 引擎带着更新后的插件正常起来了 —— 现在提示插件更新才有意义（见 showPluginUpdateNotice）。
+      if (pluginsInstalledThisLaunch.length > 0) {
+        try {
+          showPluginUpdateNotice([...pluginsInstalledThisLaunch]);
+        } catch (error) {
+          err("plugin update notice failed:", error.message);
+        }
+      }
       scheduleAutoQuit();
     },
     onExit: (code, signal) => {

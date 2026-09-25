@@ -31,7 +31,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$root = "D:\AI\WorkBook\dsh-ready-gui"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 
 $PLUGIN = "dsh-model-surplus"

@@ -24,7 +24,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$root = "D:\AI\WorkBook\dsh-ready-gui"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
 
 $ud = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-profw-ud-" + [guid]::NewGuid().ToString("N"))

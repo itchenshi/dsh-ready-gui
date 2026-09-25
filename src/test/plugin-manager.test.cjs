@@ -238,6 +238,83 @@ function checkRowIdScan() {
  * installed bundle inserts. A refusal writes nothing at all — not even the market
  * state.json, which would otherwise claim "disabled" while the engine keeps loading.
  */
+/*
+ * The one switch behind "the GUI updated, so its bundled plugins update too".
+ * It had no coverage at all, and both failure directions are bad: a missed update
+ * means users never receive the shipped plugin, while an over-eager one means every
+ * launch silently DOWNGRADES a plugin the user (or the marketplace) had made newer.
+ */
+function checkBundledPluginUpdateDecision() {
+  const decide = pm.planBundledPluginUpdate;
+
+  // Shipped copy is newer -> reinstall.
+  assert.deepStrictEqual(decide({ sameSource: true, sourceVersion: "0.4.0", installedVersion: "0.3.2" }), {
+    wantsUpdate: true,
+    reason: "bundled-newer",
+  });
+  // Same version -> leave it alone (this is what makes a second launch a no-op).
+  assert.deepStrictEqual(decide({ sameSource: true, sourceVersion: "0.4.0", installedVersion: "0.4.0" }), {
+    wantsUpdate: false,
+    reason: "same-version",
+  });
+  // Installed is NEWER -> never downgrade unattended.
+  const kept = decide({ sameSource: true, sourceVersion: "0.4.0", installedVersion: "0.5.0" });
+  assert.strictEqual(kept.wantsUpdate, false, "a newer installed plugin must not be downgraded");
+  assert.strictEqual(kept.reason, "keeping-newer");
+  // Prerelease ordering goes through semver, not string comparison.
+  assert.strictEqual(
+    decide({ sameSource: true, sourceVersion: "0.4.0", installedVersion: "0.4.0-rc.1" }).wantsUpdate,
+    true,
+    "0.4.0 is newer than 0.4.0-rc.1",
+  );
+  // Unparseable versions fall back to inequality instead of guessing with semver.
+  assert.strictEqual(decide({ sameSource: true, sourceVersion: "not-a-version", installedVersion: "0.4.0" }).wantsUpdate, true);
+  assert.strictEqual(
+    decide({ sameSource: true, sourceVersion: "not-a-version", installedVersion: "not-a-version" }).wantsUpdate,
+    false,
+  );
+  // A missing version on either side -> touch nothing.
+  assert.strictEqual(decide({ sameSource: true, sourceVersion: null, installedVersion: "0.4.0" }).reason, "unknown-version");
+  assert.strictEqual(decide({ sameSource: true, sourceVersion: "0.4.0", installedVersion: undefined }).wantsUpdate, false);
+  // Installed from elsewhere (a dev checkout, npm, an older staging dir) -> take it back
+  // to the shipped copy so the app stays self-contained. Version is irrelevant.
+  assert.deepStrictEqual(decide({ sameSource: false, sourceVersion: "0.4.0", installedVersion: "9.9.9" }), {
+    wantsUpdate: true,
+    reason: "foreign-source",
+  });
+  assert.strictEqual(
+    decide({ sameSource: false, sourceVersion: null, installedVersion: null }).wantsUpdate,
+    true,
+    "an unknown version must not stop a foreign-source repair",
+  );
+  console.log("ok - bundled-plugin update decision: newer ships, equal no-ops, newer-installed never downgrades");
+}
+
+/*
+ * A notice that fired on every launch would be worse than none, and one that never
+ * fires is what the user reported. Neither the extraction nor the settings window can
+ * be exercised here (they need Electron), so this pends the contract: the catalog id
+ * list the notice is given must resolve to real entries with a readable version.
+ */
+function checkPluginUpdateNoticeInputs() {
+  const entries = pm.CATALOG.filter((entry) => entry.localSource);
+  assert.ok(entries.length > 0, "there must be bundled entries to report on");
+  for (const entry of entries) {
+    assert.ok(typeof entry.zh === "string" && entry.zh !== "", `${entry.id} needs a display name for the notice`);
+    assert.ok(typeof entry.en === "string" && entry.en !== "", `${entry.id} needs an English display name`);
+    const dir = pm.bundledSourceDir(entry);
+    assert.ok(fs.existsSync(dir), `${entry.id}: bundled source must exist at ${dir}`);
+    // The notice prints this exact version, and planBundledPluginUpdate reads the same
+    // file — an unreadable version would silently silence the notice as well.
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    assert.ok(
+      typeof pkg.version === "string" && pkg.version !== "",
+      `${entry.id}: package.json needs a version for the notice to report`,
+    );
+  }
+  console.log(`ok - plugin update notice inputs: ${entries.length} bundled entries have names and versions`);
+}
+
 function checkDisableRefusals() {
   const t = makePatchTree({
     packages: {
@@ -423,6 +500,8 @@ function checkBuiltInInstallSource() {
 run()
   .then(checkClientHalf)
   .then(checkRowIdScan)
+  .then(checkBundledPluginUpdateDecision)
+  .then(checkPluginUpdateNoticeInputs)
   .then(checkDisableRefusals)
   .then(checkAtomicPatchWrite)
   .then(checkBuiltInInstallSource)
