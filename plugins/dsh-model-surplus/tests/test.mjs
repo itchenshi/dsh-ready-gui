@@ -12,6 +12,11 @@ import {
   resolveSections,
   fetchUsage,
   fetchBalance,
+  fetchCommandCode,
+  commandCodeApiRoot,
+  normalizeCommandCodeWindow,
+  normalizeCommandCodeCredits,
+  normalizeCommandCodeUsage,
   fetchDocsLimits,
   BUILTIN_MODEL_LIMITS,
   normalizeLimitName,
@@ -251,6 +256,138 @@ await check('fetchBalance hits /user/balance with the Bearer key', async () => {
   assert.equal(un.reason, 'unauthorized')
   const bad = await fetchBalance({ baseUrl: 'https://api.deepseek.com', apiKey: 'k', fetchImpl: async () => ({ ok: true, json: async () => ({ nope: 1 }) }) })
   assert.equal(bad.reason, 'bad-payload')
+})
+
+await check('commandCodeApiRoot strips the chat path so both baseUrl forms work', () => {
+  // The URL people configure on their DSH route is the CHAT endpoint, one level
+  // below the quota API; the quota call must not be built on top of it.
+  assert.equal(commandCodeApiRoot('https://api.commandcode.ai/provider/v1'), 'https://api.commandcode.ai')
+  assert.equal(commandCodeApiRoot('https://api.commandcode.ai/provider/v1/'), 'https://api.commandcode.ai')
+  assert.equal(commandCodeApiRoot('https://api.commandcode.ai'), 'https://api.commandcode.ai')
+  assert.equal(commandCodeApiRoot('https://api.commandcode.ai/'), 'https://api.commandcode.ai')
+  // A self-hosted mirror on another path keeps its path.
+  assert.equal(commandCodeApiRoot('https://gw.example/cc'), 'https://gw.example/cc')
+  assert.equal(commandCodeApiRoot(''), '')
+  assert.equal(commandCodeApiRoot(undefined), '')
+})
+
+await check('normalizeCommandCodeWindow maps used/cap and flags exceeded', () => {
+  const b = normalizeCommandCodeWindow({ used: 2.5, cap: 14, resetAt: 1790298263000 })
+  assert.equal(b.status, 'ok')
+  assert.equal(b.percent, 17.9) // one decimal: 2.5/14 must not round to 18
+  assert.equal(b.used, 2.5)
+  assert.equal(b.cap, 14)
+  assert.equal(b.resetsAt, new Date(1790298263000).toISOString())
+  // exceeded -> the same state OpenCode Go uses, so the client colours it alike
+  assert.equal(normalizeCommandCodeWindow({ used: 14, cap: 14, exceeded: true }).status, 'rate-limited')
+  // clamp: a hostile upstream must not produce a nonsense bar
+  assert.equal(normalizeCommandCodeWindow({ used: 999, cap: 10 }).percent, 100)
+  assert.equal(normalizeCommandCodeWindow({ used: -5, cap: 10 }).percent, 0)
+  // no denominator / unusable shapes
+  assert.equal(normalizeCommandCodeWindow({ used: 1 }), null)
+  assert.equal(normalizeCommandCodeWindow({ used: 1, cap: 0 }), null)
+  assert.equal(normalizeCommandCodeWindow(null), null)
+  assert.equal(normalizeCommandCodeWindow([]), null)
+  // a missing resetAt is allowed (the window just carries no reset time)
+  assert.equal(normalizeCommandCodeWindow({ used: 1, cap: 2 }).resetsAt, null)
+})
+
+await check('normalizeCommandCodeCredits sums what REMAINS', () => {
+  const c = normalizeCommandCodeCredits({ monthlyCredits: 12.5, purchasedCredits: 0, freeCredits: 1 })
+  assert.equal(c.remaining, '13.50')
+  assert.equal(c.monthly, '12.50')
+  assert.equal(c.purchased, '0.00')
+  assert.equal(c.free, '1.00')
+  // partial components still produce a remaining total
+  const partial = normalizeCommandCodeCredits({ freeCredits: 2 })
+  assert.equal(partial.remaining, '2.00')
+  assert.equal(partial.monthly, null)
+  assert.equal(partial.purchased, null)
+  // nothing recognizable -> null, so the caller can report bad-payload
+  assert.equal(normalizeCommandCodeCredits({}), null)
+  assert.equal(normalizeCommandCodeCredits(null), null)
+})
+
+await check('normalizeCommandCodeUsage reads the real quota body', () => {
+  // Shape captured from the LIVE API: `credits` and `windowLimits` are
+  // SIBLINGS on the body.
+  const body = {
+    credits: {
+      belowThreshold: false,
+      creditThreshold: 0,
+      monthlyCredits: 69.132711368,
+      purchasedCredits: 0,
+      freeCredits: 0,
+    },
+    windowLimits: {
+      limited: true,
+      exceeded: null,
+      fiveHour: { used: 0.864562685, cap: 14, exceeded: false, resetAt: 1790315024773 },
+      weekly: { used: 0.864562685, cap: 35, exceeded: false, resetAt: 1790901824773 },
+    },
+    sandboxAccess: false,
+    sandboxMinutes: null,
+  }
+  const out = normalizeCommandCodeUsage(body)
+  assert.deepEqual(Object.keys(out.usage).sort(), ['fiveHour', 'weekly'])
+  assert.equal(out.usage.fiveHour.percent, 6.2) // 0.86/14
+  assert.equal(out.usage.weekly.percent, 2.5) // 0.86/35
+  assert.equal(out.usage.fiveHour.cap, 14)
+  assert.equal(out.credits.remaining, '69.13')
+
+  // A wrapper that nests them one level down is still accepted (a proxy may add it).
+  const nested = normalizeCommandCodeUsage({ credits: { credits: body.credits, windowLimits: body.windowLimits } })
+  assert.equal(nested.credits.remaining, '69.13')
+  assert.equal(nested.usage.weekly.percent, 2.5)
+
+  // Windows-only and credits-only bodies are both usable halves.
+  const windowsOnly = normalizeCommandCodeUsage({ windowLimits: { fiveHour: { used: 1, cap: 2 } } })
+  assert.equal(windowsOnly.credits, null)
+  assert.ok(windowsOnly.usage.fiveHour)
+  const creditsOnly = normalizeCommandCodeUsage({ credits: { freeCredits: 3 } })
+  assert.deepEqual(creditsOnly.usage, {})
+  assert.equal(creditsOnly.credits.remaining, '3.00')
+
+  // An unrecognized shape degrades to bad-payload instead of rendering zeros.
+  assert.equal(normalizeCommandCodeUsage({}), null)
+  assert.equal(normalizeCommandCodeUsage({ usage: {} }), null)
+  assert.equal(normalizeCommandCodeUsage(null), null)
+})
+
+await check('fetchCommandCode hits the quota API with the Bearer key', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, init })
+    return {
+      ok: true,
+      json: async () => ({
+        credits: { monthlyCredits: 5, purchasedCredits: 0, freeCredits: 0 },
+        windowLimits: { fiveHour: { used: 5, cap: 14, exceeded: false, resetAt: 1790315024773 } },
+      }),
+    }
+  }
+
+  // Configured with the CHAT url, the same string the DSH route carries.
+  const res = await fetchCommandCode({
+    baseUrl: 'https://api.commandcode.ai/provider/v1',
+    apiKey: 'CC-SECRET',
+    fetchImpl,
+  })
+  assert.equal(seen[0].url, 'https://api.commandcode.ai/alpha/billing/credits')
+  assert.equal(seen[0].init.headers.authorization, 'Bearer CC-SECRET')
+  assert.ok(!seen[0].url.includes('CC-SECRET'), 'key must never appear in the URL')
+  assert.ok(!seen[0].url.includes('/provider/v1'), 'the chat path must not leak into the quota call')
+  assert.equal(res.ok, true)
+  assert.equal(res.usage.fiveHour.percent, 35.7)
+  assert.equal(res.credits.remaining, '5.00')
+
+  const un = await fetchCommandCode({ baseUrl: 'https://api.commandcode.ai', apiKey: 'k', fetchImpl: async () => ({ ok: false, status: 401 }) })
+  assert.equal(un.reason, 'unauthorized')
+  const bad = await fetchCommandCode({ baseUrl: 'https://api.commandcode.ai', apiKey: 'k', fetchImpl: async () => ({ ok: true, json: async () => ({ nope: 1 }) }) })
+  assert.equal(bad.reason, 'bad-payload')
+  // An empty baseUrl fails closed rather than fetching a relative URL.
+  const noBase = await fetchCommandCode({ baseUrl: '', apiKey: 'k', fetchImpl })
+  assert.equal(noBase.reason, 'bad-config')
 })
 
 await check('resolveSections applies defaults and validates providers', () => {

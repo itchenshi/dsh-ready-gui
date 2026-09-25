@@ -1,4 +1,4 @@
-# dsh-opencode-go-path layer.
+# dsh-gateway-models layer.
 #
 # One plugin for the OpenCode / OpenCode Go routes, three jobs:
 #
@@ -58,6 +58,28 @@
 #                        logged "session" field is a one-way SHA-256 hash (redacted),
 #                        never the raw DSH session id.
 #
+# Row 2 (`commandcode`) provisions Command Code, plus the endpoint. Command Code
+# is not in the installed pi-ai catalog, so nothing about its models can be
+# inferred: every entry needs a route-level `api` AND a route-level `baseURL` (the
+# engine resolves an entry as `route.baseURL ?? catalogModel.baseUrl ??
+# providerBaseUrl`, and the model page probes with `draft.baseURL ??
+# fallback.baseURL`). Declaring both here is what removes the "type the API
+# address" step — the address is part of the base layer, and the user only adds a
+# key.
+#
+# The name is deliberately NOT plan-specific: ONE route serves every Command Code
+# plan (Go / GOAT / Pro / MAX). The plan lives on the account behind the API key,
+# so `commandcode` is the honest name and switching plans is a key swap, never a
+# config change. (`commandcode-goat` was the old default; a route still carrying
+# that name keeps working, because the runtime matches by endpoint.)
+#
+# This row is a convenience, NOT the mechanism. The route id is only a label, so
+# a user who named theirs `commandcode-pro`, `commandcode-max` or anything else is
+# still served: the runtime half recognises those by their ENDPOINT and writes the
+# `api` + `baseURL` such a route cannot resolve on its own. Naming further routes
+# here is unnecessary — use the row's `commandcodeProviders` only when a route's
+# endpoint is nowhere to be found (e.g. it is proxied through another host).
+#
 # The `llm-pi-ai` entry below patches an existing engine row (mounted by
 # @deepseek-ai/dsh-base) rather than inserting a new one — cordis merges patch
 # layers by row id, so this layer supplies the missing `api` without touching
@@ -66,7 +88,7 @@
 # disable the protocol declaration and break catalog-unknown models.
 - insert:
     - id: opencode-go
-      name: dsh-opencode-go-path
+      name: dsh-gateway-models
       config:
         providers:
           - opencode
@@ -78,3 +100,6 @@
     providers:
       opencode-go:
         api: openai-completions
+      commandcode:
+        api: openai-completions
+        baseURL: https://api.commandcode.ai/provider/v1

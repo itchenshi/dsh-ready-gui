@@ -32,7 +32,7 @@ DSH 本体是一套开源 Agent 框架（`@deepseek-ai/dsh`），官方只给命
 |---|---|---|
 | 模型余量 `dsh-model-surplus` | 会话标题右侧显示当前模型的用量 / 账户余额 | [仓库](https://github.com/itchenshi/dsh-model-surplus) |
 | 会话续接 `dsh-gui-last-session` | 重启后回到上次那个对话 | [仓库](https://github.com/itchenshi/dsh-gui-last-session) |
-| OpenCode Go 路由 `dsh-opencode-go-path` | 自动补齐 DeepSeek V4.1 模型 + 附加会话头，修 400 | [仓库](https://github.com/itchenshi/dsh-opencode-go-path) |
+| 网关路由 `dsh-gateway-models` | 声明 OpenCode Go / Command Code 的路由协议与地址，并自动补齐它们的模型 | [仓库](https://github.com/itchenshi/dsh-gateway-models) |
 | 按键设置 `dsh-keys-setting` | Enter / Shift+Enter / Ctrl+Enter 各自设成发送或换行 | [仓库](https://github.com/itchenshi/dsh-keys-setting) |
 
 > **它们为什么内置、而不是从 npm 装？** 原计划是发布到 npm，让插件更新不必等壳发版。但 npm

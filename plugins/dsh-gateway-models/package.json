@@ -1,7 +1,7 @@
 {
-  "name": "dsh-opencode-go-path",
-  "version": "0.1.4",
-  "description": "DeepSeek Harness plugin for the OpenCode / OpenCode Go routes: declares the route wire protocol, detects the route's model catalog and puts the DeepSeek V4.1 models at the front of the model list (supplying the route baseURL and the DeepSeek reasoning compat a catalog-unknown model needs), and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
+  "name": "dsh-gateway-models",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin for gateway routes (OpenCode Go and Command Code): declares the route wire protocol and endpoint (so the API address never has to be typed), detects/reads each route's model catalog and puts the DeepSeek V4.1 models at the front of the OpenCode Go list while completing the Command Code list from its public catalog, supplies the route baseURL and the DeepSeek reasoning compat a catalog-unknown model needs, and attaches a stable per-conversation x-opencode-session header (fixes 400 MissingSessionID) without leaking the internal session id.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -28,6 +28,8 @@
     "opencode",
     "opencode-go",
     "opencode-zen",
+    "commandcode",
+    "command-code",
     "llm-pi-ai",
     "x-opencode-session",
     "missing-session-id",
@@ -41,11 +43,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/itchenshi/dsh-opencode-go-path.git"
+    "url": "git+https://github.com/itchenshi/dsh-gateway-models.git"
   },
-  "homepage": "https://github.com/itchenshi/dsh-opencode-go-path#readme",
+  "homepage": "https://github.com/itchenshi/dsh-gateway-models#readme",
   "bugs": {
-    "url": "https://github.com/itchenshi/dsh-opencode-go-path/issues"
+    "url": "https://github.com/itchenshi/dsh-gateway-models/issues"
   },
   "publishConfig": {
     "access": "public"

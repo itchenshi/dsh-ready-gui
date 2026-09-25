@@ -4,7 +4,7 @@
 // over a same-origin JSON route. The browser must never see an API key, so
 // every upstream call happens here.
 //
-// Two independent sections, each gated on the session's active provider route:
+// Three independent sections, each gated on the session's active provider route:
 //
 //   1. opencode-go — plan usage percentages.
 //      GET https://opencode.ai/zen/go/v1/usage
@@ -19,6 +19,19 @@
 //      200 {"is_available":true,
 //           "balance_infos":[{"currency":"CNY","total_balance":"110.00",
 //                             "granted_balance":"10.00","topped_up_balance":"100.00"}]}
+//
+//   3. commandcode — subscription windows + remaining credits.
+//      GET https://api.commandcode.ai/alpha/billing/credits
+//      Authorization: Bearer <COMMANDCODE_GOAT_API_KEY>
+//      200 {"credits":{"monthlyCredits":69.13,"purchasedCredits":0,"freeCredits":0,
+//                      "belowThreshold":false,"creditThreshold":0},
+//           "windowLimits":{"fiveHour":{"used":0.86,"cap":14,"exceeded":false,
+//                                       "resetAt":<epoch ms>},
+//                           "weekly":{...},"limited":true,"exceeded":null}}
+//      Verified against the live API: `credits` and `windowLimits` are SIBLINGS.
+//      A DSH route is configured with the CHAT endpoint
+//      (https://api.commandcode.ai/provider/v1), which is one level below the
+//      quota API; `commandCodeApiRoot()` strips that path so both forms work.
 //
 // PLUS a per-model monthly limit table for opencode-go (the docs' "使用限制"
 // section). There is NO API for it, so the plugin:
@@ -54,21 +67,43 @@ export const inject = ['credentials', 'webServer']
  * Section key -> defaults. The section key is the wire/`sections` key; the
  * camelCase `configKey` is what the plugin row's `config` object uses (YAML
  * keys read better in camelCase). Also the display order.
+ *
+ * `kind` picks the upstream fetch AND the wire shape the client renders:
+ *   'usage'       — percentage windows (OpenCode Go's rolling/weekly/monthly)
+ *   'balance'     — account money amounts (DeepSeek)
+ *   'commandcode' — percentage windows + remaining credits (Command Code)
  */
 const SECTION_DEFAULTS = {
   'opencode-go': {
     configKey: 'opencodeGo',
+    kind: 'usage',
     baseUrl: 'https://opencode.ai/zen/go/v1',
     apiKeyRef: 'OPENCODE_GO_API_KEY',
     providers: ['opencode-go', 'opencode'],
   },
   deepseek: {
     configKey: 'deepseek',
+    kind: 'balance',
     baseUrl: 'https://api.deepseek.com',
     apiKeyRef: 'DEEPSEEK_API_KEY',
     // The engine's dsh-llm-deepseek adapter registers exactly this route
     // (`const PROVIDER = "deepseek-official"`).
     providers: ['deepseek-official'],
+  },
+  commandcode: {
+    configKey: 'commandcode',
+    kind: 'commandcode',
+    // The QUOTA API root. Note the chat endpoint people configure on their DSH
+    // route is `https://api.commandcode.ai/provider/v1` — one level deeper than
+    // the quota API, which lives at `/alpha/...` on the bare root. A baseUrl
+    // that still carries the chat path is normalized down to the root by
+    // `commandCodeApiRoot()`, so pasting the provider URL here also works.
+    baseUrl: 'https://api.commandcode.ai',
+    apiKeyRef: 'COMMANDCODE_GOAT_API_KEY',
+    // `commandcode-goat` is the route name the GOAT plan subscription is
+    // commonly configured under; `commandcode` is the community provider
+    // plugin's id.
+    providers: ['commandcode-goat', 'commandcode'],
   },
 }
 
@@ -516,6 +551,151 @@ export async function fetchBalance({ baseUrl, apiKey, fetchImpl = fetch, timeout
   return { ok: true, balance, fetchedAt: Date.now() }
 }
 
+// ---------------------------------------------------------------------------
+// Command Code (quota)
+//
+// GET {root}/alpha/billing/credits
+// Authorization: Bearer <COMMANDCODE_GOAT_API_KEY>
+// 200 {"credits":{"monthlyCredits":69.13,"purchasedCredits":0,"freeCredits":0},
+//      "windowLimits":{"fiveHour":{"used":0.86,"cap":14,"exceeded":false,
+//                                  "resetAt":1790315024773},
+//                      "weekly":{"used":0.86,"cap":35,"exceeded":false,
+//                                "resetAt":1790901824773},
+//                      "limited":true,"exceeded":null}}
+//
+// `credits` and `windowLimits` are SIBLINGS on the body — verified against the
+// live API, after an earlier version of this file wrongly nested them (a
+// third-party plugin's own wrapper object was mistaken for the wire shape, and
+// the section silently degraded to `bad-payload`).
+//
+// `resetAt` is epoch MILLISECONDS, and the credit fields are what REMAINS (not
+// the plan's allotment), which is why they are reported as a remaining balance
+// and no monthly percentage is invented — a percentage would need the plan
+// tier's allotment, which this endpoint does not state.
+//
+// The chat endpoint a DSH route is configured with is `/provider/v1`, one level
+// BELOW the quota API, so `commandCodeApiRoot()` strips that path: pasting
+// either the provider URL or the bare root works.
+// ---------------------------------------------------------------------------
+
+/** Strip a trailing chat path so a configured provider URL still lands on the quota API. */
+export function commandCodeApiRoot(baseUrl) {
+  const trimmed = String(baseUrl ?? '').trim().replace(/\/+$/u, '')
+  if (trimmed === '') return ''
+  return trimmed.replace(/\/provider\/v\d+$/u, '')
+}
+
+/** Epoch-ms / epoch-seconds / ISO-string -> ISO string, or null when unusable. */
+function toIsoOrNull(value) {
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString()
+  }
+  const n = Number(value)
+  if (Number.isFinite(n) && n > 0) return new Date(n).toISOString()
+  return null
+}
+
+/** A non-negative finite amount, or null. */
+function toAmount(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, n) : null
+}
+
+/**
+ * Normalize one Command Code rolling window (`{ used, cap, resetAt }`).
+ *
+ * `cap` is required: with no denominator there is no percentage to draw, and a
+ * `0` cap would divide by zero. `exceeded` maps onto the same 'rate-limited'
+ * state the OpenCode Go buckets use, so the client colours it identically.
+ *
+ * @returns `{ status, percent, resetsAt, used, cap }` or null when unusable.
+ */
+export function normalizeCommandCodeWindow(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const used = toAmount(raw.used)
+  const cap = toAmount(raw.cap)
+  if (used === null || cap === null || cap <= 0) return null
+  const percent = Math.min(100, Math.max(0, (used / cap) * 100))
+  return {
+    status: raw.exceeded === true ? 'rate-limited' : 'ok',
+    // One decimal: these are dollar amounts, so integer rounding would hide a
+    // 2.5/14 window as 18% instead of 17.9%.
+    percent: Math.round(percent * 10) / 10,
+    resetsAt: toIsoOrNull(raw.resetAt),
+    used,
+    cap,
+  }
+}
+
+/** Remaining credits, as 2-decimal strings (null per unavailable component). */
+export function normalizeCommandCodeCredits(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const monthly = toAmount(raw.monthlyCredits)
+  const purchased = toAmount(raw.purchasedCredits)
+  const free = toAmount(raw.freeCredits)
+  if (monthly === null && purchased === null && free === null) return null
+  const remaining = (monthly ?? 0) + (purchased ?? 0) + (free ?? 0)
+  const money = (n) => (n === null ? null : n.toFixed(2))
+  return {
+    remaining: remaining.toFixed(2),
+    monthly: money(monthly),
+    purchased: money(purchased),
+    free: money(free),
+  }
+}
+
+/**
+ * Normalize the Command Code quota body.
+ *
+ * `credits` and `windowLimits` are SIBLINGS at the top level (verified against
+ * the live API — an earlier reading of a third-party plugin mistook its own
+ * wrapper object's nesting for the wire shape). The nested form is still
+ * accepted, because a gateway or proxy sitting in front may add a wrapper.
+ *
+ * @returns `{ usage, credits }` (either half may be `{}`/null) or null when the
+ *   body carries neither, so a shape change degrades to `bad-payload` instead
+ *   of rendering zeros.
+ */
+export function normalizeCommandCodeUsage(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return null
+  // Verified shape first; the nested one is the tolerated fallback.
+  const windows = body.windowLimits ?? body.credits?.windowLimits ?? null
+  const creditsSource = body.credits?.credits ?? body.credits ?? null
+  const usage = {}
+  for (const [key, spec] of [
+    ['fiveHour', windows?.fiveHour],
+    ['weekly', windows?.weekly],
+  ]) {
+    const bucket = normalizeCommandCodeWindow(spec)
+    if (bucket !== null) usage[key] = bucket
+  }
+  const credits = normalizeCommandCodeCredits(creditsSource)
+  if (Object.keys(usage).length === 0 && credits === null) return null
+  return { usage, credits }
+}
+
+/**
+ * Fetch Command Code quota (windows + remaining credits).
+ * @returns `{ ok: true, usage, credits, fetchedAt }` or `{ ok: false, reason, status? }`.
+ */
+export async function fetchCommandCode({ baseUrl, apiKey, fetchImpl = fetch, timeoutMs = REQUEST_TIMEOUT_MS, log = () => {} }) {
+  const root = commandCodeApiRoot(baseUrl)
+  if (root === '') return { ok: false, reason: 'bad-config' }
+  const res = await upstreamJson({
+    url: `${root}/alpha/billing/credits`,
+    apiKey,
+    fetchImpl,
+    timeoutMs,
+    log,
+    label: 'model-surplus/commandcode',
+  })
+  if (!res.ok) return res
+  const normalized = normalizeCommandCodeUsage(res.body)
+  if (normalized === null) return { ok: false, reason: 'bad-payload' }
+  return { ok: true, ...normalized, fetchedAt: Date.now() }
+}
+
 /**
  * Fetch the OpenCode Go docs page and parse the per-model limits.
  * Public page — no API key, no credentials. Pure plumbing for apply().
@@ -572,6 +752,7 @@ export function resolveSections(config = {}) {
       ? raw.providers.map((p) => String(p))
       : [...defaults.providers]
     out[key] = {
+      kind: defaults.kind,
       baseUrl: typeof raw.baseUrl === 'string' && raw.baseUrl.length > 0
         ? raw.baseUrl.replace(/\/+$/u, '')
         : defaults.baseUrl,
@@ -644,9 +825,13 @@ export function apply(ctx, config = {}) {
           value = { ok: false, reason: 'no-key', apiKeyRef: section.apiKeyRef }
         } else {
           const log = (...a) => ctx.logger?.info?.(...a)
-          value = key === 'deepseek'
-            ? await fetchBalance({ baseUrl: section.baseUrl, apiKey, log })
-            : await fetchUsage({ baseUrl: section.baseUrl, apiKey, log })
+          if (section.kind === 'balance') {
+            value = await fetchBalance({ baseUrl: section.baseUrl, apiKey, log })
+          } else if (section.kind === 'commandcode') {
+            value = await fetchCommandCode({ baseUrl: section.baseUrl, apiKey, log })
+          } else {
+            value = await fetchUsage({ baseUrl: section.baseUrl, apiKey, log })
+          }
         }
       } catch (error) {
         ctx.logger?.warn?.('[model-usage] resolve failed for %s: %s', key, error?.message ?? String(error))
@@ -743,6 +928,7 @@ export function apply(ctx, config = {}) {
                   ok: true,
                   usage: value.usage,
                   balance: value.balance,
+                  credits: value.credits,
                   fetchedAt: value.fetchedAt,
                 }
               : { ok: false, reason: value.reason }

@@ -3,6 +3,10 @@
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
+> 这是 **DSH Ready GUI** 的组成部分之一 —— GUI 开箱内置四个插件，勾选即用。
+> 也可单独装到任何 DSH 宿主里（见下方「装上就能用」）。
+> GUI：https://github.com/itchenshi/dsh-ready-gui
+
 重启 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）之后，**自动回到你
 上一次待着的那个会话** —— 不用再一层层翻历史。
 
@@ -10,15 +14,17 @@
 
 - **用 DSH Ready GUI（推荐）**：插件**随 GUI 内置**，而且是默认开启的 —— 装好 GUI 就已经在用了。
   要关掉就在设置窗口 → 第三方插件里取消勾选。
-- **其它 DSH 宿主**（`dsh web` / CLI）：
+- **其它 DSH 宿主**（`dsh web` / CLI）—— 两条路都行，任选一条：
 
   ```sh
-  git clone https://github.com/itchenshi/dsh-gui-last-session.git
-  dsh plugin --profile web add file:<clone 出来的绝对路径>
+  # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
+  dsh plugin --profile web add github:itchenshi/dsh-gui-last-session
+
+  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.2/dsh-gui-last-session-0.1.2.tar.gz
   ```
 
-  装到的是磁盘上的真实目录，所以以后 `git pull` 更新的就是同一份代码；反过来，**目录被移动或删掉
-  会让这条依赖失效**（重新 add 一次即可）。装完**重启引擎**（插件是按目录装的，引擎在启动时组装）。
+  两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
 
 > npm 上暂时没有这个包：注册账号那一环走不通（`www.npmjs.com` 返回 Cloudflare 托管挑战），包发不
 > 出去。所以现在只能按上面两种方式装。等注册通了会照常发布。

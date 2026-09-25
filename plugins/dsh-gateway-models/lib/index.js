@@ -1,4 +1,4 @@
-// dsh-opencode-go-path
+// dsh-gateway-models
 //
 // One plugin for the OpenCode / OpenCode Go routes, three jobs:
 //
@@ -258,7 +258,7 @@ function targetsOpenCode(input, hosts) {
 /** Fire-and-forget append of one debug record; failures only log a warning. */
 function recordDebug(ctx, file, entry) {
   appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8').catch((error) => {
-    ctx.logger.warn('[opencode-go] debugFile write failed: %s', error?.message ?? String(error))
+    ctx.logger.warn('[gateway-models] debugFile write failed: %s', error?.message ?? String(error))
   })
 }
 
@@ -269,7 +269,7 @@ function installSessionHeader(ctx, config) {
 
   const originalFetch = globalThis.fetch
   if (typeof originalFetch !== 'function') {
-    ctx.logger.warn('[opencode-go] globalThis.fetch is unavailable; cannot inject x-opencode-session')
+    ctx.logger.warn('[gateway-models] globalThis.fetch is unavailable; cannot inject x-opencode-session')
     return
   }
 
@@ -278,7 +278,7 @@ function installSessionHeader(ctx, config) {
   ctx.effect(() => {
     globalThis.fetch = patched
     ctx.logger.info(
-      '[opencode-go] active for providers [%s] with mode %s (debug=%s)',
+      '[gateway-models] active for providers [%s] with mode %s (debug=%s)',
       [...providers].join(', '),
       mode,
       debug ? 'on' : 'off',
@@ -329,7 +329,7 @@ function installSessionHeader(ctx, config) {
       }
       if (debug) {
         ctx.logger.info(
-          '[opencode-go] streaming provider "%s" mode=%s with %s=%s',
+          '[gateway-models] streaming provider "%s" mode=%s with %s=%s',
           options.provider,
           mode,
           SESSION_HEADER,
@@ -562,7 +562,7 @@ export function planRouteUpdate(userProfile, resolvedRoute, catalog) {
 async function detectCatalogModels(ctx) {
   const llm = ctx.llm
   if (typeof llm?.discoverModels !== 'function') {
-    ctx.logger?.warn('[opencode-go] llm.discoverModels() is unavailable; skipping the V4.1 auto-add')
+    ctx.logger?.warn('[gateway-models] llm.discoverModels() is unavailable; skipping the V4.1 auto-add')
     return undefined
   }
   try {
@@ -571,7 +571,7 @@ async function detectCatalogModels(ctx) {
     return models.filter((model) => typeof model?.id === 'string' && model.id.length > 0)
   } catch (error) {
     ctx.logger?.warn(
-      '[opencode-go] could not detect the "%s" model catalog: %s',
+      '[gateway-models] could not detect the "%s" model catalog: %s',
       PROVIDER,
       error?.message ?? String(error),
     )
@@ -617,12 +617,12 @@ async function ensureV41Models(ctx, settings) {
     if (typeof settings.section !== 'function') {
       // 引擎的 settings provider 没实现 section()（它在类型里是 private）时，自动补模型会
       // 变成静默失效 —— 正是本仓库别处批评过的那种「什么都没发生也没有日志」。
-      ctx.logger?.warn('[opencode-go] settings.section() is unavailable; skipping the V4.1 auto-add')
+      ctx.logger?.warn('[gateway-models] settings.section() is unavailable; skipping the V4.1 auto-add')
       return
     }
     userSection = settings.section(NS)
   } catch (error) {
-    ctx.logger?.warn('[opencode-go] reading the user settings section failed: %s', error?.message ?? String(error))
+    ctx.logger?.warn('[gateway-models] reading the user settings section failed: %s', error?.message ?? String(error))
     userSection = undefined
   }
 
@@ -630,7 +630,7 @@ async function ensureV41Models(ctx, settings) {
   if (patch === null) return // already in the shape we maintain
 
   ctx.logger.info(
-    '[opencode-go] detected %d "%s" model(s); putting %s first%s',
+    '[gateway-models] detected %d "%s" model(s); putting %s first%s',
     catalog.length,
     PROVIDER,
     V4_1_MODELS.map((m) => m.id).join(', '),
@@ -639,15 +639,394 @@ async function ensureV41Models(ctx, settings) {
   await settings.update(NS, { providers: { [PROVIDER]: patch } })
 }
 
-function installAutoModels(ctx) {
+// ---------------------------------------------------------------------------
+// Command Code route provisioning
+//
+// Command Code is not in the installed pi-ai catalog (40 providers ship, none
+// is CommandCode), so NOTHING about its models can be inferred: every entry
+// needs a route-level `api` and `baseURL`, and the model ids themselves have to
+// come from somewhere. That is why adding one by hand meant typing the API
+// address every time.
+//
+// Both halves are fixed here:
+//
+//   1. cordis.patch.yml declares `api` + `baseURL` for the route, so the address
+//      is always present in the merged layer. The engine resolves an entry's
+//      endpoint as `route.baseURL ?? catalogModel.baseUrl ?? providerBaseUrl`
+//      and the model page probes with `draft.baseURL ?? fallback.baseURL`, so a
+//      route-level endpoint means the user never types it.
+//
+//   2. this half fills the model list from the provider's OWN public catalog:
+//      GET https://api.commandcode.ai/provider/v1/models
+//      It answers 200 with no credential (`{data:[{id,name,context_length,…}]}`),
+//      which is exactly what a settings entry needs. This is the plugin's ONLY
+//      outbound request, and it carries no key.
+//
+// Ordering: the catalog order is kept as-is (Claude / GPT / DeepSeek / …), and
+// entries the user already has are never rewritten. Missing ones are APPENDED,
+// so a user's own ordering survives.
+// ---------------------------------------------------------------------------
+
+/**
+ * The route key cordis.patch.yml declares: `commandcode`.
+ *
+ * Deliberately NOT plan-specific. Command Code serves EVERY plan (Go / GOAT /
+ * Pro / MAX) from the same host and the same API, and the plan lives on the
+ * ACCOUNT behind the API key — so a name like `commandcode-goat` would claim a
+ * tier the route does not determine. One name covers them all; switching plans
+ * is a key swap, never a config change.
+ *
+ * It is also only a DEFAULT. The route id is a label the user picks, so a route
+ * named `commandcode-pro`, a legacy `commandcode-goat`, or the community
+ * provider's id are all handled: `commandCodeRouteIds()` recognises routes by
+ * their ENDPOINT (see CC_HOST), and this name exists solely to name the route
+ * the shipped patch declares.
+ *
+ * Exported so a test can assert cordis.patch.yml actually declares it — the
+ * runtime never depends on the name, so nothing else would notice them drifting
+ * apart (a rename in one place and not the other would silently cost every user
+ * the built-in endpoint).
+ */
+export const CC_PROVIDER = 'commandcode'
+/** Chat endpoint — the same value cordis.patch.yml declares for the route. */
+const CC_BASE_URL = 'https://api.commandcode.ai/provider/v1'
+/** Public model catalog (no credential required). */
+const CC_CATALOG_URL = `${CC_BASE_URL}/models`
+/** Host that identifies a Command Code route, whatever it happens to be named. */
+const CC_HOST = 'api.commandcode.ai'
+/** Wire protocol the Command Code endpoint speaks (same value the patch declares). */
+const CC_API = 'openai-completions'
+/** Catalog fetch timeout. */
+const CC_CATALOG_TIMEOUT_MS = 15000
+/** Response cap; the real body is ~15 KB. */
+const CC_MAX_BYTES = 2 * 1024 * 1024
+
+/**
+ * Read a response body, refusing anything over `maxBytes`.
+ *
+ * The catalog is the plugin's only inbound network payload, and an upstream (or
+ * a proxy in front of it) can otherwise make the engine buffer an unbounded
+ * response. Over the cap means "no data", which the caller already handles.
+ *
+ * @param {Response} res - upstream response.
+ * @param {number} maxBytes - largest body this plugin will accept.
+ * @returns {Promise<string|null>} the text, or null when unusable/over the cap.
+ */
+async function readBodyCapped(res, maxBytes) {
+  const declared = Number(res.headers?.get?.('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) return null
+  const stream = res.body
+  if (stream === null || stream === undefined || typeof stream.getReader !== 'function') {
+    // Simplified response object (test double / older runtime): fall back to
+    // whatever reader it offers, still enforcing the cap.
+    if (typeof res.text === 'function') {
+      const text = await res.text()
+      return text.length > maxBytes ? null : text
+    }
+    if (typeof res.json === 'function') {
+      const value = await res.json().catch(() => null)
+      return value === null ? null : JSON.stringify(value)
+    }
+    return null
+  }
+  const reader = stream.getReader()
+  const chunks = []
+  let size = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done === true) break
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+  const merged = new Uint8Array(size)
+  let at = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return new TextDecoder().decode(merged)
+}
+
+/**
+ * Map one catalog entry onto a settings model entry.
+ *
+ * Only `id` is mandatory. `name` and `contextWindow` are taken from the catalog
+ * when it states them: the engine has no catalog entry to fall back on for this
+ * route, so omitting `contextWindow` would silently give every model the
+ * route-level default (262144) instead of the real 1M.
+ *
+ * `maxTokens` is deliberately NOT invented — the catalog does not state an
+ * output cap, and the route default is a honest "unknown" the user can tune.
+ *
+ * @param raw - one entry of the provider's catalog.
+ * @returns a settings model entry, or null when the entry has no usable id.
+ */
+export function commandCodeEntry(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  if (id === '') return null
+  const entry = { id }
+  if (typeof raw.name === 'string' && raw.name.trim() !== '') entry.name = raw.name.trim()
+  const contextWindow = Number(raw.context_length ?? raw.contextWindow)
+  if (Number.isInteger(contextWindow) && contextWindow > 0) entry.contextWindow = contextWindow
+  return entry
+}
+
+/**
+ * Fetch and normalize the Command Code model catalog.
+ *
+ * Public endpoint: no credential is sent, so this half works before the user has
+ * configured a key (which is what lets the model list appear on its own).
+ *
+ * @returns `{ ok: true, models, fetchedAt }` or `{ ok: false, reason, status? }`.
+ */
+export async function fetchCommandCodeCatalog({
+  url = CC_CATALOG_URL,
+  fetchImpl = fetch,
+  timeoutMs = CC_CATALOG_TIMEOUT_MS,
+  log = () => {},
+} = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetchImpl(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      log('[gateway-models/commandcode] catalog responded', res.status)
+      return { ok: false, reason: res.status === 401 || res.status === 403 ? 'unauthorized' : 'upstream', status: res.status }
+    }
+    const text = await readBodyCapped(res, CC_MAX_BYTES)
+    if (text === null) return { ok: false, reason: 'bad-payload' }
+    let body = null
+    try {
+      body = JSON.parse(text)
+    } catch {
+      return { ok: false, reason: 'bad-payload' }
+    }
+    const raw = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : null
+    if (raw === null) return { ok: false, reason: 'bad-payload' }
+    const models = raw.map(commandCodeEntry).filter((entry) => entry !== null)
+    if (models.length === 0) return { ok: false, reason: 'bad-payload' }
+    return { ok: true, models, fetchedAt: Date.now() }
+  } catch (error) {
+    const aborted = error?.name === 'AbortError'
+    log('[gateway-models/commandcode] catalog fetch failed:', error?.message ?? String(error))
+    return { ok: false, reason: aborted ? 'timeout' : 'network' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The patch to write for a Command Code route, or null when it already has the
+ * shape this plugin maintains.
+ *
+ * Unlike the opencode-go half — which HOISTS a model we ship ourselves — this one
+ * only ever ADDS models: the route's catalog belongs to the provider, so the job
+ * is completeness, and the user's existing entries (and their order) are
+ * preserved by appending only what is missing.
+ *
+ * It also supplies the two fields such a route cannot resolve on its own, which
+ * matter for any route the shipped patch does NOT cover (a Pro subscriber on
+ * `commandcode-pro`, a MAX subscriber on `commandcode-max`, …):
+ *
+ *   * `api` — the ENGINE refuses to store models on a route whose protocol is
+ *     unresolvable, and Command Code has no catalog entry to resolve it from.
+ *     Without this the write is rejected and nothing appears, which is exactly
+ *     what a differently-named route used to do.
+ *   * `baseURL` — same fallback chain as `api`; a catalog-unknown model needs a
+ *     route-level endpoint.
+ *
+ * Both are only written when the RESOLVED route lacks them, so a value the user
+ * (or the shipped patch) already provides is never restated — which is also what
+ * keeps the write idempotent.
+ *
+ * @param userProfile - the route as the USER configured it, or undefined.
+ * @param resolvedRoute - the route as the engine resolves it (base + user), or undefined.
+ * @param catalog - normalized catalog entries (see `commandCodeEntry`).
+ * @returns {{models?: Array, api?: string, baseURL?: string}|null}
+ */
+export function planCommandCodeUpdate(userProfile, resolvedRoute, catalog) {
+  if (!Array.isArray(catalog)) return null
+  const detected = catalog.filter((entry) => typeof entry?.id === 'string' && entry.id !== '')
+  if (detected.length === 0) return null
+  const stored = Array.isArray(userProfile?.models) ? userProfile.models : undefined
+  const have = new Set((stored ?? []).map((entry) => entry?.id))
+  const missing = detected.filter((entry) => !have.has(entry.id))
+
+  const patch = {}
+  if (missing.length > 0) {
+    // No user list at all: seed the whole catalog in catalog order.
+    // A user list exists: keep it verbatim and append only the new arrivals.
+    patch.models = stored === undefined
+      ? detected.map((entry) => ({ ...entry }))
+      : [...stored, ...missing.map((entry) => ({ ...entry }))]
+  }
+  const resolved = resolvedRoute !== null && typeof resolvedRoute === 'object' ? resolvedRoute : {}
+  // Both layers count: in production the resolved route already merges the user's
+  // values in, but reading them off the user entry too keeps a value the user just
+  // wrote from being restated (and keeps this consistent with isCommandCodeRoute).
+  const api = firstString(resolved.api, userProfile?.api)
+  if (api === '') patch.api = CC_API
+  if (routeBaseUrl(userProfile, resolved) === '') patch.baseURL = CC_BASE_URL
+  // Nothing to change -> no write, no event, no loop.
+  return Object.keys(patch).length > 0 ? patch : null
+}
+
+/**
+ * The base URL a route actually resolves to, preferring the user's own value.
+ * @returns the URL string, or '' when neither layer states one.
+ */
+function routeBaseUrl(userEntry, resolvedEntry) {
+  for (const entry of [userEntry, resolvedEntry]) {
+    const value = typeof entry?.baseURL === 'string' ? entry.baseURL.trim() : ''
+    if (value !== '') return value
+  }
+  return ''
+}
+
+/** The first non-empty string among the candidates, or ''. */
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return ''
+}
+
+/** True when a route points at Command Code, whatever it is named. */
+export function isCommandCodeRoute(userEntry, resolvedEntry) {
+  const url = routeBaseUrl(userEntry, resolvedEntry)
+  if (url === '') return false
+  try {
+    return new URL(url).host.toLowerCase() === CC_HOST
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Which routes to provision, matched by ENDPOINT rather than by name.
+ *
+ * The route id is a label, and the same host serves every plan (Go / GOAT /
+ * Pro / MAX), so keying off a hard-coded name would silently skip anyone who
+ * called their route something else — a Pro subscriber on `commandcode-pro`, a
+ * MAX subscriber on `commandcode-max`, or someone reusing the community
+ * provider's `commandcode`. Two ways in, both explicit:
+ *
+ *   1. the route resolves to the Command Code host (the shipped patch supplies
+ *      that endpoint for `commandcode`, and a hand-made route states it),
+ *   2. its id is listed in the row's `commandcodeProviders` config — for a route
+ *      whose endpoint is stated nowhere yet, or proxied through another host.
+ *
+ * Only routes present in the USER layer are returned, because that is the only
+ * evidence the user actually uses Command Code (see `ensureCommandCodeModels`).
+ *
+ * @param userProviders - the `providers` map from the USER settings layer.
+ * @param resolvedProviders - the same map as the engine resolves it (base + user).
+ * @param extra - route ids named explicitly in the row config.
+ * @returns route ids, in a stable order.
+ */
+export function commandCodeRouteIds(userProviders, resolvedProviders, extra = []) {
+  const users = userProviders !== null && typeof userProviders === 'object' ? userProviders : {}
+  const resolved = resolvedProviders !== null && typeof resolvedProviders === 'object' ? resolvedProviders : {}
+  const ids = new Set()
+  for (const id of Array.isArray(extra) ? extra : []) {
+    if (typeof id === 'string' && id !== '') ids.add(id)
+  }
+  for (const id of Object.keys(users)) {
+    if (isCommandCodeRoute(users[id], resolved[id])) ids.add(id)
+  }
+  return [...ids].sort()
+}
+
+/**
+ * Provision the model list of every Command Code route the user configured.
+ *
+ * The guard is the USER layer: the patch layer declares `commandcode` for
+ * everyone (that is what supplies the endpoint), so "the route exists" is always
+ * true and says nothing about whether the user actually uses Command Code.
+ * Writing 81 models into the settings of someone who never configured such a
+ * route would be exactly the kind of uninvited write this plugin avoids
+ * elsewhere — so nothing happens until the user has an entry of their own (which
+ * is what adding the API key does).
+ */
+async function ensureCommandCodeModels(ctx, settings, config = {}) {
+  let userSection
+  try {
+    if (typeof settings.section !== 'function') {
+      ctx.logger?.warn('[gateway-models] settings.section() is unavailable; skipping the Command Code auto-add')
+      return
+    }
+    userSection = settings.section(NS)
+  } catch (error) {
+    ctx.logger?.warn('[gateway-models] reading the user settings section failed: %s', error?.message ?? String(error))
+    return
+  }
+  let resolvedSection
+  try {
+    resolvedSection = settings.get(NS)
+  } catch {
+    resolvedSection = undefined
+  }
+
+  const userProviders = userSection?.providers
+  const ids = commandCodeRouteIds(userProviders, resolvedSection?.providers, config.commandcodeProviders)
+  if (ids.length === 0) return // no Command Code route is in use
+
+  // One catalog serves every route, so it is fetched once and shared.
+  const catalog = await fetchCommandCodeCatalog({ log: (...a) => ctx.logger?.warn?.(...a) })
+  if (catalog.ok !== true) {
+    ctx.logger?.warn(
+      '[gateway-models] could not read the Command Code model catalog (%s); leaving the list(s) alone',
+      catalog.reason,
+    )
+    return
+  }
+
+  for (const id of ids) {
+    const userRoute = userProviders?.[id]
+    if (userRoute === null || typeof userRoute !== 'object') continue
+    const patch = planCommandCodeUpdate(userRoute, resolvedSection?.providers?.[id], catalog.models)
+    if (patch === null) continue // already complete
+    const before = Array.isArray(userRoute.models) ? userRoute.models.length : 0
+    const after = Array.isArray(patch.models) ? patch.models.length : before
+    const declared = [patch.api === undefined ? '' : 'api', patch.baseURL === undefined ? '' : 'baseURL']
+      .filter((s) => s !== '')
+    ctx.logger.info(
+      '[gateway-models] "%s": %d model(s) from the provider catalog (list %d -> %d)%s',
+      id,
+      Math.max(0, after - before),
+      before,
+      after,
+      declared.length === 0 ? '' : ` and declaring ${declared.join(' + ')}`,
+    )
+    await settings.update(NS, { providers: { [id]: patch } })
+  }
+}
+
+function installAutoModels(ctx, config = {}) {
   const settings = ctx.settings
   let ensureChain = Promise.resolve()
 
+  // Two independent provisioning passes over the SAME settings namespace. They
+  // are chained rather than run in parallel so the second never reads a section
+  // the first is halfway through writing.
   const ensure = () => {
     ensureChain = ensureChain
       .then(() => ensureV41Models(ctx, settings))
+      .then(() => ensureCommandCodeModels(ctx, settings, config))
       .catch((error) => {
-        ctx.logger?.warn('[opencode-go] auto-add failed: %s', error?.message ?? String(error))
+        ctx.logger?.warn('[gateway-models] auto-add failed: %s', error?.message ?? String(error))
       })
   }
 
@@ -655,7 +1034,7 @@ function installAutoModels(ctx) {
     const started = (async () => {
       const ready = await waitForNamespace(settings)
       if (!ready) {
-        ctx.logger?.warn('[opencode-go] llm-pi-ai settings namespace not seen within %dms; skipping auto-add', NS_WAIT_TIMEOUT_MS)
+        ctx.logger?.warn('[gateway-models] llm-pi-ai settings namespace not seen within %dms; skipping auto-add', NS_WAIT_TIMEOUT_MS)
         return
       }
       ensure()
@@ -680,7 +1059,7 @@ export function apply(ctx, config) {
   installSessionHeader(ctx, config)
   // Lazy: keeps the header half working in profiles that mount no settings
   // provider (and whose `ctx.settings` would never resolve).
-  ctx.inject(['settings'], (settingsCtx) => installAutoModels(settingsCtx))
+  ctx.inject(['settings'], (settingsCtx) => installAutoModels(settingsCtx, config))
 }
 
 export default { name, inject, apply }

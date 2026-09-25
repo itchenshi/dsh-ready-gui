@@ -128,28 +128,33 @@ const CATALOG = [
     url: "",
   },
   {
-    id: "dsh-opencode-go-path",
+    id: "dsh-gateway-models",
     // 内置：源码随本仓库走（plugins/<localSource>），staging 后安装；同时发布为独立包
-    // （github.com/itchenshi/dsh-opencode-go-path）。
+    // （github.com/itchenshi/dsh-gateway-models）。
     //
-    // 包名必须带 `-path` 后缀：`dsh-opencode-go` 与 `dsh-opencode-go-plus` 都已
-    // 被社区占用，无法在 npm 上使用（后者是同期另一个更强的独立实现，见
-    // github.com/yumusb/dsh-opencode-go-plus）。`pkg` 是真正的包名——profile 的
-    // bundles 登记、node_modules 目录、设置界面显示都用它。
-    // 补丁层的行 id 仍是 `opencode-go`，与包名解耦，因此老用户已有的禁用选择不丢。
+    // 原名 `dsh-opencode-go-path`（2026-09-25 改名）。改名原因：它已经不只管 OpenCode Go
+    // ——还给 Command Code 声明协议和地址、并从上游目录同步模型清单——所以换成了不带厂商
+    // 的名字，也顺手丢掉了当年只为绕开 npm 重名而加的 `-path` 后缀。
+    // 旧包名在 LEGACY_PLUGIN_PKGS 里做一次性清理。
+    //
+    // 补丁层的**行 id 仍是 `opencode-go`**，与包名解耦：GUI 的启用/禁用是写在补丁层上的
+    // `- id: <rowId> + disabled:`，所以行 id 不变则用户已有的选择不丢。
+    // `pkg` 是真正的包名——profile 的 bundles 登记、node_modules 目录、设置界面显示都用它。
     //
     // 合并自原 dsh-opencode-go-session + dsh-opencode-go-api（两者在
     // LEGACY_PLUGIN_PKGS 里做一次性迁移）。三件事：
     //   1) cordis.patch.yml（配置层）：给引擎装配层的 `llm-pi-ai` row 补
-    //      providers.opencode-go.api: openai-completions。修的是
+    //      providers.opencode-go.api: openai-completions，以及
+    //      providers.commandcode.api + baseURL。修的是
     //        llm-pi-ai: provider "opencode-go" model "<目录外模型>" needs an api; ...
     //      这类报错——opencode-go 目录内模型横跨三种协议（anthropic-messages /
     //      openai-completions / openai-responses），引擎无法从目录推断共享协议，
-    //      目录外模型就必须由路由显式声明 api。补上后，GUI 模型页「添加模型」的
+    //      目录外模型就必须由路由显式声明 api。Command Code 则完全不在自带目录里，
+    //      连模型清单都得从它公开的目录接口取。补上后，GUI 模型页「添加模型」的
     //      严格校验（保存路径）也能通过。
-    //   2) lib/index.js（运行时）：引擎启动后检查模型列表——若存在 opencode-go
-    //      路由且 models 里还没有 deepseek-v4.1-*，就自动追加（走与 GUI 模型页
-    //      相同的 settings.update 写入路径，幂等）。
+    //   2) lib/index.js（运行时）：引擎启动后按**接口地址**识别网关路由（不按名字），
+    //      补齐模型清单——OpenCode Go 把 V4.1 排到最前，Command Code 按上游目录补全
+    //      （走与 GUI 模型页相同的 settings.update 写入路径，幂等）。
     //   3) 为发往 OpenCode / OpenCode Go 的请求附加按会话 x-opencode-session
     //      头（修复 400 MissingSessionID；默认用不透明 UUID，绝不发内部会话 ID）。
     //
@@ -157,13 +162,13 @@ const CATALOG = [
     // 引擎装配层、settings 服务与 llm 事件的公开契约（bundle patch 按 row id 合并
     // + llm-pi-ai 的 profile schema 接受 route 级 `api` 字段 + ctx.settings
     // update/section/describe + llm/stream 瀑布），不是引擎版本号。
-    pkg: "dsh-opencode-go-path",
-    localSource: "dsh-opencode-go-path",
+    pkg: "dsh-gateway-models",
+    localSource: "dsh-gateway-models",
     client: false,
-    zh: "OpenCode Go 路由（dsh-opencode-go-path）",
-    en: "OpenCode Go routes (dsh-opencode-go-path)",
-    zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头，修复 400 MissingSessionID。",
-    enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID.",
+    zh: "网关路由（dsh-gateway-models）",
+    en: "Gateway routes (dsh-gateway-models)",
+    zhDesc: "声明 opencode-go 路由协议并自动补 DeepSeek V4.1 模型；同时附加会话头修复 400 MissingSessionID。也给 Command Code 路由声明协议和 API 地址（所以不用手填地址），并从其公开目录把全部模型补齐。",
+    enDesc: "Declares the opencode-go route protocol, auto-adds DeepSeek V4.1 models, and attaches the session header that fixes 400 MissingSessionID. Also declares the Command Code route's protocol and endpoint (so the API address never has to be typed) and completes its model list from the provider's public catalog.",
     url: "",
   },
   {
@@ -1447,12 +1452,12 @@ const LEGACY_PLUGIN_PKGS = [
   {
     pkg: "dsh-opencode-go-session",
     rowIds: ["opencode-go-session-header"],
-    replacedBy: "dsh-opencode-go-path",
+    replacedBy: "dsh-gateway-models",
   },
   {
     pkg: "dsh-opencode-go-api",
     rowIds: ["opencode-go-api"],
-    replacedBy: "dsh-opencode-go-path",
+    replacedBy: "dsh-gateway-models",
   },
   // v0.4.0/v0.4.1 把三个插件**随壳捆绑**在 plugins/ 下，用 `file:` 装进 profile——
   // 它们当时都从未发布到 npm。拆仓后改为从 registry 安装，而其中两个在 npm 上的
@@ -1461,7 +1466,20 @@ const LEGACY_PLUGIN_PKGS = [
   {
     pkg: "dsh-opencode-go",
     rowIds: ["opencode-go"],
-    replacedBy: "dsh-opencode-go-path",
+    replacedBy: "dsh-gateway-models",
+  },
+  // 纯改名：`dsh-opencode-go-path` → `dsh-gateway-models`（2026-09-25）。它已经不只管
+  // OpenCode Go，还给 Command Code 声明协议+地址并同步模型清单，所以换了个不带厂商的
+  // 名字，顺手丢掉了当年只为绕开 npm 重名而加的 `-path` 后缀（`dsh-opencode-go` 与
+  // `dsh-opencode-go-plus` 都被社区占着）。
+  //
+  // rowIds 写 `opencode-go` 是**照实记录旧包占过哪个行**，不是要清它：新包用着同一个
+  // 行 id，而 removeLegacyPlugins 会按 liveCatalogRowIds() 把现役行过滤掉，所以那条
+  // `disabled` 永远不会被写坏 —— 用户保存的启用/禁用选择正好跟着新包走。
+  {
+    pkg: "dsh-opencode-go-path",
+    rowIds: ["opencode-go"],
+    replacedBy: "dsh-gateway-models",
   },
   {
     pkg: "dsh-composer-keys",

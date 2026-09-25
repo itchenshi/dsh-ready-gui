@@ -1,10 +1,20 @@
-# dsh-opencode-go-path
+# dsh-gateway-models
 
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
-One plugin for the OpenCode / OpenCode Go routes: **install it, tick it, done** — no hand-editing
-config, no command line.
+> One of the plugins bundled with **DSH Ready GUI** — the GUI ships all four, ready to tick.
+> Each one also installs standalone into any DSH host (see "Install and go" below).
+> GUI: https://github.com/itchenshi/dsh-ready-gui
+>
+> **Renamed on 2026-09-25**: this was `dsh-opencode-go-path`. It no longer covers only OpenCode Go —
+> it also declares Command Code's protocol and endpoint and syncs its model list from the provider's
+> catalog — so it now carries a vendor-neutral name. The patch layer's **row id stays `opencode-go`**
+> (deliberately decoupled from the package name), so **your enable/disable choice is not lost**, and
+> GitHub redirects the old repository name, so existing installs keep working.
+
+One plugin for gateway routes (OpenCode Go + Command Code): **install it, tick it, done** — no
+hand-editing config, no command line, and **no typing the API address every time**.
 
 ## What it fixes for you
 
@@ -15,20 +25,67 @@ config, no command line.
 | The model is there but requests fail and saving it is refused | Supplies the route `baseURL` (a model outside the catalog has nowhere to point without it) |
 | Multi-turn calls fail with **400 `MissingSessionID`** | Attaches a per-conversation `x-opencode-session` header to OpenCode requests |
 | Multi-turn calls fail with **400 `reasoning_content` must be passed back** | Supplies the DeepSeek thinking-protocol declaration a catalog-unknown model is missing |
+| **No Command Code model exists in DSH at all**, and each one you add asks for the API address | The patch layer declares the `commandcode` route's protocol **and its endpoint**, so you supply only the key; at startup the full model list is filled in from the provider's **public catalog** |
+
+### How the Command Code half works
+
+Command Code is not in the engine's shipped pi-ai catalog (40 providers, none of them Command Code), so
+nothing about it can be inferred: every entry needs a route-level `api` and `baseURL`, and the model ids
+need a source — which is exactly why adding one meant typing the API address again. The plugin supplies
+both ends:
+
+1. **The endpoint**: `cordis.patch.yml` declares `api` + `baseURL` for `commandcode`. The engine
+   resolves an entry's endpoint as `route.baseURL ?? catalogModel.baseUrl ?? providerBaseUrl`, and the
+   model page probes with `draft.baseURL ?? fallback.baseURL` — so **while the route carries the
+   address, you never type it**.
+2. **The models**: at startup it reads the provider's own **public catalog**
+   (`GET .../provider/v1/models`, **no credential required**, 81 models, each carrying
+   `context_length`) and completes the list.
+
+Filling is **add-only**: entries you already have (including names and limits you edited) are kept
+verbatim, and missing ones are **appended**, so your own ordering survives. A second pass writes nothing
+(idempotent).
+
+> This route's catalog belongs to the provider, so the job here is *completeness* — not hoisting one
+> model to the front the way the OpenCode Go half does.
+
+### One route name covers every plan: `commandcode`
+
+**The plan lives on the account behind the API key — not in the route name, and not in the URL.** One
+host, `api.commandcode.ai`, serves every tier; the key reports its own `planId` from
+`/alpha/billing/subscriptions` (`individual-go` / `individual-goat` / `individual-pro` /
+`individual-max-10x` / `individual-max-20x` …), and the credit windows come back sized for that tier.
+
+So the default route is named **`commandcode`**, with **no tier suffix**: the tier is not what the route
+decides, and calling it `commandcode-goat` would claim otherwise. **Upgrading the plan is a key swap —
+the route name and the config never change.**
+
+Older names keep working: the plugin recognises Command Code routes by their **endpoint**
+(`api.commandcode.ai`), never by name. So an existing `commandcode-goat`, or `commandcode-pro` /
+`commandcode-max` / the community provider's `commandcode`, is provisioned just the same. For names the
+patch does not cover, the plugin also writes the `api` and `baseURL` such a route cannot resolve on its
+own — the engine refuses to store models on a route whose protocol is unresolvable, and Command Code has
+no catalog entry to resolve it from.
+
+If a route's endpoint is nowhere in the config (say you proxy it through your own gateway), name its id
+explicitly in the row's `commandcodeProviders`.
 
 ## Install and go
 
 - **Using DSH Ready GUI (recommended)**: the plugin **ships inside the GUI**. Open the GUI → Settings
   → Third-party plugins → tick **OpenCode Go routes**, then restart the engine as prompted.
-- **Any other DSH host** (`dsh web`, the CLI):
+- **Any other DSH host** (`dsh web`, the CLI) — either route works:
 
   ```sh
-  git clone https://github.com/itchenshi/dsh-opencode-go-path.git
-  dsh plugin --profile web add file:<absolute path of the clone>
+  # Recommended: install straight from GitHub (recorded in your profile, updatable)
+  dsh plugin --profile web add github:itchenshi/dsh-gateway-models
+
+  # Fallback: install the release tarball (use this if github.com is unreachable for you)
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tar.gz
   ```
 
-  That installs the real on-disk directory, so a later `git pull` updates the very code in use — but
-  moving or deleting the directory breaks the dependency (just add it again).
+  Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
+  is needed afterwards.
 
 > Not on npm yet: sign-up is unreachable (`www.npmjs.com` answers with a Cloudflare challenge), so
 > nothing can be published. Use one of the two routes above; publishing resumes once sign-up works.
@@ -110,19 +167,30 @@ of needing to be deleted and re-added.
 | Key | Description |
 |---|---|
 | `providers` | Route names to attach the session header to; default `['opencode', 'opencode-go']` |
+| `commandcodeProviders` | Extra Command Code route ids. Normally unnecessary — routes on `api.commandcode.ai` are recognised by their endpoint. Use it only when a route's endpoint is not visible in the config |
 | `mode` | `'uuid'` (default, safe) or `'session-id'` (explicit opt-in; sends the internal session ID) |
 | `debug` | `true` logs every streaming call that received the header |
 | `debugFile` | Path to append JSON lines to; **only** paths under `$DSH_HOME/logs` or the system temp directory take effect; the logged `session` is a one-way SHA-256 hash |
 
 ## Permissions and boundaries (for marketplaces that scan statically)
 
-- **Runtime dependencies: none.** Node built-ins only. **Outbound network: none.** The plugin makes no
-  requests of its own; it wraps `globalThis.fetch` to add the header and calls the engine's own
-  `llm.discoverModels()` (which answers the shipped catalog without touching the network).
+- **Runtime dependencies: none.** Node built-ins only.
+- **Outbound network: one public GET, carrying no credential.** The only request the plugin makes is
+  `GET https://api.commandcode.ai/provider/v1/models`, used to complete the Command Code model list.
+  That endpoint is **public and needs no key**, and the request sends **no Authorization header**.
+  Everything else is local: the OpenCode Go half calls the engine's own `llm.discoverModels()` (which
+  answers the shipped catalog without touching the network), and the header is added by wrapping
+  `globalThis.fetch`.
 - **Files: none by default.** Only an explicitly configured `debugFile` is ever written, and only under
   `$DSH_HOME/logs` or the system temp directory.
 - **Local routes: none.** No page half, no HTTP route.
-- **Credentials / commands / native artifacts / lifecycle scripts: none.**
+- **Credentials / commands / native artifacts / lifecycle scripts: none.** The plugin **never reads an
+  API key** — it only writes route configuration; the engine resolves the key itself from `apiKeyEnv`.
+- **Write gate**: the Command Code half touches settings only for routes **you configured yourself** (a
+  user-layer entry, e.g. after adding the key). The patch layer declares the default route for everyone
+  purely to supply its endpoint, which says nothing about whether you use it, so 81 models are never
+  pushed into the settings of someone who does not. Which routes count is decided by their endpoint
+  (`api.commandcode.ai`), not by their name.
 - **Failure boundary**: it depends on the public contracts of the engine's assembly layer, the
   `settings` service and the `llm` events — not on an engine version. If those change, the engine
   **reports the plugin as failed to load** instead of failing silently. Writes go through the `settings`

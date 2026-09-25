@@ -67,12 +67,23 @@ window.__ModuleLoader__.load({
     ]
 
     /**
+     * Command Code windows in display order. Named after what the upstream
+     * actually reports (a 5-hour window and a weekly one) rather than reusing
+     * OpenCode Go's "rolling" spelling, so the label matches the number.
+     */
+    const CC_WINDOWS = [
+      { key: 'fiveHour', zh: '5 小时', en: '5h', titleZh: '5 小时窗口', titleEn: '5-hour window' },
+      { key: 'weekly', zh: '周', en: 'wk', titleZh: '本周', titleEn: 'Weekly' },
+    ]
+
+    /**
      * Fallback provider mapping, used only until the first host response
      * arrives (the host's `sections` wins, because it reflects configuration).
      */
     const FALLBACK_SECTIONS = {
       'opencode-go': { providers: ['opencode-go', 'opencode'] },
       deepseek: { providers: ['deepseek-official'] },
+      commandcode: { providers: ['commandcode-goat', 'commandcode'] },
     }
 
     // --- usage store -------------------------------------------------------
@@ -256,6 +267,7 @@ window.__ModuleLoader__.load({
       __lang: 'zh-CN',
       labelOc: 'OpenCode Go',
       labelDs: 'DeepSeek',
+      labelCc: 'Command Code',
       noKey: '未配置密钥',
       unavailable: '用量不可用',
       balanceUnavailable: '余额不可用',
@@ -264,6 +276,11 @@ window.__ModuleLoader__.load({
       titleOcUnavailable: '暂时取不到 OpenCode Go 用量',
       titleDsBalance: 'DeepSeek 账户余额（仅在使用 DeepSeek 模型时显示）',
       titleDsUnavailable: '暂时取不到 DeepSeek 余额',
+      titleCcUsage: 'Command Code 套餐用量与剩余额度（仅在使用 Command Code 模型时显示）',
+      titleCcUnavailable: '暂时取不到 Command Code 用量',
+      ccRemaining: '剩余',
+      ccWindowNote: '百分比按该窗口已用 / 上限计算；剩余为账户可用额度',
+      ccExceeded: '已达窗口上限',
       total: '总',
       granted: '赠送',
       toppedUp: '充值',
@@ -284,6 +301,7 @@ window.__ModuleLoader__.load({
       __lang: 'en-US',
       labelOc: 'OpenCode Go',
       labelDs: 'DeepSeek',
+      labelCc: 'Command Code',
       noKey: 'no key',
       unavailable: 'usage n/a',
       balanceUnavailable: 'balance n/a',
@@ -292,6 +310,11 @@ window.__ModuleLoader__.load({
       titleOcUnavailable: 'OpenCode Go usage is temporarily unavailable',
       titleDsBalance: 'DeepSeek account balance (shown only while a DeepSeek model is active)',
       titleDsUnavailable: 'DeepSeek balance is temporarily unavailable',
+      titleCcUsage: 'Command Code plan usage and remaining credits (shown only while a Command Code model is active)',
+      titleCcUnavailable: 'Command Code usage is temporarily unavailable',
+      ccRemaining: 'left',
+      ccWindowNote: 'Percentages are used / cap for that window; "left" is the account credits',
+      ccExceeded: 'window cap reached',
       total: 'total',
       granted: 'granted',
       toppedUp: 'topped up',
@@ -387,6 +410,92 @@ window.__ModuleLoader__.load({
         title,
         style: S_WRAP,
         children: [jsx.jsx('span', { style: S_DIM, children: t('labelOc') }), ...parts],
+      })
+    }
+
+    /**
+     * Command Code: 5-hour / weekly percentages + remaining credits.
+     *
+     * Deliberately shows no monthly PERCENTAGE: the quota endpoint reports the
+     * windows it enforces (5h + weekly) and the credits that remain, but never
+     * the plan's monthly allotment, so a monthly bar would need a hard-coded
+     * plan table. The remaining credits answer "how much can I still spend"
+     * without inventing a denominator.
+     */
+    function renderCommandCode(section, t, zh) {
+      if (!section || section.ok !== true) {
+        return renderUnavailable(t, section?.reason, t('titleCcUnavailable'))
+      }
+      const usage = section.usage && typeof section.usage === 'object' ? section.usage : {}
+      const credits = section.credits && typeof section.credits === 'object' ? section.credits : null
+      const parts = []
+      let exceeded = false
+      for (const w of CC_WINDOWS) {
+        const b = usage[w.key]
+        if (!b) continue
+        if (b.status === 'rate-limited') exceeded = true
+        const usedOfCap = typeof b.cap === 'number' && b.cap > 0 ? `$${b.used.toFixed(2)} / $${b.cap.toFixed(2)}` : ''
+        const tip = [
+          `${zh ? w.titleZh : w.titleEn} · ${b.percent}%`,
+          usedOfCap,
+          b.resetsAt ? formatReset(b.resetsAt, zh) : '',
+        ].filter((s) => s !== '').join(' · ')
+        parts.push(
+          jsx.jsxs(
+            'span',
+            {
+              key: w.key,
+              title: tip,
+              style: S_BUCKET,
+              children: [
+                jsx.jsx('span', { style: S_DIM, children: bucketLabel(w, zh) }),
+                jsx.jsx('span', { style: { color: percentColor(b.percent), fontWeight: 600 }, children: `${b.percent}%` }),
+              ],
+            },
+            w.key,
+          ),
+        )
+      }
+
+      if (credits && typeof credits.remaining === 'string' && credits.remaining !== '') {
+        const bits = []
+        if (credits.monthly) bits.push(`${t('total')} $${credits.monthly}`)
+        if (credits.purchased) bits.push(`${t('toppedUp')} $${credits.purchased}`)
+        if (credits.free) bits.push(`${t('granted')} $${credits.free}`)
+        const tip = `${t('ccRemaining')} $${credits.remaining}${bits.length > 0 ? ` · ${bits.join(' · ')}` : ''}\n${t('ccWindowNote')}`
+        parts.push(
+          jsx.jsxs(
+            'span',
+            {
+              key: 'credits',
+              title: tip,
+              style: S_BUCKET,
+              children: [
+                jsx.jsx('span', { style: S_DIM, children: t('ccRemaining') }),
+                jsx.jsx('span', { style: { color: '#4d9fff', fontWeight: 600 }, children: `$${credits.remaining}` }),
+              ],
+            },
+            'credits',
+          ),
+        )
+      }
+
+      if (parts.length === 0) return renderUnavailable(t, 'bad-payload', t('titleCcUnavailable'))
+
+      let title = t('titleCcUsage')
+      if (exceeded) {
+        const last = usage.weekly && usage.weekly.resetsAt
+          ? usage.weekly.resetsAt
+          : usage.fiveHour && usage.fiveHour.resetsAt
+        const reset = last ? ` · ${t('resetAt').replace('{0}', shortDate(last, zh))}` : ''
+        title += `\n⚠ ${t('ccExceeded')}${reset}`
+      }
+
+      return jsx.jsxs('span', {
+        className: 'model-usage',
+        title,
+        style: S_WRAP,
+        children: [jsx.jsx('span', { style: S_DIM, children: t('labelCc') }), ...parts],
       })
     }
 
@@ -506,6 +615,7 @@ window.__ModuleLoader__.load({
       if (state.status !== 'ready' && state.status !== 'error') return null
 
       if (sectionKey === 'deepseek') return renderDeepSeek(section, t, zh)
+      if (sectionKey === 'commandcode') return renderCommandCode(section, t, zh)
       const modelId = modelSnapshot && modelSnapshot.current ? modelSnapshot.current.model : undefined
       return renderOpenCodeGo(section, t, zh, modelId, payload && payload.limits, payload && payload.limitsMeta)
     }

@@ -1,9 +1,10 @@
-// dsh-opencode-go-path local behaviour tests (no network, no engine).
+// dsh-gateway-models local behaviour tests (no network, no engine).
 // Run: node tests/test.mjs
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { V4_1_MODELS, headerValueFor, isV41, patchFetch, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
+import { CC_PROVIDER, V4_1_MODELS, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -18,7 +19,7 @@ async function checkAsync(label, fn) {
   console.log('  ✓', label)
 }
 
-console.log('dsh-opencode-go-path tests')
+console.log('dsh-gateway-models tests')
 
 // --- header half: headerValueFor defaults to an opaque uuid ---
 check('uuid mode: value is opaque, not the session id', () => {
@@ -333,6 +334,195 @@ check('planRouteUpdate keeps a tuned user entry for our id', () => {
   assert.equal(patch.models[0].name, '我的 Flash', 'the user name wins')
   assert.equal(patch.models[0].contextWindow, 1234, 'the user limits win')
   assert.deepEqual(patch.models[0].compat, V4_1_MODELS[0].compat, 'the wire facts are still filled in')
+})
+
+// --- Command Code catalog provisioning ---
+
+// Shape captured from the live public endpoint (no credential required):
+//   GET https://api.commandcode.ai/provider/v1/models
+const CC_CATALOG = [
+  { id: 'claude-sonnet-5', object: 'model', owned_by: 'command-code', name: 'Claude Sonnet 5', context_length: 1000000, supported_endpoints: ['/messages'] },
+  { id: 'gpt-6-astra', object: 'model', owned_by: 'command-code', name: 'GPT-6 Astra', context_length: 1050000, supported_endpoints: ['/chat/completions', '/responses'] },
+]
+
+check('commandCodeEntry maps the catalog fields a settings entry needs', () => {
+  assert.deepEqual(commandCodeEntry(CC_CATALOG[0]), {
+    id: 'claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    contextWindow: 1000000,
+  })
+  // contextWindow matters here: this route has NO catalog fallback, so omitting
+  // it would give every model the route default (262144) instead of the real 1M.
+  assert.equal(commandCodeEntry({ id: 'x', context_length: 4096 }).contextWindow, 4096)
+  // id is the only mandatory field
+  assert.deepEqual(commandCodeEntry({ id: 'bare' }), { id: 'bare' })
+  // unusable shapes
+  assert.equal(commandCodeEntry({ name: 'no id' }), null)
+  assert.equal(commandCodeEntry({ id: '   ' }), null)
+  assert.equal(commandCodeEntry(null), null)
+  assert.equal(commandCodeEntry([]), null)
+  // a bogus context_length is dropped rather than stored as NaN
+  assert.deepEqual(commandCodeEntry({ id: 'y', context_length: 'nope' }), { id: 'y' })
+})
+
+// A route the shipped patch covers: api + endpoint already resolve, so only the
+// model list is ever planned.
+const CC_RESOLVED = { api: 'openai-completions', baseURL: 'https://api.commandcode.ai/provider/v1' }
+
+check('planCommandCodeUpdate seeds the whole catalog when the user has no list', () => {
+  const catalog = CC_CATALOG.map(commandCodeEntry)
+  const patch = planCommandCodeUpdate({ apiKeyEnv: 'COMMANDCODE_GOAT_API_KEY' }, CC_RESOLVED, catalog)
+  assert.deepEqual(patch.models, catalog)
+  // ... and the seeded list is then complete -> no further write
+  assert.equal(planCommandCodeUpdate({ models: patch.models }, CC_RESOLVED, catalog), null)
+})
+
+check('planCommandCodeUpdate appends only what is missing, keeping user order', () => {
+  const catalog = CC_CATALOG.map(commandCodeEntry)
+  const tuned = { id: 'gpt-6-astra', name: '我改过的名字', contextWindow: 1234 }
+  const patch = planCommandCodeUpdate({ models: [tuned] }, CC_RESOLVED, catalog)
+  assert.equal(patch.models.length, 2)
+  assert.equal(patch.models[0], tuned, 'the user entry is kept verbatim and in place')
+  assert.equal(patch.models[0].contextWindow, 1234)
+  assert.deepEqual(patch.models[1], commandCodeEntry(CC_CATALOG[0]), 'the missing one is appended')
+  // idempotent: running again over its own output is a no-op
+  assert.equal(planCommandCodeUpdate({ models: patch.models }, CC_RESOLVED, catalog), null)
+})
+
+check('planCommandCodeUpdate never reorders or duplicates an existing list', () => {
+  const catalog = CC_CATALOG.map(commandCodeEntry)
+  const full = [commandCodeEntry(CC_CATALOG[1]), commandCodeEntry(CC_CATALOG[0])]
+  // both present, in the user's own (reversed) order -> nothing to do
+  assert.equal(planCommandCodeUpdate({ models: full }, CC_RESOLVED, catalog), null)
+  // a duplicate id in the catalog must not append a second copy
+  const dupes = planCommandCodeUpdate({ models: [] }, CC_RESOLVED, [catalog[0], catalog[0]])
+  assert.equal(dupes.models.length, 2, 'an empty stored list seeds catalog entries as given')
+  assert.equal(planCommandCodeUpdate({ models: [catalog[0]] }, CC_RESOLVED, [catalog[0], catalog[0]]), null)
+})
+
+check('planCommandCodeUpdate declares api + baseURL for a route the patch misses', () => {
+  const catalog = CC_CATALOG.map(commandCodeEntry)
+  // A Pro/MAX subscriber whose route is NOT the patched name: nothing resolves
+  // `api`, and the engine refuses to store models without one.
+  const bare = planCommandCodeUpdate({ apiKeyEnv: 'K', baseURL: 'https://api.commandcode.ai/provider/v1' }, {}, catalog)
+  assert.equal(bare.api, 'openai-completions')
+  assert.equal(bare.models.length, 2)
+  // baseURL is only restated when the resolved route actually lacks it
+  assert.equal(bare.baseURL, undefined, 'the user already stated the endpoint')
+  const noEndpoint = planCommandCodeUpdate({ apiKeyEnv: 'K' }, {}, catalog)
+  assert.equal(noEndpoint.baseURL, 'https://api.commandcode.ai/provider/v1')
+  assert.equal(noEndpoint.api, 'openai-completions')
+  // once written, the resolved route carries both -> only models remain
+  const settled = planCommandCodeUpdate({ models: catalog }, CC_RESOLVED, catalog)
+  assert.equal(settled, null)
+  // a route that needs ONLY the declarations (models already complete) still gets them
+  const onlyDecls = planCommandCodeUpdate({ models: catalog }, {}, catalog)
+  assert.deepEqual(onlyDecls, { api: 'openai-completions', baseURL: 'https://api.commandcode.ai/provider/v1' })
+})
+
+check('planCommandCodeUpdate refuses to guess without a catalog', () => {
+  assert.equal(planCommandCodeUpdate({}, CC_RESOLVED, undefined), null)
+  assert.equal(planCommandCodeUpdate({}, CC_RESOLVED, null), null)
+  assert.equal(planCommandCodeUpdate({}, CC_RESOLVED, []), null)
+  assert.equal(planCommandCodeUpdate({}, CC_RESOLVED, 'nope'), null)
+  assert.equal(planCommandCodeUpdate(undefined, CC_RESOLVED, [commandCodeEntry(CC_CATALOG[0])]).models.length, 1)
+})
+
+await checkAsync('fetchCommandCodeCatalog reads the public catalog without a key', async () => {
+  let seen = null
+  const res = await fetchCommandCodeCatalog({
+    fetchImpl: async (url, init) => {
+      seen = { url, init }
+      return { ok: true, json: async () => ({ object: 'list', data: CC_CATALOG }) }
+    },
+  })
+  assert.equal(seen.url, 'https://api.commandcode.ai/provider/v1/models')
+  assert.equal(seen.init.headers.authorization, undefined, 'the public catalog must not receive a credential')
+  assert.equal(res.ok, true)
+  assert.equal(res.models.length, 2)
+  assert.equal(res.models[0].contextWindow, 1000000)
+
+  // a bare array is accepted too
+  const bare = await fetchCommandCodeCatalog({ fetchImpl: async () => ({ ok: true, json: async () => CC_CATALOG }) })
+  assert.equal(bare.models.length, 2)
+
+  // failures classify instead of throwing
+  const denied = await fetchCommandCodeCatalog({ fetchImpl: async () => ({ ok: false, status: 403 }) })
+  assert.equal(denied.reason, 'unauthorized')
+  const boom = await fetchCommandCodeCatalog({ fetchImpl: async () => { throw new Error('offline') } })
+  assert.equal(boom.reason, 'network')
+  const junk = await fetchCommandCodeCatalog({ fetchImpl: async () => ({ ok: true, json: async () => ({ nope: 1 }) }) })
+  assert.equal(junk.reason, 'bad-payload')
+  // every entry unusable -> bad-payload, never an empty list written to settings
+  const empty = await fetchCommandCodeCatalog({
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ name: 'no id' }] }) }),
+  })
+  assert.equal(empty.reason, 'bad-payload')
+})
+
+check('isCommandCodeRoute matches the ENDPOINT, not the route name', () => {
+  // The route id is a label; every Command Code plan (Go / GOAT / Pro / MAX)
+  // answers on the same host, so provisioning must not key off a fixed name.
+  assert.equal(isCommandCodeRoute({ baseURL: 'https://api.commandcode.ai/provider/v1' }), true)
+  assert.equal(isCommandCodeRoute({ baseURL: 'https://api.commandcode.ai' }), true)
+  assert.equal(isCommandCodeRoute({ baseURL: 'https://API.CommandCode.AI/provider/v1' }), true)
+  // the endpoint may be stated only by the resolved (base) layer
+  assert.equal(isCommandCodeRoute(undefined, { baseURL: 'https://api.commandcode.ai/provider/v1' }), true)
+  assert.equal(isCommandCodeRoute({}, { baseURL: 'https://api.commandcode.ai/provider/v1' }), true)
+  // anything else is not ours
+  assert.equal(isCommandCodeRoute({ baseURL: 'https://opencode.ai/zen/go/v1' }), false)
+  assert.equal(isCommandCodeRoute({ baseURL: 'https://api.deepseek.com' }), false)
+  assert.equal(isCommandCodeRoute({}), false)
+  assert.equal(isCommandCodeRoute(undefined, undefined), false)
+  assert.equal(isCommandCodeRoute({ baseURL: 'not a url' }), false)
+  assert.equal(isCommandCodeRoute(null, null), false)
+})
+
+check('commandCodeRouteIds finds every configured Command Code route', () => {
+  const resolved = {
+    // the name the shipped patch declares, plus a legacy one and two plan-named ones
+    commandcode: { baseURL: 'https://api.commandcode.ai/provider/v1' },
+    'commandcode-goat': { baseURL: 'https://api.commandcode.ai/provider/v1' },
+    'commandcode-pro': { baseURL: 'https://api.commandcode.ai/provider/v1' },
+    'commandcode-max': { baseURL: 'https://api.commandcode.ai/provider/v1' },
+    'opencode-go': { baseURL: 'https://opencode.ai/zen/go/v1' },
+  }
+  // Plan-named routes (and the legacy goat one) are still found — the name never
+  // decides anything, the endpoint does.
+  assert.deepEqual(
+    commandCodeRouteIds({ 'commandcode-pro': { apiKeyEnv: 'K' }, 'opencode-go': {} }, resolved),
+    ['commandcode-pro'],
+  )
+  assert.deepEqual(
+    commandCodeRouteIds(
+      { commandcode: {}, 'commandcode-goat': {}, 'commandcode-max': {}, 'opencode-go': {} },
+      resolved,
+    ),
+    ['commandcode', 'commandcode-goat', 'commandcode-max'],
+  )
+  // The patch-declared route: its endpoint lives in the RESOLVED layer only.
+  assert.deepEqual(commandCodeRouteIds({ commandcode: { apiKeyEnv: 'K' } }, resolved), ['commandcode'])
+  // Routes only in the base layer are NOT provisioned (the user does not use them).
+  assert.deepEqual(commandCodeRouteIds({}, resolved), [])
+  // An explicit list covers a route whose endpoint is stated nowhere yet.
+  assert.deepEqual(commandCodeRouteIds({ 'my-cc': {} }, {}, ['my-cc']), ['my-cc'])
+  assert.deepEqual(commandCodeRouteIds({ 'my-cc': {} }, {}, 'nope'), [])
+  assert.deepEqual(commandCodeRouteIds(undefined, undefined), [])
+})
+
+check('the shipped patch declares exactly the route the code names', () => {
+  // The runtime matches by endpoint, so nothing would notice this drifting: a
+  // rename in one file and not the other silently costs users the built-in
+  // endpoint (they would have to type the API address again).
+  const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+  assert.ok(
+    new RegExp(`^\\s{6}${CC_PROVIDER}:\\s*$`, 'm').test(patch),
+    `cordis.patch.yml must declare the "${CC_PROVIDER}" route`,
+  )
+  assert.ok(patch.includes('baseURL: https://api.commandcode.ai/provider/v1'), 'the patched route needs its endpoint')
+  assert.ok(patch.includes('api: openai-completions'), 'the patched route needs its protocol')
+  // The plan-specific name must no longer be the declared default.
+  assert.ok(!/^\s{6}commandcode-goat:\s*$/m.test(patch), 'the default route must not be plan-specific')
 })
 
 await Promise.resolve()

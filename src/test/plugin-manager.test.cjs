@@ -131,14 +131,14 @@ function checkClientHalf() {
     // ...and a declared HOST-ONLY plugin is false, not unknown: this is exactly the
     // per-plugin difference the settings row reports (no page reload needed).
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-opencode-go-path", client: false }),
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-gateway-models", client: false }),
       false,
       "declared host-only -> false",
     );
     // the installed copy stays authoritative once it is on disk
-    writePkg("dsh-opencode-go-path", { name: "dsh-opencode-go-path", version: "1.0.0", dsh: { client: { platform: "web" } } });
+    writePkg("dsh-gateway-models", { name: "dsh-gateway-models", version: "1.0.0", dsh: { client: { platform: "web" } } });
     assert.strictEqual(
-      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-opencode-go-path", client: false }),
+      pm.pluginHasClientHalf(dshHome, { pkg: "dsh-gateway-models", client: false }),
       true,
       "installed manifest wins over the declaration",
     );

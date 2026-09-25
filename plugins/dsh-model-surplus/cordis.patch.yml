@@ -5,18 +5,19 @@
 # enable/disable choice, and it is independent of the package name. Renaming the
 # package must not orphan that choice.
 #
-# Shows model usage / account balance in the session header, gated on the
-# session's ACTIVE model selection:
-#   - OpenCode Go models  -> plan usage (rolling / weekly / monthly percentages)
-#   - DeepSeek models     -> account balance (total / granted / topped-up)
+# Shows model usage / account balance / plan quota in the session header, gated
+# on the session's ACTIVE model selection:
+#   - OpenCode Go models   -> plan usage (rolling / weekly / monthly percentages)
+#   - DeepSeek models      -> account balance (total / granted / topped-up)
+#   - Command Code models  -> 5-hour + weekly percentages and remaining credits
 #
-# Why a plugin: both are per-account data that must be fetched server-side (the
+# Why a plugin: these are per-account data that must be fetched server-side (the
 # API keys must never reach the browser), and the display belongs next to the
-# session title. Both are exactly what a host half + client half pair is for.
+# session title. That is exactly what a host half + client half pair is for.
 #
 # Every section is optional and independently configured: a user with only one
-# of the two keys still gets that half, and the other half degrades to a
-# diagnostic label instead of hiding the widget.
+# of the keys still gets that half, and the other halves degrade to a diagnostic
+# label instead of hiding the widget.
 #
 # Configuration (row `config`, all optional):
 #   enabled: true|false          master switch. Default true.
@@ -36,6 +37,17 @@
 #                                Default [deepseek-official] (the route the
 #                                engine's dsh-llm-deepseek adapter registers).
 #
+#   commandcode:
+#     baseUrl: string            quota API root. Default https://api.commandcode.ai
+#                                NOTE: the CHAT endpoint a DSH route is configured
+#                                with is https://api.commandcode.ai/provider/v1 —
+#                                one level below the quota API. Pasting either
+#                                form works; the /provider/vN path is stripped.
+#     apiKeyRef: string          credential REFERENCE (env-var name).
+#                                Default COMMANDCODE_GOAT_API_KEY.
+#     providers: [string]        provider route keys that count as "Command Code".
+#                                Default [commandcode-goat, commandcode].
+#
 # Legacy shorthand: a top-level `baseUrl` / `apiKeyRef` / `providers` is still
 # read as the opencodeGo section (the plugin used to be OpenCode-Go-only).
 - insert:
@@ -50,3 +62,7 @@
         deepseek:
           providers:
             - deepseek-official
+        commandcode:
+          providers:
+            - commandcode-goat
+            - commandcode

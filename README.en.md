@@ -33,7 +33,7 @@ Each bundled plugin is also its own repository (installable into any other DSH h
 |---|---|---|
 | Model surplus `dsh-model-surplus` | Usage / account balance for the active model, right of the session title | [repo](https://github.com/itchenshi/dsh-model-surplus) |
 | Session resume `dsh-gui-last-session` | Reopens your last conversation after a restart | [repo](https://github.com/itchenshi/dsh-gui-last-session) |
-| OpenCode Go routes `dsh-opencode-go-path` | Adds DeepSeek V4.1 models and the session header that fixes 400s | [repo](https://github.com/itchenshi/dsh-opencode-go-path) |
+| Gateway routes `dsh-gateway-models` | Declares the OpenCode Go / Command Code route protocol and endpoint, and completes their model lists | [repo](https://github.com/itchenshi/dsh-gateway-models) |
 | Key bindings `dsh-keys-setting` | Enter / Shift+Enter / Ctrl+Enter each set to send or newline | [repo](https://github.com/itchenshi/dsh-keys-setting) |
 
 > **Why bundled instead of installed from npm?** The plan was to publish them, so plugin updates would

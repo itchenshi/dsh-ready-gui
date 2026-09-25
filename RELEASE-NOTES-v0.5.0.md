@@ -2,6 +2,11 @@
 
 > DeepSeek Harness 桌面壳 —— 内嵌 Web UI、自动保持最新引擎、自带数据目录管理与系统托盘。
 
+> **后续变更（2026-09-25）**：随附插件 `dsh-opencode-go-path` 改名为 **`dsh-gateway-models`**
+> （它现在也给 Command Code 声明协议和地址、同步模型目录）。补丁层行 id 仍是 `opencode-go`，
+> 启用/禁用选择不变；旧包名会被自动清理，旧仓库名由 GitHub 重定向。下文出现的旧名是 v0.5.0
+> 当时的真实状态，保留不改。
+
 **发布说明：** 这一版做两件事：**应用改名为 DSH Ready GUI**，以及**四个随附插件回到内置**。
 
 改名是为了能被找到。旧名字 `DeepSeekHarnessGUI` 与别人的 `ScannerVpn/DeepSeekHarnessGui` 只差一个

@@ -71,7 +71,7 @@ if (!fs.existsSync(engineBin)) {
 
 // The three that are registered from a checkout that is gone; the fourth is absent.
 const FOREIGN = ["dsh-gui-last-session", "dsh-model-surplus", "dsh-keys-setting"];
-const MISSING = "dsh-opencode-go-path";
+const MISSING = "dsh-gateway-models";
 const ALL = [...FOREIGN, MISSING];
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-verify-builtin-"));

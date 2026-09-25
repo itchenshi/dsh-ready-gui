@@ -3,6 +3,10 @@
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
+> 这是 **DSH Ready GUI** 的组成部分之一 —— GUI 开箱内置四个插件，勾选即用。
+> 也可单独装到任何 DSH 宿主里（见下方「装上就能用」）。
+> GUI：https://github.com/itchenshi/dsh-ready-gui
+
 在 **DSH 设置窗口 → 通用** 里配置输入框的快捷键：**Enter / Shift+Enter / Ctrl+Enter（macOS 为 ⌘）
 各自设成「发送消息」还是「换行」**。
 
@@ -22,15 +26,17 @@
 - **用 DSH Ready GUI（推荐）**：插件**随 GUI 内置**。打开 GUI → 设置窗口 → 第三方插件 → 勾选
   **按键设置**，装完按提示重启引擎、按提示刷新页面（它带页面部分），设置窗口「通用」页最下方就会出现
   那一行。
-- **其它 DSH 宿主**（`dsh web` / CLI）：
+- **其它 DSH 宿主**（`dsh web` / CLI）—— 两条路都行，任选一条：
 
   ```sh
-  git clone https://github.com/itchenshi/dsh-keys-setting.git
-  dsh plugin --profile web add file:<clone 出来的绝对路径>
+  # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
+  dsh plugin --profile web add github:itchenshi/dsh-keys-setting
+
+  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.0/dsh-keys-setting-0.2.0.tar.gz
   ```
 
-  装到的是磁盘上的真实目录，所以以后 `git pull` 更新的就是同一份代码；反过来，**目录被移动或删掉
-  会让这条依赖失效**（重新 add 一次即可）。
+  两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
 
 > npm 上暂时没有这个包：注册账号那一环走不通（`www.npmjs.com` 返回 Cloudflare 托管挑战），包发不
 > 出去。所以现在只能按上面两种方式装。等注册通了会照常发布。
