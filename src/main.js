@@ -911,6 +911,10 @@ async function switchHomeMode(mode) {
         ? testHome
         : path.join(userDataDir(), "dsh-home");
   log("dshHome now:", dshHome ?? "~/.dsh");
+  // 换了数据目录就是换了环境：新目录里的插件版本可能完全不同，因此「本次启动已提示过
+  // 插件更新」必须作废，否则在新目录里发生的更新会被**静默**完成（onUrl 的守卫仍是 true）。
+  // 同一目录内的引擎重启依旧只提示一次 —— 那才是这个标志要压的重复。
+  pluginUpdateNoticeShown = false;
   buildMenu();
   // 新数据目录的引擎外观/语言设置重新读入，并让热跟随 watch 指向新目录。
   await readEngineUiPrefs().catch(() => {});

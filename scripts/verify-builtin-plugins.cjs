@@ -268,6 +268,53 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
     "no duplicate: the old name is not registered alongside the new one",
   );
 
+  // ---------------------------------------------------------------------------
+  // 6) an already-installed bundled plugin whose version is behind gets replaced.
+  //
+  // This is the user-visible promise behind "the GUI updated, so my bundled plugins
+  // did too" — and the case that was reported as not working after a data-directory
+  // switch. Downgrade one installed copy the way another home would have it, run the
+  // same pass the startup maintenance runs, and assert the copy comes back at the
+  // shipped version (never the other way round: the plan refuses to downgrade).
+  // ---------------------------------------------------------------------------
+  console.log("\n6) a bundled plugin older than the shipped copy is updated in place");
+  const TARGET = "dsh-model-surplus";
+  const entry = entryOf(TARGET);
+  const installedPkgFile = path.join(profile, "node_modules", TARGET, "package.json");
+  const shippedVersion = JSON.parse(fs.readFileSync(path.join(pm.bundledSourceDir(entry), "package.json"), "utf8")).version;
+  const behind = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
+  const olderVersion = "0.0.1";
+  behind.version = olderVersion;
+  fs.writeFileSync(installedPkgFile, JSON.stringify(behind, null, 2));
+  check(
+    pm.catalogStatus(home)[entry.id].version === olderVersion,
+    `precondition: ${TARGET} reports the older version ${olderVersion}`,
+  );
+
+  const bumped = await sync([...ALL], (...a) => console.log("      [pm]", ...a));
+  console.log(`      installed=${JSON.stringify(bumped.installed)} errors=${JSON.stringify(bumped.errors)}`);
+  check(bumped.installed.includes(entry.id), `${TARGET}: the bundled copy was reinstalled`);
+  check(
+    pm.catalogStatus(home)[entry.id].version === shippedVersion,
+    `${TARGET}: now reports the shipped version ${shippedVersion}`,
+  );
+
+  // And the reverse is refused: an install that is AHEAD must be left alone.
+  const ahead = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
+  const aheadVersion = "99.0.0";
+  ahead.version = aheadVersion;
+  fs.writeFileSync(installedPkgFile, JSON.stringify(ahead, null, 2));
+  const kept = await sync([...ALL]);
+  check(kept.installed.length === 0, "a newer installed copy is not touched (no unattended downgrade)");
+  check(
+    pm.catalogStatus(home)[entry.id].version === aheadVersion,
+    `${TARGET}: the newer installed version survives`,
+  );
+  // Leave the home in the state the earlier phases expect.
+  const restored = JSON.parse(fs.readFileSync(installedPkgFile, "utf8"));
+  restored.version = shippedVersion;
+  fs.writeFileSync(installedPkgFile, JSON.stringify(restored, null, 2));
+
   console.log("\nfinal deps = " + JSON.stringify(readDeps(), null, 2));
   if (keep) console.log(`\nkept: ${root}`);
   else fs.rmSync(root, { recursive: true, force: true });
