@@ -1,6 +1,6 @@
 # DSH Ready GUI
 
-> A desktop shell for DeepSeek Harness (DSH) on Windows: **open it and you have a UI — no command line.**
+> A desktop shell for DeepSeek Harness (DSH) on Windows, macOS and Linux: **open it and you have a UI — no command line.**
 
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
@@ -22,7 +22,7 @@ yours, and closing the window leaves one tray icon.**
 |---|---|
 | No command line | Double-click the app. The shell downloads and installs the engine itself (1–2 min on first run, progress on the status page) |
 | No update babysitting | It checks on every launch and **asks** before updating by default; it also notifies you when DSH Ready GUI itself has a new version |
-| No model wiring | Tick a box in **Settings → Third-party plugins** and the bundled plugins are there: model surplus, session resume, OpenCode Go routes, key bindings |
+| No model wiring | Tick a box in **Settings → Third-party plugins** and the bundled plugins are there: model surplus, session resume, gateway routes, key bindings |
 | Don't lose my conversation | Restarting reopens the conversation you were last in (bundled "session resume") |
 | Don't let anything else read my account | The shell binds to loopback only, and the plugins' own HTTP routes are authenticated — a bare `curl` gets 401 instead of your usage and balance |
 | Take my data with me | The data directory is switchable (default: system `~/.dsh`) and migration is offered when you switch |
@@ -46,7 +46,8 @@ Each bundled plugin is also its own repository (installable into any other DSH h
 
 **Main window**: the **model surplus** sits right of the session title and follows whichever model you
 select — OpenCode Go plan usage (rolling / weekly / monthly percentages plus reset times) and the
-**active model's** total cap, or your DeepSeek account balance.
+**active model's** total cap, Command Code 5-hour / weekly window usage with remaining credits, or your
+DeepSeek account balance.
 
 | OpenCode Go usage and model cap | DeepSeek balance |
 |---|---|
@@ -67,7 +68,9 @@ select — OpenCode Go plan usage (rolling / weekly / monthly percentages plus r
 | ![Key bindings](screenshots/DSH设置弹窗-快捷键设置-english.png) |
 
 On the **models page**, `deepseek-v4.1-flash` under `opencode-go` was **detected, added and hoisted to
-the top by the plugin** — it is the first entry right after install, with nothing added by hand:
+the top by the plugin** — it is the first entry right after install, with nothing added by hand. The
+Command Code route gets both its endpoint and its whole model list (81 models) declared and completed
+the same way — nothing to type:
 
 | Auto-added V4.1 model (DSH Settings → Models) |
 |---|
