@@ -51,7 +51,7 @@ $ReposRoot = (Resolve-Path $ReposRoot).Path
 
 function New-InstallBlockZh($name, $version) {
   $gh  = "dsh plugin --profile web add github:itchenshi/$name"
-  $tar = "https://github.com/itchenshi/$name/releases/download/v$version/$name-$version.tar.gz"
+  $tar = "https://github.com/itchenshi/$name/releases/download/v$version/$name-$version.tgz"
   $tmpl = @'
 - **其它 DSH 宿主**（`dsh web` / CLI）—— 两条路都行，任选一条：
 
@@ -70,7 +70,7 @@ function New-InstallBlockZh($name, $version) {
 
 function New-InstallBlockEn($name, $version) {
   $gh  = "dsh plugin --profile web add github:itchenshi/$name"
-  $tar = "https://github.com/itchenshi/$name/releases/download/v$version/$name-$version.tar.gz"
+  $tar = "https://github.com/itchenshi/$name/releases/download/v$version/$name-$version.tgz"
   $tmpl = @'
 - **Any other DSH host** (`dsh web`, the CLI) — either route works:
 

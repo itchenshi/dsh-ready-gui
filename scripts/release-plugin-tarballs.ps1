@@ -101,9 +101,11 @@ foreach ($name in $Plugins) {
   if ($dirty) { Write-Warn "工作区有未提交改动，tarball 会包含未提交内容 —— 建议先提交" }
 
   # ---- 4. 用 git archive 打包（只含被追踪的文件，天然排除 .git / node_modules）----
+  # 资产名用 .tgz：注册表（awesome-dsh-plugin）的 tarball: 字段要求 https 的 .tgz，
+  # 307 条用了 tarball: 的条目里只有 1 条是 .tar.gz。.tgz 与 .tar.gz 字节相同。
   $outDir = Join-Path $env:TEMP "dsh-plugin-tarballs"
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-  $tarball = Join-Path $outDir "$name-$version.tar.gz"
+  $tarball = Join-Path $outDir "$name-$version.tgz"
 
   if ($WhatIfOnly) {
     Write-Host "    [WhatIf] 会执行：git archive --format=tar.gz -o $tarball HEAD" -ForegroundColor DarkGray
@@ -136,13 +138,23 @@ foreach ($name in $Plugins) {
   Write-Ok "找到 release $tag (id=$($release.id))"
 
   # ---- 7. 已存在同名资产？ --------------------------------------------------
-  $assetName = "$name-$version.tar.gz"
+  $assetName = "$name-$version.tgz"
   $existing = $release.assets | Where-Object { $_.name -eq $assetName }
   if ($existing) {
     Write-Warn "资产 $assetName 已存在（id=$($existing.id)），先删除再重传"
     if (-not $WhatIfOnly) {
       & gh api -X DELETE "repos/$Owner/$name/releases/assets/$($existing.id)" | Out-Null
       Write-Ok "已删除旧资产"
+    }
+  }
+
+  # ---- 7b. 清掉历史遗留的 .tar.gz 同名资产（已统一为 .tgz，避免两个重复产物）----
+  $legacy = $release.assets | Where-Object { $_.name -eq "$name-$version.tar.gz" }
+  if ($legacy) {
+    Write-Warn "发现遗留资产 $name-$version.tar.gz，删除（已改用 .tgz）"
+    if (-not $WhatIfOnly) {
+      & gh api -X DELETE "repos/$Owner/$name/releases/assets/$($legacy.id)" | Out-Null
+      Write-Ok "已删除 .tar.gz 遗留资产"
     }
   }
 

@@ -81,7 +81,7 @@ explicitly in the row's `commandcodeProviders`.
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
   # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tar.gz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration

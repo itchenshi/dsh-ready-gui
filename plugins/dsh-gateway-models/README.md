@@ -72,7 +72,7 @@ Command Code 不在引擎自带的 pi-ai 目录里（随包 40 个 provider，�
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
   # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tar.gz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.0/dsh-gateway-models-0.2.0.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。

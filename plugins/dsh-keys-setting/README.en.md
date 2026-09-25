@@ -33,7 +33,7 @@ Settings → General
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # Fallback: install the release tarball (use this if github.com is unreachable for you)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.0/dsh-keys-setting-0.2.0.tar.gz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.0/dsh-keys-setting-0.2.0.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration

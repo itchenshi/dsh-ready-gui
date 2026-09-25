@@ -22,7 +22,7 @@ Reopen the conversation you were last in after restarting
   dsh plugin --profile web add github:itchenshi/dsh-gui-last-session
 
   # Fallback: install the release tarball (use this if github.com is unreachable for you)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.2/dsh-gui-last-session-0.1.2.tar.gz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.2/dsh-gui-last-session-0.1.2.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
