@@ -198,7 +198,77 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   const remaining = ALL.filter((name) => !pm.installedBundles(home).includes(name));
   check(remaining.length === 0, `all four plugins are in the bundle list${remaining.length ? ` (missing: ${remaining.join(", ")})` : ""}`);
 
-  console.log(`\nfinal deps = ${JSON.stringify(readDeps(), null, 2)}`);
+  // ---------------------------------------------------------------------------
+  // 5) the rename path: an install that still carries the OLD package name.
+  //
+  // This is the situation every existing user is in after the rename. The startup
+  // maintenance must (a) unregister the old package from BOTH the bundle list and
+  // dependencies, (b) hand the replacement to the install pass, and (c) leave the
+  // user's enable/disable choice alone — the old package shares its patch row id
+  // (`opencode-go`) with the new one, so a careless cleanup would wipe it.
+  // ---------------------------------------------------------------------------
+  console.log("\n5) an install carrying the old name is swapped for the new one");
+  const OLD = "dsh-opencode-go-path";
+  const NEW = "dsh-gateway-models";
+  const oldStaged = path.join(stagingRoot, OLD);
+  fs.mkdirSync(oldStaged, { recursive: true });
+  fs.writeFileSync(
+    path.join(oldStaged, "package.json"),
+    JSON.stringify({ name: OLD, version: "0.2.0", dsh: { bundle: { patch: "./cordis.patch.yml" } } }, null, 2),
+  );
+  fs.writeFileSync(path.join(oldStaged, "cordis.patch.yml"), "- insert:\n    - id: opencode-go\n      name: dsh-opencode-go-path\n");
+  fs.mkdirSync(path.join(profile, "node_modules", OLD), { recursive: true });
+  fs.writeFileSync(path.join(profile, "node_modules", OLD, "package.json"), JSON.stringify({ name: OLD, version: "0.2.0" }));
+
+  const manifestPath = path.join(profile, "package.json");
+  const withOld = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  withOld.dsh.profile.bundles.push(OLD);
+  withOld.dependencies = { ...(withOld.dependencies ?? {}), [OLD]: `file:${oldStaged.replace(/\\/gu, "/")}` };
+  fs.writeFileSync(manifestPath, JSON.stringify(withOld, null, 2));
+  // A live row (`disabled: false` — harmless, unlike true) that MUST survive.
+  fs.writeFileSync(path.join(profile, "cordis.patch.yml"), "- id: opencode-go\n  disabled: false\n");
+
+  check(pm.installedBundles(home).includes(OLD), "precondition: the old package name is registered");
+
+  const legacy = await pm.removeLegacyPlugins({
+    engineDir: ENGINE_DIR,
+    dshHome: home,
+    nodeExec: NODE_EXEC,
+    pnpmInstallDir,
+    stagingRoot,
+    log: (...a) => console.log("      [pm]", ...a),
+  });
+  console.log(`      pruned=${JSON.stringify(legacy.pruned)} replaced=${JSON.stringify(legacy.replaced)}`);
+  // Unregistration is judged by the END STATE, not by `pruned`: when the engine's own
+  // `dsh plugin remove` succeeds there is nothing left for the fallback prune to do,
+  // so an empty `pruned` is the healthy case here.
+  check(!pm.installedBundles(home).includes(OLD), `${OLD}: unregistered`);
+  check(legacy.replaced.includes(NEW), `${NEW}: handed to the install pass`);
+  check(
+    !Object.prototype.hasOwnProperty.call(readDeps(), OLD),
+    `${OLD}: gone from dependencies (a leftover would let the engine reconcile it back)`,
+  );
+  check(
+    /^- id: opencode-go\n {2}disabled: false$/m.test(fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8")),
+    "the live patch row shared with the new package was left alone",
+  );
+
+  // Exactly what the startup maintenance does with `replaced`.
+  const enabledAfter = pm
+    .CATALOG.filter((entry) => pm.installedBundles(home).includes(entry.pkg))
+    .map((entry) => entry.id);
+  for (const id of legacy.replaced) if (!enabledAfter.includes(id)) enabledAfter.push(id);
+  const swap = await sync(enabledAfter, (...a) => console.log("      [pm]", ...a));
+  console.log(`      installed=${JSON.stringify(swap.installed)} errors=${JSON.stringify(swap.errors)}`);
+  check(swap.errors.length === 0, "the swap reported no errors");
+  check(materialised(NEW) && pm.installedBundles(home).includes(NEW), `${NEW}: installed and registered`);
+  check(!fs.existsSync(oldStaged), `${OLD}: stale staged copy pruned`);
+  check(
+    !pm.installedBundles(home).some((name) => name === OLD),
+    "no duplicate: the old name is not registered alongside the new one",
+  );
+
+  console.log("\nfinal deps = " + JSON.stringify(readDeps(), null, 2));
   if (keep) console.log(`\nkept: ${root}`);
   else fs.rmSync(root, { recursive: true, force: true });
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);

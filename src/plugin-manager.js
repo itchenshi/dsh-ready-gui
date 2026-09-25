@@ -1571,7 +1571,7 @@ function liveCatalogRowIds(dshHome) {
  *
  * @returns {{pruned:string[], removedRows:string[], replaced:string[], changed:boolean}}
  */
-async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDir, log = () => {} }) {
+async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDir, stagingRoot = null, log = () => {} }) {
   const result = { pruned: [], removedRows: [], replaced: [], changed: false };
   let bundles;
   try {
@@ -1682,6 +1682,17 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
           log("legacy plugin: could not carry disabled state:", (error && error.message) || error);
         }
       }
+    }
+  }
+  // 旧包的 staging 拷贝也要在这里清掉，而不是只等下一次 staging 顺带清（pruneStaleStagingDirs
+  // 是 stageBundledPlugin 调的）。否则「替代条目早就装着、这次没有东西要 staging」的启动
+  // 永远留着那份拷贝 —— 它正是让指向它的 `file:` 依赖保持可解析、进而让引擎把旧包重新登记回
+  // bundles 的东西，本函数的注释里已经写过这个后果。清理完整不该依赖「后面恰好有人 staging」。
+  if (stagingRoot !== null) {
+    try {
+      pruneStaleStagingDirs(stagingRoot);
+    } catch (error) {
+      log("legacy plugin: staging cleanup failed:", (error && error.message) || error);
     }
   }
   return result;

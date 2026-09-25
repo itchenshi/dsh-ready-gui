@@ -469,10 +469,14 @@ ok("旧包清理不碰现役插件的补丁行（旧包名与现役 row id 同�
   // 就等于每次启动都把用户对现役插件的禁用行抹掉 —— 界面上「已禁用」的插件下次启动
   // 静默恢复加载（reconcilePluginEnabled 只在市场 state.json 记着禁用时才补行）。
   // 只有真正只属于旧包的行（如 opencode-go-usage）才该被清掉。
+  //
+  // `opencode-go` 尤其要紧：它现在是 dsh-gateway-models（由 dsh-opencode-go-path 改名）
+  // 占用的行 id，而 dsh-opencode-go-path 自己的 LEGACY 条目也写着 rowIds: ["opencode-go"]。
+  // 一旦 liveCatalogRowIds() 漏掉它，改名这件事本身就会按启动次数反复清掉用户的选择。
   const { root, dshHome, profile } = makeProfile({
     bundles: [],
     patch:
-      "- id: model-usage\n  disabled: true\n- id: composer-keys\n  disabled: true\n- id: opencode-go-usage\n  disabled: true\n",
+      "- id: opencode-go\n  disabled: true\n- id: model-usage\n  disabled: true\n- id: composer-keys\n  disabled: true\n- id: opencode-go-usage\n  disabled: true\n",
   });
   try {
     const res = await pm.removeLegacyPlugins({
@@ -482,6 +486,7 @@ ok("旧包清理不碰现役插件的补丁行（旧包名与现役 row id 同�
       pnpmInstallDir: path.join(root, "pnpm"),
     });
     const text = fs.readFileSync(path.join(profile, "cordis.patch.yml"), "utf8");
+    assert.match(text, /^- id: opencode-go\n {2}disabled: true$/m, "现役插件的禁用行必须保留");
     assert.match(text, /^- id: model-usage\n {2}disabled: true$/m, "现役插件的禁用行必须保留");
     assert.match(text, /^- id: composer-keys\n {2}disabled: true$/m, "现役插件的禁用行必须保留");
     assert.doesNotMatch(text, /opencode-go-usage/, "只属于旧包的行必须清掉");
@@ -489,6 +494,17 @@ ok("旧包清理不碰现役插件的补丁行（旧包名与现役 row id 同�
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+ok("改名记录覆盖 dsh-opencode-go-path → dsh-gateway-models，且沿用同一行 id", () => {
+  const renamed = pm.LEGACY_PLUGIN_PKGS.find((l) => l.pkg === "dsh-opencode-go-path");
+  assert.ok(renamed, "改名后必须留下一条旧包名的迁移记录，否则老用户的新旧两版会同时加载");
+  assert.strictEqual(renamed.replacedBy, "dsh-gateway-models");
+  // 与现役插件共用行 id 是**有意**的：用户保存的启用/禁用选择正好跟着新包走。
+  assert.deepStrictEqual(renamed.rowIds, ["opencode-go"]);
+  const entry = pm.CATALOG.find((c) => c.id === "dsh-gateway-models");
+  assert.ok(entry, "替代条目必须在目录里");
+  assert.strictEqual(entry.pkg, "dsh-gateway-models");
 });
 
 // Await the async checks before reporting, so their failures are counted.

@@ -3149,6 +3149,7 @@ async function startEngine(nodeExec) {
       dshHome: effectiveHomePath(),
       nodeExec,
       pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+      stagingRoot: pluginBundledPluginsDir(),
       log,
     });
     if (legacyPlugins.changed) {
@@ -3804,6 +3805,7 @@ function registerIpc() {
           dshHome: effectiveHomePath(),
           nodeExec: resolveNodeExecutable(),
           pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+          stagingRoot: pluginBundledPluginsDir(),
           log: progressLog,
         });
         if (legacy.changed)
