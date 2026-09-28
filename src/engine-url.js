@@ -49,7 +49,9 @@ function acceptableEngineUrl(raw) {
   }
   if (url.protocol !== "http:") return null;
   const host = url.hostname.replace(/^\[|\]$/gu, "");
-  if (host === "localhost" || host === "::1") return url;
+  // `localhost.` 是 localhost 的 FQDN 写法（末尾点表示「绝对域名」）：浏览器把它当同一台
+  // 机器，但字符串比较会漏掉它 —— 引擎哪天打印这个形式就会被我们当成外来来源而拒绝加载。
+  if (host === "localhost" || host === "localhost." || host === "::1") return url;
   const octets = ipv4Octets(host);
   if (octets === null) return null;
   return isLocalIpv4(octets) ? url : null;

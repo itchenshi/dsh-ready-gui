@@ -48,7 +48,11 @@ function parseEngineSettings(text) {
   const parseErrors = Array.isArray(doc?.errors) ? doc.errors : [];
   let degraded = false;
   if (doc === null || parseErrors.length > 0 || !YAML.isMap(doc.contents)) {
-    degraded = parseErrors.length > 0;
+    // 三种情况都是「原文件的内容这次保不住了」，必须一并置 degraded：调用方（main.js）
+    // 只在 degraded 为真时记日志。只认 parseErrors 会漏掉「顶层不是映射」——那份文件能被
+    // 正常解析，于是既不报错也不记日志，却被整份换成「只有主题」的新文档，用户的其他配置
+    // 静默消失（实测：一个序列形态的 settings.yaml 就这样没了）。
+    degraded = true;
     doc = YAML.parseDocument("");
   }
   let parsed = null;

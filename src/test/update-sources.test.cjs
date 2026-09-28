@@ -8,6 +8,7 @@ const {
   SOURCES,
   DEFAULT_ORDER,
   MAINLAND_ORDER,
+  SOURCE_IDS,
   likelyMainland,
   preferredOrder,
   parseTag,
@@ -103,6 +104,22 @@ function hangingFetch() {
     assert.deepEqual(preferredOrder({ source: "github", mainland: true }), ["github", "gitee", "gitcode"]);
     assert.deepEqual(preferredOrder({ source: "gitee", mainland: false }), ["gitee", "github", "gitcode"]);
     assert.deepEqual(preferredOrder({ source: "bogus", mainland: false }), [...DEFAULT_ORDER]);
+  });
+
+  await check("both hard-coded orders stay in sync with SOURCES", () => {
+    // DEFAULT_ORDER / MAINLAND_ORDER 是手写的字面量，SOURCE_IDS 是 SOURCES 的真值。
+    // 两边漂移的后果很隐蔽：新增一个源却忘了加进顺序表 → 那个源永远不会被尝试；
+    // 顺序表里写错一个 id → preferredOrder 返回一个 sourceById 查不到的 id，
+    // 取版本时静默失败（看起来只是「这个源不可用」）。这里把两者钉在一起。
+    const known = [...SOURCE_IDS].sort();
+    assert.deepEqual([...DEFAULT_ORDER].sort(), known, "DEFAULT_ORDER must list every source exactly once");
+    assert.deepEqual([...MAINLAND_ORDER].sort(), known, "MAINLAND_ORDER must list every source exactly once");
+    assert.equal(new Set(DEFAULT_ORDER).size, DEFAULT_ORDER.length, "DEFAULT_ORDER has a duplicate");
+    assert.equal(new Set(MAINLAND_ORDER).size, MAINLAND_ORDER.length, "MAINLAND_ORDER has a duplicate");
+    // 每个 id 都必须真的能解析出一个源（拼错就查不到）。
+    for (const id of [...DEFAULT_ORDER, ...MAINLAND_ORDER]) {
+      assert.ok(SOURCE_IDS.includes(id), `unknown source id in an order list: ${id}`);
+    }
   });
 
   await check("a mainland user never waits on a blocked GitHub", async () => {

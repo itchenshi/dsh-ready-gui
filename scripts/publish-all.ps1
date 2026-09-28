@@ -92,6 +92,19 @@ $tag = "v$version"
 $releaseName = "DSH Ready GUI $version"
 Write-Step "version: $version (release tag: $tag)"
 
+# ensure the tag exists for the release phase (create locally if absent)。
+# 必须在推送**之前**建好：push-all.ps1 用 `--tags` 把标签带到三个远端，而这里原先是在推送
+# 之后才建标签、然后只 `push origin` —— 于是新标签只到 GitHub，Gitee / GitCode 的 Release
+# 指向一个它们根本没有的标签。
+if (git -C $RepoRoot rev-parse -q --verify "refs/tags/$tag") {
+  Write-Ok "tag $tag already exists"
+}
+else {
+  Write-Step "creating tag $tag locally"
+  git -C $RepoRoot tag "$tag"
+  if ($LASTEXITCODE -ne 0) { throw "cannot create tag $tag" }
+}
+
 # ---------------------------------------------------------------- push -----
 if (-not $NoPush) {
   Write-Step 'pushing branch + tags to GitHub / Gitee / GitCode'
@@ -101,16 +114,6 @@ if (-not $NoPush) {
 }
 else {
   Write-Warn 'skipping push (-NoPush)'
-}
-
-# ensure the tag exists for the release phase (create locally if absent)
-if (git -C $RepoRoot rev-parse -q --verify "refs/tags/$tag") {
-  Write-Ok "tag $tag already exists"
-}
-else {
-  Write-Step "creating tag $tag locally"
-  git -C $RepoRoot tag "$tag"
-  if (-not $NoPush) { git -C $RepoRoot push origin "$tag" }
 }
 
 # ---------------------------------------------------------------- build ----
@@ -440,7 +443,9 @@ Write-Ok "assets: $($assets.Name -join ', ')"
 # Each platform runs independently: a failure on one platform must not stop
 # the others, so every publish is wrapped in its own try/catch below.
 $failedPlatforms = @()
+$gitcodeBodyFile = $null
 
+try {
 if ($Skip -contains 'GitHub') {
   Write-Warn 'skipping GitHub (-Skip GitHub)'
 } else {
@@ -485,6 +490,14 @@ if ($Skip -contains 'GitCode') {
   catch {
     Write-Warn "GitCode publish failed: $($_.Exception.Message)"
     $failedPlatforms += 'GitCode'
+  }
+}
+}
+finally {
+  # 暂存的发布说明（UTF-8 正文文件）用完就删：它们写在 %TEMP% 里，多用户机器上可读，
+  # 而且失败路径原先直接 exit，文件会一直留着。
+  foreach ($f in @($bodyFile, $gitcodeBodyFile)) {
+    if ($f -and (Test-Path $f)) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
   }
 }
 

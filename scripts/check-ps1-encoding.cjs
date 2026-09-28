@@ -10,14 +10,29 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const scriptDir = __dirname;
+const repoRoot = path.join(__dirname, "..");
 const BOM = [0xef, 0xbb, 0xbf];
+// Directories that never hold hand-written scripts (and are huge / generated).
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "out", "build", "resources"]);
+
+/** Every .ps1 under <repo>, recursively — a script in a new subdirectory must not escape the guard. */
+function walk(dir, found = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      walk(path.join(dir, entry.name), found);
+    } else if (entry.name.endsWith(".ps1")) {
+      found.push(path.join(dir, entry.name));
+    }
+  }
+  return found;
+}
 
 let checked = 0;
 const problems = [];
 
-for (const name of fs.readdirSync(scriptDir).filter((f) => f.endsWith(".ps1")).sort()) {
-  const file = path.join(scriptDir, name);
+for (const file of walk(repoRoot).sort()) {
+  const name = path.relative(repoRoot, file);
   const bytes = fs.readFileSync(file);
   const text = bytes.toString("utf8");
   const hasBom = bytes.length >= 3 && BOM.every((b, i) => bytes[i] === b);

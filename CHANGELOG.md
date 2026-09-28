@@ -1,3 +1,202 @@
+# DSH Ready GUI v0.7.0 更新说明
+
+**发布日：2026-09-26** · 从 v0.6.1 累积的所有改动。
+
+> 一句话：**把「装上壳就能用」从一句宣传语变成真的** —— 四个内置插件此前默认一个都不装（勾选框
+> 全关，而设置窗口在托盘菜单里），现在首次启动壳自己检测、自己打开设置窗口问一句；点一次装齐并
+> 自动重启一次引擎，不装也留得下（「不用了我自己选」，一个插件都不会动）。
+
+## 🚀 新：首次启动检测 + 一键开启内置插件
+
+**问题**：四个内置插件随包发布，但插件目录的勾选框**默认全部关闭**（`plugin-manager.js`：
+「未勾选一律不装」），而设置窗口在托盘菜单里 —— 第一次用的人没有理由去找它。于是「下载解压打开」
+之后，模型余量、网关路由、会话续接、按键设置**一个都没生效**，而它们正是这个壳能提供的全部增量。
+
+**现在**：引擎就绪后检测「还有该装没装的内置插件」→ 主动打开设置窗口 → 插件区最上方一张卡片：
+
+- **只列实际缺的那些**（名字来自插件目录，按钮写实际数量，不写死「4 个」）；
+- **一键开启** = 走与勾选框**完全相同**的安装路径（`syncEnabledPlugins`、`mode=install`：只增不删，
+  不动你手动装的别的东西）+ **自动重启一次引擎** —— bundle 列表只在引擎启动时组装，装完不重启
+  等于什么都没生效；
+- 本次新装的插件并入启动期的崩溃兜底集合：万一把引擎搞崩，走既有的「诊断 → 剔除可疑插件 → 重拉」，
+  而不是把你丢在一个起不来的壳里；
+- **不装也行**：「不用了我自己选」只记「问过了」，**一个插件都不动**，下面照样能逐个勾选。
+
+**只问一次，且问得诚实**：用户做过决定后不再主动弹（`settings.json` 的 `firstRunOfferDone`）；
+渲染层不自己判断该不该显示 —— 卡片完全跟随主进程 payload（`offer` / `missing`），避免两侧各有一套
+规则而悄悄漂移（装完 `missing` 为空，卡片自动消失）。
+
+## 🔍 代码审计（缺陷 / 逻辑 / 性能 / 内存）
+
+对 GUI 与工具链做了一轮逐文件审计（每个结论都先验证再动手，能复现的写成了用例）。修掉的：
+
+- **引擎兜底补丁会删掉引擎自己的代码**（`engine-patch.js` 的 `stripInjectedBlocks`）：它用
+  「注入块之后的第一行 `const slots = ctx.slots;`」当结束边界，于是**注入块与那一行之间的任何
+  引擎代码都会被一起删掉**，而且删完仍是合法 JS —— 语法检查发现不了。今天这份引擎恰好是安全的
+  （两行紧邻），所以这是**潜伏**的破坏性缺陷，下一次引擎升级就可能踩到。改为按**块自身的花括号
+  配平**定位结束行；配平解不出就放弃（绝不猜）。已加回归用例：块与 `slots` 之间插入引擎代码后，
+  那几行必须原样保留（旧实现会删掉它们）。
+- **`settings.yaml` 静默丢配置**（`settings-ui.js`）：顶层不是映射（标量 / 序列）时会回退到一份
+  全新文档，但 `degraded` 只在「解析报错」时置位 —— 于是**既不报错也不记日志**，用户其余配置被
+  整份换成「只有主题」。三种回退情形现在都算降级写入。
+- **`runNpm` 超时后永不 settle**（`plugin-manager.js`）：超时只 `kill("SIGKILL")`，而 Windows 上
+  杀不掉进程树，npm 的孙进程继续持有 stderr 管道 → `close` 不触发 → Promise 永远挂着（调用方
+  `ensurePnpm` 跟着挂死、子进程与管道常驻）。与 `runDshPlugin` 一致地自己 reject。
+- **`ensurePnpm` 会删掉正在被别的调用使用的目录**：它先 `rm -rf` 再装，而 `pnpm-tools` 是所有
+  调用点共用的同一路径，且**启动维护那条路径不受 `pluginOpInFlight` 互斥保护** —— 并发时会把
+  对方正在用的目录删掉。改为装到**进程唯一**的临时目录再原子换入（换入失败还会把旧目录挪回来）。
+  同时早退分支现在要求 `.bin` 里真的有 `pnpm`/`pnpm.cmd`：只看 `package.json` 会在上次安装被
+  中断时返回一个不含 pnpm 的 PATH 目录。
+- **`removePatchRows` 在并发重试时重复计数**：`removed` 声明在变换之外、却在变换里 push，而
+  `mutatePatchFile` 遇到并发改写会重跑同一个变换 —— 实测返回 `["a","a"]`。改为在变换内累积。
+- **`setPluginEnabled` 把「什么都没写」报成 `changed: true`**：client-only 包（无 row id）时
+  补丁层一个字节都不会变，市场状态也可能本就是目标值，界面却提示「需重启引擎」并走一遍无意义
+  的重启路径。现在如实反映是否真的落地（`mutatePatchFile` 把「文本没变」也报出来）。
+- **`healProfileBundles` 会用过期快照覆盖别人的写入**：重读清单失败（`null`）时它退回写那份
+  **await 之前**的旧快照，正好会覆盖掉另一个写者刚落地的 bundles/dependencies。改为重读失败就
+  跳过这次摘除并记一条错误。
+- **`removePlugin` 未做 spec 校验**：`isRestorableSpec` 早就拒绝以 `-` 开头 / 带 `:` 前缀的
+  spec（argv 注入），但只用在恢复路径；卸载路径的 `pkg` 来自可被改写的 `dsh.profile.bundles`。
+  现在两条路径守同一条规则。
+- **watcher 的重试定时器无法取消**（`main.js`）：`startEngineSettingsWatcher` /
+  `startProfileWatcher` / `startMarketWatcher` 的「目录还没建出来 → 稍后重试」用的是**没有句柄**
+  的 `setTimeout`，于是退出或切换数据目录时在途的一次重试会重新挂上**再也没人关**的 `fs.watch`
+  （句柄泄漏），而且它盯着的还是切换前那个 home。
+- **`killProcessTree` 可能回调两次**：`taskkill` 的 `close` 与 `error` 在某些情况下都会触发，
+  而调用方用这个回调启动下一次引擎 —— 调两次就会拉起两个引擎进程，其中一个再也不受 GUI 管理。
+- **托盘菜单切换数据目录会留下未处理的 rejection**：那条 `.then()` 没有 `.catch`，失败时用户
+  只看到单选框跳回去、没有任何提示。
+- **设置窗口两处状态 bug**：①「修复 / 重试」按钮先自己 `disabled = true` 再交给 `setPluginBusy`
+  快照，于是快照到的是 `true`，还原后按钮**永远点不动**；②「刷新页面」按钮刷新成功后被永久
+  `hidden`，而只有启用成功那条路径会重新显示它 —— 刷过一次之后，提示还在让用户点一个不存在的按钮。
+- **`catalogStatus` 重复读同一个 `package.json`**（热路径：每次设置 payload / 广播都跑全部条目）：
+  版本号读一次、`pluginHasClientHalf` 再读一次。改为读一次复用；判定逻辑仍只有一处（读文件那层
+  保留给测试）。另外把循环里的 `installedBundles` / `readUserPatchState` 提到循环外（原先按
+  「目录条目数」「legacy 条目数 × rowId 数」重复 `readFileSync` + 解析）。
+- **设置窗口自适应高度会与主进程互相触发**：`ResizeObserver` 观察 `document.body` → 通知主进程
+  `setContentSize` → 布局变化 → 再次观察。加一个「高度没变就不发」的去重。
+- **死代码 / 失效代码**：`plugin-manager.js` 的 `catalogByPkg`（零引用）、导出的 `CATALOG_IDS`
+  （main.js 只解构未使用）、`engineBin` / `installPlugin`（仅文件内使用）；`engine-patch.js` 的
+  `ensureLastSessionPatches`（零引用，且是 `ensureEnginePatches` 的重复实现）。
+- **i18n**：`settings.html` 里 16 个 `settings.plugins.*` 文案键**定义了却从没被 `t()` 用过**，
+  同时界面上散着 52 处 `uiLang === "en" ? "…" : "…"` 手写三元 —— 其中「启用/禁用/安装/卸载」
+  等提示是**两套语言各写一遍**、且漏改一处就只剩英文。现在这些键真正接上（并清掉 3 个确认无人
+  使用的键）；另修 `settings.currentEngine` / `settings.engineNotInstalled` **用了却没定义**
+  （`t()` 找不到键会把键名当文案显示给用户）。
+- **静态检查补强**：`check-settings-html.cjs` 新增「每个 `t()` 用到的键在两种语言里都有定义」——
+  原检查只验「某些键被定义过」，不验「是否真的被使用」，所以上面那个「用了却没定义」的 bug 能
+  一路通过。
+- **`update-plugin-readmes.ps1` 写出的安装块 URL 是坏的**：调用处传 `$p.Version`，而那张哈希表
+  根本没有 `Version` 键（真值在局部变量 `$version` 里），于是模板渲染成
+  `releases/download/v//<name>-.tgz`。改为传 `$version`。
+- **`bundle-node.mjs` 的解包临时目录是固定名**：每一步都先 `rm -rf` 再重建，两个构建并行
+  （CI 矩阵 / 本地同时开两条 `dist:*`）会互相删掉对方正在用的目录，甚至复制到一棵被删了一半的
+  运行时 —— 而 `version.txt` 照样写下去，下次构建的「已是最新」判断还会接受这份坏产物。改为
+  带 pid + 随机段（与 `ensure-electron.mjs` 同一条规则）。
+
+**顺带纠正一个审计误报**：`sync-bundled-plugins.mjs` 顶部 `require("<repo>/src/plugin-manager.js")`
+被怀疑在干净检出里会抛 `MODULE_NOT_FOUND` —— 实测该文件存在且被 git 跟踪、require 正常
+（`CATALOG` 5 项、4 个 `localSource`），不需要改。
+
+## 🔧 工具链与测试基建（同一轮审计的第二批）
+
+- **「装插件成功」其实没装上去**（`plugin-manager.js` 的 `installPlugin`）：它只看
+  `dsh plugin add` 的退出码，而这个子命令**会打印 "Lockfile is up to date, resolution step is
+  skipped" 并 exit 0、却什么都没改**（同一个文件里 remove→prune→add 那段注释早已记录了这条
+  实测）。界面于是勾上、profile 里却没有 —— 用户看到的是「重启后插件又没了」。现在以**落地
+  结果**为准：bundles 里有登记 **且** `node_modules` 里确有那份 `package.json`，否则如实报失败
+  （调用方随后会把原来那份装回去）。`smoke-profile-watch` 的 STEP4b 正是抓这个的用例，修复前
+  它以「after reinstall the profile should list the plugin as installed」失败。
+
+- **打包产物可能被自己的失败吃掉**（`fix-unpacked.mjs`）：归档前先 `rm` 掉上一份 zip，且归档
+  一失败就删掉 `.old` 目录（那是唯一副本）—— 打包失败 = 上一次的好产物也没了。现在先写进程唯一
+  的临时名、**校验**它是一份完整 zip（读中央目录结束记录，不看体积猜）、再原子换入；归档失败就把
+  旧目录挪回来并保留旧 zip。已用 fixture 验证：成功路径产物完整、失败路径**旧 zip 与旧目录都还在**
+  且不留 `.tmp`。
+- **两个 smoke 直接写用户的真实数据目录**（`smoke-close.ps1` / `smoke-modal.ps1`）：它们把
+  `settings.json` 写进 `%APPDATA%\DSH Ready GUI`，跑一次就覆盖用户自己的设置（`closeAction`
+  被永久改成测试值），而 `smoke-modal` 还会 `taskkill /T /F`。现在两个都复制一份**临时**
+  userData（引擎 + pnpm 工具）再跑，退出时清理。
+- **`verify:builtin` 失败时会漏一个常驻引擎**：引擎子进程只在成功路径 `child.kill()`，而
+  Windows 上 `kill()` 杀不掉进程树；之后的任何一步抛错都会走 `.catch` 直接 `exit(2)`。现在
+  统一走 `killEngineChild()`（win 用 `taskkill /T /F`、POSIX 杀进程组），并挂在 `exit` /
+  `SIGINT` / `SIGTERM` 上。
+- **发布脚本**：
+  - `publish-all.ps1` 在**推送之后**才建 tag，且只 `push origin` —— Gitee / GitCode 的 Release
+    因此在等一个它们没有的 tag。改为推送前建 tag（`push-all` 的 `--tags` 会带到三个远端）。
+  - `push-all.ps1` 的 `-Skip` 只认 remote 名（`origin`），而 `publish-all` 与文档用的是平台名
+    （`GitHub`）—— `-Skip GitHub` 转发过来后**静默不生效**，恰恰是它最该生效的场景。现在两种
+    写法都认。
+  - 两个脚本都会把 git / curl 的**原始输出**打印出来，而 git 的错误信息里带着 token 化 URL
+    （`https://user:TOKEN@…`）、Gitee 接口把凭据放在 query string 里 —— 补 `Redact-Token`，
+    逐行过滤后再打印（保留实时进度）。
+  - `release-plugin-tarballs.ps1` 的「工作区是否干净」没看 `$LASTEXITCODE`：git 失败时
+    `$dirty` 是空，「干净」与「根本没查成功」看起来一模一样。
+  - `update-release-notes.ps1` 只看 `HTTP:%{http_code}`，不看 `curl.exe` 自己的退出码 ——
+    curl 根本没起来时错误信息没有信息量。
+  - 发布说明的临时正文文件写在 `%TEMP%` 且失败路径直接 `exit`，会一直留着 → 改成 `finally` 清理。
+- **`check-ps1-encoding.cjs` 只扫 `scripts/` 一层**：放到子目录里的 `.ps1` 会绕过这条护栏。
+  改为递归扫描整个仓库（跳过 `node_modules` / `dist` / `resources`）。这一改立刻抓到 7 个非 ASCII
+  脚本（原先只看到 5 个）。
+- **smoke 脚本的重复样板**：三个 CDP 驱动的脚本各自内联了一份几乎相同的 ~60 行「找 target →
+  连 WebSocket → 关联 id → evaluate → waitFor」，`Copy-Tree` / `Stop-App` / `Wait-Log` / `Dump-Log`
+  在 5 个脚本里各写一遍 —— 修一处（比如 RPC 超时）另外两处照旧漂移。新增
+  `scripts/lib/cdp.cjs`（`connectToPage` / `evaluate` / `waitFor` / `runDriver`），三个驱动改为
+  复用它；`Wait-Log` 的超时信息现在会带上最后一次观察到的值，而不只是「超时」。
+- **两个 smoke 断言的是「开发机当时恰好有的东西」**（这才是它们长期失败的真因，与本次改动无关）：
+  - `smoke-plugin-enable.ps1` 期望 boot 打印 `legacy plugin removed (renamed)`，但那条日志只在
+    「第二步 prune 才是真正摘掉登记的人」时出现；先走的 `dsh plugin remove` 成功时它不会打印，
+    于是断言恒假。改为断言迁移本身（`legacy plugin replaced by: … -> dsh-model-surplus`），
+    并显式装好它需要的前置插件（新增 `scripts/ensure-plugin-installed.cjs`，走应用自己的安装
+    路径、从本仓库 `plugins/` staging，不需要网络）—— 原先它继承自开发机的 live profile，
+    那份 profile 一被清干净，测试就报一个与真实原因无关的错。
+  - `smoke-profile-watch.ps1` 断言 `dsh-opencode-go-path` 存在，而那个包在 v0.6.0 已改名
+    `dsh-gateway-models` —— 只有当开发机 profile 还留着旧名字时才成立。改为从仓库自己的
+    `CATALOG` 推导要检查的包（下一次改名不会再弄坏它），并修掉它 `finally` 里引用**从未赋值**
+    的 `$seedFile`（PS 5.1 下 null 路径会抛终止错误，把真正的结果 —— 无论成功还是失败 —— 一起
+    盖掉）。
+- **顺手去掉写死的用户名**：5 个 smoke 里的 `C:\Users\<name>\AppData\...` 改成
+  `Join-Path $env:APPDATA`（换台机器 / 换个账号就不再是坏的）。
+- **界面渲染的重复劳动**：`paint()` 每次都会重跑 `applyTexts()`（整文档 `querySelectorAll`）并
+  整段重建插件列表，而一次插件操作会调用它两次 —— 语言没变就不重跑文本、列表按指纹跳过重建
+  （`setPluginBusy` 用显式失效位保证 busy 锁的还原不会被跳过）。
+- **设置窗口的死 CSS 与无作用类**：`.first-run .fr-msg` 从没有任何元素用过（删掉）；
+  `.plg-state` / `.plg-enable-label` / `.plg-enable-state` 只有模板上的类名、没有任何 CSS 规则
+  命中（样式全内联）—— 把其中静态部分收进 CSS，内联只留随状态变化的颜色 / cursor。
+- **`notice.html`**：悬停时若指针**一开始就在**提示上（提示弹在鼠标底下）收不到 `mouseenter`，
+  计时器会照常把用户正在看的提示关掉 → 改为显式记住悬停状态；`<button>` 缺 `type="button"`；
+  静态 `<title>` 与 `title=` 是写死的中文，会在英文界面（或脚本没跑起来时）露出来。
+- **模块细节**：`engine-patch.js` 写回时会用 `\n` 覆盖整份 16000+ 行文件的 CRLF → 保留原行尾风格；
+  `engine-url.js` 接受 `localhost.`（FQDN 写法，浏览器视为同一台机器）；`plugin-manager.js`
+  去掉一个没人用的捕获组、删掉 `healProfileBundles` 里**永不可能执行**的 try/catch（改为区分
+  「读不出来」与「还不存在」并如实记 error）、`rowIdOwners` 把「row id → 占用它的包」算一次
+  （原先按 rowId 循环逐次重扫文件，O(rowIds × packages)）。
+
+## 🧪 测试
+
+- 新增 `src/test/first-run.test.cjs`（11 项）：已决定 / 引擎未装 / 部分已装 / 全部不兼容 /
+  目录缺条目 / 半残状态 / `dsh-market` 不进推荐集合。
+- `src/test/engine-patch.test.cjs` 新增 4 项：块体不闭合时放弃且**一行都不删**；块后仍有引擎
+  代码时必须保留（旧实现会删掉）；删除行数恰好等于块体行数。
+- `src/test/update-sources.test.cjs` 新增 1 项：`DEFAULT_ORDER` / `MAINLAND_ORDER` 与
+  `SOURCE_IDS` 必须互为同一集合（新增源却忘了进顺序表 → 那个源永远不会被尝试）。
+- 新增端到端 `scripts/smoke-first-run.ps1`（真实引擎 + 真实 pnpm + CDP 驱动**真实设置窗口**）：
+  ① 全新 profile：自动弹出 + 卡片可见（文案列出缺的四个）② 点「一键开启」：四个全部装上、卡片消失
+  ③ 引擎被重启一次、`firstRunOfferDone=true` ④ 第二次启动不再弹、也不再自动开设置窗口
+  ⑤ 换一条路（「不用了我自己选」）：只记录决定 —— 缺的那个不会因此被装上，已装的三个也不会被卸掉。
+- 四个既有 smoke 场景预置 `firstRunOfferDone=true`：它们各自断言精确的插件集合与窗口行为，
+  首次启动卡片不该插进它们的场景（`smoke-close` 还会因为多一个模态窗口而找不到主窗口句柄）。
+- `settings.html` 结构检查新增 2 条：卡片默认隐藏 / 显示完全跟随 payload / 结果写进
+  `#pluginMsg`（卡片在装成功后必然消失，写在卡片里等于消息丢失）；以及上面那条 `t()` 键完整性。
+
+## ⬆️ 升级说明
+
+- **无配置迁移、无需手动操作**：数据目录、模型配置、会话历史原样保留；插件版本未变，不会触发重装。
+- **老用户**：如果你此前还没装那几个内置插件，升级后第一次启动会看到这张卡片 —— **只问一次**，
+  点过「不用了我自己选」之后就不再主动出现（设置窗口里照样能逐个勾选）。
+
+---
+
 # DSH Ready GUI v0.6.1 更新说明
 
 **发布日：2026-09-25** · 从 v0.6.0 累积的所有改动。

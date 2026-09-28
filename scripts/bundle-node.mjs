@@ -23,6 +23,7 @@
  */
 
 import {execFileSync} from "node:child_process";
+import {randomBytes} from "node:crypto";
 import {existsSync} from "node:fs";
 import {mkdir, readFile, readdir, rename, rm, stat, writeFile} from "node:fs/promises";
 import {dirname, join, resolve} from "node:path";
@@ -57,7 +58,12 @@ if (!entry) {
 
 const BASE = `node-v${NODE_VERSION}-${entry.os}-${entry.arch}`;
 const URL = `${MIRROR}/v${NODE_VERSION}/${BASE}.${entry.ext}`;
-const TMP = join(ROOT, "resources", `.node-tmp-${BASE}`);
+// 解包临时目录必须**每个进程唯一**：它下面每一步都会先 rm -rf 再重建，而固定名
+// （原来就是 `.node-tmp-<BASE>`）在两个构建并行时（CI 矩阵 / 本地同时开 dist:win 与
+// dist:linux）会互相删掉对方正在用的目录 —— 轻则 xcopy 报 node 可执行文件缺失，
+// 重则复制到一棵被删了一半的运行时，而 version.txt 照样写下去，于是下次构建的
+// 「已是最新」判断还会接受这份坏产物。与 ensure-electron.mjs 同一条规则。
+const TMP = join(ROOT, "resources", `.node-tmp-${BASE}.${process.pid}.${randomBytes(4).toString("hex")}`);
 const FORCE = process.argv.includes("--force") || process.env.DSH_NODE_REFRESH === "1";
 
 const CACHE_ARCHIVE = join(CACHE_DIR, `${BASE}.${entry.ext}`);

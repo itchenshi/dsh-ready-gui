@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld("dshSettings", {
   reloadEngineWindow: () => ipcRenderer.invoke("dsh-gui:reload-engine-window"),
   // 重试/修复按钮：以“当前已安装集合”为目标再对账（补拉捆绑插件更新，绝不卸载）。
   syncPlugins: () => ipcRenderer.invoke("settings:plugin-sync"),
+  // 首次启动卡片：一键开启内置插件（缺哪个装哪个，装完由主进程自动重启一次引擎）。
+  enableRecommendedPlugins: () => ipcRenderer.invoke("plugins:enable-recommended"),
+  // 首次启动卡片：用户选择自己在下面的列表里逐个勾 —— 只记「问过了」，不装任何东西。
+  dismissFirstRun: () => ipcRenderer.invoke("first-run:dismiss"),
   // 请求 DSH Ready GUI 重启托管的 dsh 引擎（插件安装/挂载后需重启生效）。
   restartEngine: () => ipcRenderer.invoke("settings:restart-engine"),
   // 内容高度变化时通知主进程自适应窗口高度（≤ 屏幕工作区）。

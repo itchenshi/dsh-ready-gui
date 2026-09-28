@@ -1,4 +1,4 @@
-# update-release-notes.ps1 -- push a release-notes file to the GitHub / Gitee /
+﻿# update-release-notes.ps1 -- push a release-notes file to the GitHub / Gitee /
 # GitCode release body (and title) for one tag.
 #
 # Why this exists: the notes live in the repo (RELEASE-NOTES-v<version>.md), but
@@ -60,6 +60,18 @@ if (Test-Path $SecretsFile) {
     ForEach-Object { $kv = $_ -split '=', 2; $secrets[$kv[0].Trim()] = $kv[1].Trim() }
 }
 
+# 错误信息里出现的任何已知 token 一律抹掉：Gitee 的接口把凭据放在 query string 里
+# （`?access_token=…`），而 Invoke-RestMethod 失败时会把**整个 URI** 写进异常消息 ——
+# 直接打印异常等于把凭据打进终端回滚区与 CI 日志。
+function Redact-Token([string]$text) {
+  $out = $text
+  foreach ($key in $secrets.Keys) {
+    $val = [string]$secrets[$key]
+    if ($val.Length -ge 8) { $out = $out -replace [regex]::Escape($val), '***' }
+  }
+  return $out
+}
+
 $failed = @()
 
 # ------------------------------------------------------------------ GitHub ---
@@ -108,12 +120,16 @@ foreach ($p in @(
       --data-urlencode "tag_name=$Tag" `
       --data-urlencode "name=$Title" `
       --data-urlencode "body@$($p.Body)" 2>&1 | Out-String
+    # curl 自己没起来 / 传输失败时不会有 HTTP: 行，只看 `$code -notmatch '^2'` 会把
+    # 「curl 挂了」和「服务端返回 4xx」混成同一条没有信息量的报错，所以退出码也要看。
+    $curlExit = $LASTEXITCODE
     $code = ([regex]::Match($out, 'HTTP:(\d+)')).Groups[1].Value
+    if ($curlExit -ne 0) { throw "curl failed (exit $curlExit): $(Redact-Token $out.Trim())" }
     if ($code -notmatch '^2') { throw "HTTP $code" }
     Write-Ok "$($p.Name): notes updated ($(if ($id) { "id $id" } else { "by tag" }))"
   }
   catch {
-    Write-Warn2 "$($p.Name): $($_.Exception.Message)"
+    Write-Warn2 "$($p.Name): $(Redact-Token $_.Exception.Message)"
     $failed += $p.Name
   }
 }

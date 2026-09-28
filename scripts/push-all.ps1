@@ -1,4 +1,4 @@
-# push-all.ps1 -- push current branch + tags to GitHub / Gitee / GitCode
+﻿# push-all.ps1 -- push current branch + tags to GitHub / Gitee / GitCode
 #
 # Usage:
 #   pwsh -File scripts/push-all.ps1
@@ -47,10 +47,38 @@ else {
 $branch = git rev-parse --abbrev-ref HEAD
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($branch)) { throw 'cannot resolve current branch' }
 
+# -Skip 必须同时接受**两种写法**：平台名（GitHub / Gitee / GitCode —— publish-all.ps1 与
+# 它的文档用的就是这套）与 remote 名（origin / gitee / gitcode —— 本脚本内部的 $r.Name）。
+# 早先直接拿传入值跟 remote 名比，于是 `publish-all -Skip GitHub` 转发过来后**静默不生效**，
+# 而这恰恰是它最该生效的场景（github.com 连不上、想让推送跳过它）。
+$skipSet = @{}
+foreach ($s in $Skip) {
+  if ([string]::IsNullOrWhiteSpace($s)) { continue }
+  switch ($s.Trim().ToLowerInvariant()) {
+    'github'  { $skipSet['origin'] = $true }
+    'origin'  { $skipSet['origin'] = $true }
+    'gitee'   { $skipSet['gitee'] = $true }
+    'gitcode' { $skipSet['gitcode'] = $true }
+    default   { $skipSet[$s.Trim().ToLowerInvariant()] = $true }
+  }
+}
+
+# 输出里出现的任何已知 token 一律抹掉再打印。git 自己会把**带 token 的 URL** 写进错误
+# 信息（`fatal: unable to access 'https://user:TOKEN@github.com/...'`），直接转发它的输出
+# 等于把凭据打进终端回滚区与 CI 日志 —— 而下面的注释还在说「Never echo the tokenised URL」。
+function Redact-Token([string]$text) {
+  $out = $text
+  foreach ($key in $secrets.Keys) {
+    $val = [string]$secrets[$key]
+    if ($val.Length -ge 8) { $out = $out -replace [regex]::Escape($val), '***' }
+  }
+  return $out
+}
+
 $tagNote = 'all tags'
 if ($NoTags) { $tagNote = 'no tags' }
 Write-Host "[plan] push branch: $branch ($tagNote)" -ForegroundColor Cyan
-if ($Skip.Count -gt 0) { Write-Host "[plan] skipping: $($Skip -join ', ')" -ForegroundColor Yellow }
+if ($skipSet.Count -gt 0) { Write-Host "[plan] skipping: $($skipSet.Keys -join ', ')" -ForegroundColor Yellow }
 
 # Network hardening for unreliable links (measured on a restricted network where
 # github.com accepts connections but transfers stall):
@@ -72,7 +100,7 @@ $gitNetArgs = @(
 $failures = @()
 
 foreach ($r in $remotes) {
-  if ($Skip -contains $r.Name) {
+  if ($skipSet.ContainsKey($r.Name)) {
     Write-Host "[skip] $($r.Name) (excluded by -Skip)" -ForegroundColor Yellow
     continue
   }
@@ -91,18 +119,20 @@ foreach ($r in $remotes) {
   }
 
   try {
-    git @gitNetArgs push $url $branch
+    # 逐行过滤后再打印：既保留实时进度（长推送几分钟没有任何输出会让人以为卡死），
+    # 又不会把 git 错误信息里的 token 化 URL 漏到终端与日志里。
+    git @gitNetArgs push $url $branch 2>&1 | ForEach-Object { Write-Host (Redact-Token ([string]$_)) }
     if ($LASTEXITCODE -ne 0) { throw "branch push failed (exit $LASTEXITCODE)" }
 
     if (-not $NoTags) {
-      git @gitNetArgs push $url --tags
+      git @gitNetArgs push $url --tags 2>&1 | ForEach-Object { Write-Host (Redact-Token ([string]$_)) }
       if ($LASTEXITCODE -ne 0) { throw "tag push failed (exit $LASTEXITCODE)" }
     }
     Write-Host "[ok]   $($r.Name)" -ForegroundColor Green
   }
   catch {
-    # Never echo the tokenised URL.
-    Write-Host "[fail] $($r.Name): $($_.Exception.Message)" -ForegroundColor Red
+    # Never echo the tokenised URL —— 异常消息本身也可能带上它，同样过一遍过滤。
+    Write-Host "[fail] $($r.Name): $(Redact-Token $_.Exception.Message)" -ForegroundColor Red
     $failures += $r.Name
   }
 }

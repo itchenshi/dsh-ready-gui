@@ -211,13 +211,6 @@ const CATALOG = [
 
 const CATALOG_IDS = new Set(CATALOG.map((entry) => entry.id));
 
-/** npm 包名 -> catalog 项。 */
-function catalogByPkg() {
-  const map = new Map();
-  for (const entry of CATALOG) map.set(entry.pkg, entry);
-  return map;
-}
-
 /** 当前引擎版本（<engineDir>/node_modules/@deepseek-ai/dsh 的 version），读不到返回 null。 */
 function readEngineVersion(engineDir) {
   try {
@@ -286,18 +279,34 @@ function runNpm(nodeExec, cli, args, { cwd, envExtra = {}, log = () => {}, timeo
       stdio: ["ignore", "ignore", "pipe"],
     });
     let tail = "";
-    const timer = setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch {}
+    let settled = false;
+    let timer = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      fn(value);
+    };
+    // 超时必须**自己 settle**：SIGKILL 杀不掉 Windows 上的进程树，npm 包装器派生的
+    // 孙进程可能继续持有 stderr 管道，`close` 于是永远不触发 —— 只 kill 不 reject 会让
+    // 这个 Promise 永不 settle，调用方（ensurePnpm）跟着挂死，子进程与管道常驻。
+    // 与 runDshPlugin 的超时处理保持一致。
+    timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* 已经退出 */
+      }
+      finish(reject, new Error(`npm timed out after ${timeoutMs}ms\n${tail}`));
     }, timeoutMs);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       tail = (tail + chunk).split(/\r?\n/u).slice(-8).join("\n");
     });
-    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("error", (error) => finish(reject, error));
     child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(`npm exited with ${code}\n${tail}`));
+      if (code === 0) finish(resolve, undefined);
+      else finish(reject, new Error(`npm exited with ${code}\n${tail}`));
     });
   });
 }
@@ -324,6 +333,10 @@ async function ensurePnpm({ installDir, pnpmSpec = "pnpm@10", nodeExec, log = ()
   const toolDir = major === "10" ? installDir : path.join(installDir, `pnpm-${major}`);
   const binDir = path.join(toolDir, "node_modules", ".bin");
   const pnpmMeta = path.join(toolDir, "node_modules", "pnpm", "package.json");
+  // `.bin` 里真正可执行的入口名随平台不同（Windows 是 pnpm.cmd）。只看 package.json
+  // 是不够的：上次安装被杀在半途时，元数据可能已经落地而 .bin 还空着，于是这里返回一个
+  // 不含 pnpm 的 PATH 目录，后面 `dsh plugin add` 报一个和真正原因无关的解析错误。
+  const pnpmEntry = path.join(binDir, process.platform === "win32" ? "pnpm.cmd" : "pnpm");
   const existingMajor = (() => {
     try {
       const version = JSON.parse(fs.readFileSync(pnpmMeta, "utf8")).version;
@@ -332,21 +345,41 @@ async function ensurePnpm({ installDir, pnpmSpec = "pnpm@10", nodeExec, log = ()
       return null;
     }
   })();
-  if (existingMajor === major) return binDir;
+  if (existingMajor === major && fs.existsSync(pnpmEntry)) return binDir;
   if (existingMajor !== null) log("pnpm major changed, reinstalling:", existingMajor, "->", major);
-  await fsp.rm(toolDir, { recursive: true, force: true });
-  await fsp.mkdir(toolDir, { recursive: true });
   const npmCli = resolveNpmCli(nodeExec);
   if (!npmCli) throw new Error("npm CLI unavailable; cannot provision pnpm");
-  await runNpm(
-    nodeExec,
-    npmCli,
-    ["install", pnpmSpec, "--prefix", toolDir, "--no-save", "--no-audit", "--no-fund", "--loglevel", "error"],
-    { log, timeoutMs: 240000, npmCacheDir },
-  );
-  if (!fs.existsSync(pnpmMeta)) throw new Error("pnpm provisioning failed");
-  log("pnpm ready at", toolDir);
-  return binDir;
+  // 装到**独立**临时目录再原子换入，绝不先 rm 掉正式目录：这个 toolDir 是所有调用点
+  // 共用的同一路径，而启动维护那条路径不受 pluginOpInFlight 互斥保护 —— 先删后装的话，
+  // 并发的一次安装会把另一次正在用的目录删掉（pnpm provisioning failed / 半棵目录）。
+  // 临时名带 pid + 随机段，避免两个 GUI 实例撞名（与补丁层临时文件同一套做法）。
+  const tmpToolDir = `${toolDir}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    await fsp.mkdir(tmpToolDir, { recursive: true });
+    await runNpm(
+      nodeExec,
+      npmCli,
+      ["install", pnpmSpec, "--prefix", tmpToolDir, "--no-save", "--no-audit", "--no-fund", "--loglevel", "error"],
+      { log, timeoutMs: 240000, npmCacheDir },
+    );
+    const tmpMeta = path.join(tmpToolDir, "node_modules", "pnpm", "package.json");
+    if (!fs.existsSync(tmpMeta)) throw new Error("pnpm provisioning failed");
+    // 换入：旧目录先挪走，失败则挪回来，保证任何时刻都有一个可用的 toolDir。
+    const parked = `${toolDir}.old-${process.pid}-${randomBytes(4).toString("hex")}`;
+    const hadOld = fs.existsSync(toolDir);
+    if (hadOld) await fsp.rename(toolDir, parked);
+    try {
+      await fsp.rename(tmpToolDir, toolDir);
+    } catch (error) {
+      if (hadOld) await fsp.rename(parked, toolDir).catch(() => {});
+      throw error;
+    }
+    if (hadOld) await fsp.rm(parked, { recursive: true, force: true }).catch(() => {});
+    log("pnpm ready at", toolDir);
+    return binDir;
+  } finally {
+    await fsp.rm(tmpToolDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**
@@ -362,8 +395,9 @@ function readProfilePnpmManager(dshHome) {
     );
     // key/value 都可能带 JSON 引号：`"packageManager": "pnpm@12.3.4",`
     // 或 YAML 风格 `packageManager: pnpm@12.3.4`（旧字段 pnpmVersion 值不带前缀）。
-    const m = /"?((?:packageManager|pnpmVersion))"?\s*:\s*"?(?:pnpm@)?(\d+\.\d+\.\d+)/.exec(raw);
-    return m ? `pnpm@${m[2]}` : null;
+    // 只用第 2 组（版本号），所以键名那一组不必再捕获一次。
+    const m = /"?(?:packageManager|pnpmVersion)"?\s*:\s*"?(?:pnpm@)?(\d+\.\d+\.\d+)/.exec(raw);
+    return m ? `pnpm@${m[1]}` : null;
   } catch {
     return null;
   }
@@ -857,26 +891,49 @@ function declaredPatchPackages(dshHome) {
  * 声明了 `dsh.bundle.patch` 的包（市场手装的插件不在目录里）。
  * @returns {string|null} 冲突方的包名（没有冲突返回 null）
  */
-function foreignRowIdOwner(dshHome, pkg, rowId) {
+/**
+ * 一次性算出「row id → 占用它的那些包」的映射（同一个 id 可能被多个包 insert）。
+ *
+ * 为什么要有它：`setPluginEnabled` 是**按 row id 循环**做归属校验的，而逐个 id 去问
+ * `foreignRowIdOwner` 会把同一批文件反复解析 —— 每个 id 都要重读一遍 profile 清单、重扫
+ * 一遍 node_modules、再对每个候选包重读它的 package.json 与补丁文件（O(rowIds × packages)）。
+ * 映射算一次即可，语义与逐次查询一致：只要**除自己以外**还有别的包占用该 id 就算冲突。
+ */
+function rowIdOwners(dshHome) {
   const bundles = new Set(installedBundles(dshHome));
   const candidates = new Set(declaredPatchPackages(dshHome));
   for (const entry of CATALOG) if (bundles.has(entry.pkg)) candidates.add(entry.pkg);
+  const owners = new Map();
   for (const name of candidates) {
-    if (name === pkg) continue;
-    if (packageRowIds(dshHome, name).includes(rowId)) return name;
+    for (const id of packageRowIds(dshHome, name)) {
+      if (!owners.has(id)) owners.set(id, new Set());
+      owners.get(id).add(name);
+    }
   }
+  return owners;
+}
+
+/**
+ * @returns {string|null} 冲突方的包名（没有冲突返回 null）
+ */
+function foreignRowIdOwner(dshHome, pkg, rowId, owners) {
+  const map = owners ?? rowIdOwners(dshHome);
+  const set = map.get(rowId);
+  if (!set) return null;
+  for (const name of set) if (name !== pkg) return name;
   return null;
 }
 
 /**
  * 禁用某个 row id 前必须拒绝的情形；可以写时返回 null。
  * 拒绝原因原样交给设置窗口（main.js 把它放进 error 字段，界面显示「失败：…」）。
+ * @param {Map<string, Set<string>>} [owners] 预计算的 rowIdOwners(dshHome)（按 rowId 循环调用时传入）
  */
-function disableRefusalReason(dshHome, pkg, rowId) {
+function disableRefusalReason(dshHome, pkg, rowId, owners) {
   if (PROTECTED_ROW_IDS.has(rowId)) {
     return `row "${rowId}" belongs to the engine and cannot be disabled`;
   }
-  const owner = foreignRowIdOwner(dshHome, pkg, rowId);
+  const owner = foreignRowIdOwner(dshHome, pkg, rowId, owners);
   if (owner) {
     return `row "${rowId}" is also inserted by "${owner}"; disabling it would turn that plugin off`;
   }
@@ -1065,7 +1122,9 @@ function mutatePatchFileLocked(patchPath, transform, attempt = 0) {
     return { ok: false, reason: `patch layer transform failed: ${(error && error.message) || error}` };
   }
   if (!plan || !plan.ok) return { ok: false, reason: (plan && plan.reason) || "patch layer write refused" };
-  if (plan.text === undefined || plan.text === text) return { ok: true, reason: null };
+  // 文本没变 = 这次调用没有改动磁盘（例如「已禁用」时再禁用一次）。把这件事报给调用方，
+  // 它才能区分「真的写了」与「本来就已是目标状态」。
+  if (plan.text === undefined || plan.text === text) return { ok: true, reason: null, changed: false };
   // 唯一临时名：固定 `<file>.tmp` 会被同机另一个写者（插件市场在引擎进程里写同一个文件）
   // 抢用——一方 rename 之后发布的是**另一方的字节**，而那份文本同样是合法条目列表，形状
   // 检查根本发现不了，于是「丢了行」还会报 ok:true。
@@ -1091,7 +1150,7 @@ function mutatePatchFileLocked(patchPath, transform, attempt = 0) {
   }
   // 形状不对：回滚并报失败。这里**不能**重试 —— 重试会在「已写进去的坏文本」上重算，
   // 看到目标行已存在而返回 ok:true，把形状损坏掩盖掉。
-  if (isTopLevelEntryList(after)) return { ok: true, reason: null };
+  if (isTopLevelEntryList(after)) return { ok: true, reason: null, changed: true };
   try {
     if (!existed) fs.rmSync(patchPath, { force: true });
     else {
@@ -1230,18 +1289,23 @@ function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
   const patchPath = userPatchPath(dshHome);
   const ids = Array.isArray(rowIds) && rowIds.length ? rowIds : [];
   if (!enabled) {
+    // 归属映射算一次：下面按 rowId 循环，逐个 id 重算会把同一批文件反复解析。
+    const owners = ids.length > 0 ? rowIdOwners(dshHome) : null;
     for (const rowId of ids) {
-      const refusal = disableRefusalReason(dshHome, pkg, rowId);
+      const refusal = disableRefusalReason(dshHome, pkg, rowId, owners);
       if (refusal) return { ok: false, changed: false, patchOk: false, reason: refusal };
     }
   }
   let patchOk = true;
   let reason = null;
+  let patchChanged = false;
   for (const rowId of ids) {
     const res = enabled ? enablePatchRow(patchPath, rowId) : disablePatchRow(patchPath, rowId);
     if (!res.ok) {
       patchOk = false;
       reason = res.reason ?? reason;
+    } else if (res.changed) {
+      patchChanged = true;
     }
   }
   // 市场 state.json 只对**已装且有 row id** 的包有意义；client-only 包没有 row
@@ -1255,8 +1319,11 @@ function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
   const next = new Set(marketDisabled);
   if (enabled) next.delete(pkg);
   else next.add(pkg);
-  writeMarketDisabled(dshHome, [...next]);
-  return { ok: true, changed: true, patchOk: true, reason: null };
+  // changed 必须反映**真实落地**：rowIds 为空（client-only 包）时补丁层一个字节都不会变，
+  // 若 state.json 本来就已经是目标状态，这次调用等于什么都没做 —— 硬编码 changed:true 会让
+  // 界面提示「需重启引擎」并走一遍无意义的重启路径。
+  const marketChanged = writeMarketDisabled(dshHome, [...next]) === true;
+  return { ok: true, changed: patchChanged || marketChanged, patchOk: true, reason: null };
 }
 
 /**
@@ -1273,15 +1340,28 @@ function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
  * 而「是否含页面半边」决定启用/禁用后要不要刷新页面，必须安装前就能显示。
  * @returns {boolean|null}
  */
+/**
+ * 从**已解析**的 package.json 判定是否含页面半边；manifest 为 null（未装 / 读不出）时
+ * 回退目录条目里核实过的 `entry.client` 声明。
+ *
+ * 抽成纯函数是为了让 catalogStatus 不必为了这一个字段**再读一遍同一个 package.json**：
+ * 那个函数在每次设置 payload / 广播时都会跑一遍全部目录条目，而它对每个条目已经读过一次
+ * package.json 拿版本号了。判定逻辑只有这一处，测试仍然打在读文件的那层（pluginHasClientHalf）。
+ * @returns {boolean|null}
+ */
+function clientHalfFromManifest(manifest, entry) {
+  if (manifest) return manifest?.dsh?.client !== undefined && manifest?.dsh?.client !== null;
+  return typeof entry.client === "boolean" ? entry.client : null;
+}
+
 function pluginHasClientHalf(dshHome, entry) {
   try {
     const file = path.join(profileDir(dshHome), "node_modules", entry.pkg, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    return manifest?.dsh?.client !== undefined && manifest?.dsh?.client !== null;
+    return clientHalfFromManifest(JSON.parse(fs.readFileSync(file, "utf8")), entry);
   } catch {
     /* not installed (or unreadable) — fall back to the catalog declaration */
   }
-  return typeof entry.client === "boolean" ? entry.client : null;
+  return clientHalfFromManifest(null, entry);
 }
 
 /** 每个候选目录项的已装 / 启用状态：bundles 登记 + 实存 + 补丁层/市场禁用。 */
@@ -1296,15 +1376,21 @@ function catalogStatus(dshHome) {
     // package name (bundles never contains a `file:` spec), so compare against `pkg`.
     const bundleName = entry.pkg;
     const pkgDir = path.join(modulesRoot, bundleName);
-    let installed = bundles.has(bundleName) && fs.existsSync(path.join(pkgDir, "package.json"));
-    let version = null;
-    if (installed) {
+    const pkgJson = path.join(pkgDir, "package.json");
+    // 读一次、复用：版本号与「是否含页面半边」都要这份 package.json。此前是读两遍
+    // （这里一遍、pluginHasClientHalf 里再一遍），而 catalogStatus 是设置窗口每次
+    // payload / 广播都会跑的热路径。
+    const present = fs.existsSync(pkgDir);
+    let manifest = null;
+    if (present) {
       try {
-        version = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")).version ?? null;
+        manifest = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
       } catch {
-        version = null;
+        manifest = null; // 读不出/解析失败：版本按 null 处理，页面半边回退目录声明
       }
     }
+    const installed = bundles.has(bundleName) && fs.existsSync(pkgJson);
+    const version = installed ? (manifest?.version ?? null) : null;
     // 有效启用状态 = 市场没禁 且 补丁层没禁（与市场 verifyActivation 的 off 判定一致）。
     const rowIds = packageRowIds(dshHome, bundleName);
     const byMarket = marketDisabled.has(bundleName);
@@ -1313,7 +1399,7 @@ function catalogStatus(dshHome) {
       installed,
       version,
       bundle: bundles.has(bundleName),
-      present: fs.existsSync(pkgDir),
+      present,
       enabled: !byMarket && !byPatch,
       // 市场说禁用、但补丁层还没落下 → 引擎实际上仍会加载它（漂移）。
       // 这个组合就是「市场禁用了、设置窗口也该显示」的那条路径，同时提示
@@ -1323,7 +1409,7 @@ function catalogStatus(dshHome) {
       patchDisabled: byPatch,
       rowIds,
       // 是否含页面半边 → 决定「启用/禁用后是否还需刷新页面」（见该函数注释）。
-      client: pluginHasClientHalf(dshHome, entry),
+      client: clientHalfFromManifest(manifest, entry),
     };
   }
   return out;
@@ -1401,11 +1487,35 @@ async function installPlugin({ engineDir, dshHome, pnpmBinDir, pkg, name, nodeEx
   }
   const res = await runDshPlugin({ engineDir, dshHome, pnpmBinDir, args: ["add", pkg], nodeExec, log });
   if (!res.ok) log("plugin install failed:", pkg, res.output);
+  if (res.ok) {
+    // 退出码 0 **不等于**装上了。实测踩过两次同一种坑：`dsh plugin add` / pnpm 打印
+    // "Lockfile is up to date, resolution step is skipped" 并 exit 0，而 package.json 里的
+    // 依赖与 bundles 登记一个字都没变（见上面 remove→prune→add 那段注释）。调用方拿到
+    // ok:true 就报「已安装」，界面勾上、profile 里却没有 —— 用户看到的是「重启后插件又没了」。
+    // 这里以**落地结果**为准：登记进 bundles 且 node_modules 里确实有它。
+    const registered = installedBundles(dshHome).includes(target);
+    const materialised = fs.existsSync(path.join(profileDir(dshHome), "node_modules", target, "package.json"));
+    if (!registered || !materialised) {
+      log("plugin install reported success but did not land:", target, `registered=${registered}`, `materialised=${materialised}`);
+      return {
+        ok: false,
+        code: res.code,
+        output: `${res.output}\n[install did not land: registered=${registered} materialised=${materialised}]`,
+      };
+    }
+  }
   return res;
 }
 
 /** 移除单个包。 */
 async function removePlugin({ engineDir, dshHome, pnpmBinDir, pkg, nodeExec, log = () => {} }) {
+  // pkg 可能来自 profile 的 bundles（那个文件可以被插件市场或引擎进程里的第三方插件改写），
+  // 所以和恢复路径（isRestorableSpec）守同一条规则：以 `-` 开头的会被 pnpm 当成命令行选项，
+  // 带 `:` 前缀的会把操作指向任意本地目录或远程仓库。这里只允许普通包名。
+  if (typeof pkg !== "string" || pkg.trim() === "" || pkg.trim().startsWith("-") || pkg.includes(":")) {
+    log("refusing to remove a package whose name is not a plain package name:", String(pkg).slice(0, 120));
+    return { ok: false, code: -1, output: `refused unsafe package spec: ${String(pkg).slice(0, 120)}` };
+  }
   const res = await runDshPlugin({ engineDir, dshHome, pnpmBinDir, args: ["remove", pkg], nodeExec, log });
   if (!res.ok) log("plugin remove failed:", pkg, res.output);
   return res;
@@ -1538,9 +1648,13 @@ const LEGACY_PLUGIN_PKGS = [
 function removePatchRows(dshHome, rowIds) {
   if (!Array.isArray(rowIds) || rowIds.length === 0) return [];
   const patchPath = userPatchPath(dshHome);
-  const removed = [];
+  // 结果必须在 transform **内部**累积：mutatePatchFile 遇到并发改写会重跑同一个 transform，
+  // 而把 `removed` 放在外面、在里面 push 会让同一个 rowId 被记两次（实测返回 ["a","a"]），
+  // 调用方据此写日志/上报就会重复。
+  let removed = [];
   const res = mutatePatchFile(patchPath, (text) => {
     let next = text;
+    const hits = [];
     for (const rowId of rowIds) {
       if (!ROW_ID_RE.test(rowId)) continue;
       // 与 enablePatchRow 用同一条缩进不敏感正则，并且带 `g`：钉死「列 0 的 `- id:` +
@@ -1553,9 +1667,10 @@ function removePatchRows(dshHome, rowIds) {
       );
       if (!blockRe.test(next)) continue;
       next = next.replace(blockRe, "");
-      removed.push(rowId);
+      hits.push(rowId);
     }
-    return removed.length > 0 ? { ok: true, text: withPlaceholderRestored(next) } : { ok: true, text };
+    removed = hits;
+    return hits.length > 0 ? { ok: true, text: withPlaceholderRestored(next) } : { ok: true, text };
   });
   // 被拒 / 写后校验失败 = 什么都没落地：报「没摘掉」，不能假成功。
   return res.ok ? removed : [];
@@ -1609,18 +1724,24 @@ async function removeLegacyPlugins({ engineDir, dshHome, nodeExec, pnpmInstallDi
   }
   // 现役条目占用的 row id —— 旧包名与它们同名，必须排除（见 liveCatalogRowIds 的说明）。
   const liveRowIds = liveCatalogRowIds(dshHome);
+  // 这两份状态在循环里只读一次：readMarketDisabled / readUserPatchState 各自都是
+  // 一次 readFileSync + JSON/YAML 解析，而下面每个 legacy 条目的每个 rowId 都要问一次
+  // —— 原先写在 `.some()` 回调里，等于按「legacy 条目数 × rowId 数」重复解析同一个文件。
+  let marketDisabledSnapshot = new Set();
+  let patchStateSnapshot = { disables: new Set(), forced: new Set() };
+  try {
+    marketDisabledSnapshot = readMarketDisabled(dshHome);
+    patchStateSnapshot = readUserPatchState(dshHome);
+  } catch {
+    /* 读不到就当没禁用 */
+  }
   for (const legacy of LEGACY_PLUGIN_PKGS) {
     const wasInstalled = bundles.has(legacy.pkg);
     const staleRowIds = legacy.rowIds.filter((rowId) => !liveRowIds.has(rowId));
     // 禁用意图可能记在市场的 state.json（包名）或补丁层（row id）任一处。
-    let wasDisabled = false;
-    try {
-      wasDisabled =
-        readMarketDisabled(dshHome).has(legacy.pkg) ||
-        staleRowIds.some((rowId) => readUserPatchState(dshHome).disables.has(rowId));
-    } catch {
-      /* 读不到就当没禁用 */
-    }
+    const wasDisabled =
+      marketDisabledSnapshot.has(legacy.pkg) ||
+      staleRowIds.some((rowId) => patchStateSnapshot.disables.has(rowId));
 
     // 补丁层与市场状态即使包已不在 bundles 里也可能残留，因此独立清理。
     // 只清「不再属于现役条目」的行：现役插件的禁用行是用户的当前选择，不是遗留物。
@@ -1818,14 +1939,18 @@ function isRegisteredInProfile(dshHome, name) {
  */
 async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir, log = () => {} }) {
   const result = { pruned: [], repaired: [], errors: [], changed: false };
-  let manifest;
-  try {
-    manifest = readProfileManifest(dshHome);
-  } catch (error) {
-    result.errors.push(`read profile manifest: ${(error && error.message) || error}`);
+  // 这里**不写** try/catch：readProfileManifest 自己吞掉所有异常并返回 null，那个 catch
+  // 是死代码（永远不执行）。但「读不出来」与「文件还不存在」必须分开：前者是真问题，
+  // 静默 return 会让自愈什么都不做且不留痕迹；后者只是引擎还没建出 profile，正常跳过。
+  const manifest = readProfileManifest(dshHome);
+  if (!manifest) {
+    if (fs.existsSync(path.join(profileDir(dshHome), "package.json"))) {
+      result.errors.push("profile manifest exists but could not be read/parsed; healing skipped");
+      log("heal: profile manifest unreadable, skipping");
+    }
     return result;
   }
-  if (!manifest || !manifest.dsh?.profile) return result;
+  if (!manifest.dsh?.profile) return result;
   const profile = manifest.dsh.profile;
   const bundles = Array.isArray(profile.bundles) ? profile.bundles : [];
   const declared = new Set(Object.keys(manifest.dependencies ?? {}));
@@ -1899,15 +2024,21 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
       // 直接写回会把对方刚写进去的 bundles/dependencies 覆盖掉（刚装/刚卸的插件被悄悄还原）。
       // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖）应用到**最新**的清单上。
       const fresh = readProfileManifest(dshHome);
-      const target = fresh ?? manifest;
-      if (fresh) {
+      // 重读失败（null）时**绝不**退回写那份旧快照：readProfileManifest 对任何读/解析
+      // 失败都返回 null（pnpm 正在原子替换、EACCES…），而此时写回旧快照就会把另一个写者
+      // 刚落地的 bundles/dependencies 覆盖掉 —— 正是这段重读要防的「刚装的插件被悄悄还原」。
+      // 宁可这次不摘（下次启动/点修复再来），也不能制造数据丢失。
+      if (!fresh) {
+        result.errors.push("profile manifest changed underneath and could not be re-read; prune skipped");
+        log("profile prune skipped: manifest could not be re-read after the write window");
+      } else {
         const currentBundles = Array.isArray(fresh.dsh?.profile?.bundles) ? fresh.dsh.profile.bundles : [];
         fresh.dsh = fresh.dsh ?? {};
         fresh.dsh.profile = fresh.dsh.profile ?? {};
         fresh.dsh.profile.bundles = currentBundles.filter((name) => !pruneList.includes(name));
+        writeProfileManifest(dshHome, fresh);
+        result.changed = true;
       }
-      writeProfileManifest(dshHome, target);
-      result.changed = true;
     } catch (error) {
       result.errors.push(`write profile manifest: ${(error && error.message) || error}`);
     }
@@ -1990,9 +2121,12 @@ async function syncEnabledPlugins({
   // 承诺不动用户没勾选的东西。
   const prunedSpecs = new Map();
   const foreignEntries = [];
+  // 读一次：installedBundles 会 readFileSync + JSON.parse 整个 profile 清单，放在
+  // for 循环里就等于每个目录条目都重读一遍（4 个内置条目 + 未来新增 = 白读 N 次）。
+  const bundlesNow = installedBundles(dshHome);
   for (const entry of CATALOG) {
     if (!entry.localSource || !enabled.has(entry.id)) continue;
-    if (!installedBundles(dshHome).includes(entry.pkg)) continue;
+    if (!bundlesNow.includes(entry.pkg)) continue;
     if (isBundledStagedSpec(profileDependencySpec(dshHome, entry.pkg), entry, bundledStagingRoot)) continue;
     foreignEntries.push(entry);
   }
@@ -2234,13 +2368,13 @@ function reconcilePluginEnabled({ dshHome, log = () => {} }) {
 // userPatchPath / readMarketDisabled / readUserPatchState / runDshPlugin）—— 它们不是死代码
 // （内部都在用），但对外暴露会让「这个模块的公共面」看起来比实际大，也邀请调用方去依赖
 // 内部实现。逐个 grep 确认没有任何外部引用后移除。
+// 同一轮里又清掉三个：catalogByPkg（已无任何引用，纯死代码）、CATALOG_IDS（main.js 只
+// 解构了却从未使用）与 engineBin / installPlugin（只在文件内调用，无需导出）。
 module.exports = {
   CATALOG,
-  CATALOG_IDS,
   catalogEngineCompat,
   readProfilePnpmManager,
   ensurePnpm,
-  engineBin,
   readProfileManifest,
   installedBundles,
   bundledSourceDir,
@@ -2261,7 +2395,6 @@ module.exports = {
   pruneProfilePackages,
   isRegisteredInProfile,
   healProfileBundles,
-  installPlugin,
   removePlugin,
   syncEnabledPlugins,
 };

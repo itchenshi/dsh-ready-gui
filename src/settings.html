@@ -112,6 +112,7 @@
     button.dsh-btn:disabled { opacity: 0.6; cursor: default; }
     /* 插件有实际变动时的「需重启引擎」提示：高亮重启按钮（不改布局尺寸）。
        持续脉冲（而不是只播两次）——标注要一直醒目到用户真的重启为止。 */
+*/
     button.dsh-btn.attn {
       border-color: #4d9fff;
       color: #4d9fff;
@@ -155,6 +156,28 @@
     @media (prefers-reduced-motion: reduce) {
       .plg-need-restart::before { animation: none; opacity: 1; }
     }
+    /* 插件行里的三个结构类：以前它们只写在模板上、没有任何规则命中（样式全内联），
+       等于「有名字但没作用」的死类。把其中**静态**的部分收到这里，内联只留随状态变化的
+       颜色 / cursor。 */
+    .plg-enable-label { display: inline-flex; gap: 5px; align-items: center; margin: 2px 0 0 24px; }
+    .plg-state { margin: 1px 0 0; display: block; }
+    .plg-enable-state { font-weight: 500; }
+    /* 首次启动卡片：只在「还有该装没装的内置插件，且用户还没做过决定」时显示（见 renderFirstRun）。
+       它在插件区最上方、用强调色描边 —— 随包插件默认全部关闭，这里是把四个修复一次做完的唯一入口。 */
+    .first-run {
+      border: 1px solid rgba(77, 107, 254, 0.5);
+      background: rgba(77, 107, 254, 0.08);
+      border-radius: 8px;
+      padding: 9px 11px;
+      margin: 0 0 9px;
+    }
+    [data-theme="light"] .first-run { background: rgba(77, 107, 254, 0.06); }
+    .first-run[hidden] { display: none; }
+    .first-run .fr-title { font-weight: 600; font-size: 13px; }
+    .first-run .fr-body { font-size: 12px; opacity: 0.88; margin: 3px 0 8px; line-height: 1.45; }
+    .first-run .fr-blocked { display: block; opacity: 0.85; margin-top: 2px; }
+    .first-run .fr-blocked[hidden] { display: none; }
+    .first-run .fr-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     #curEngine { font-size: 12px; opacity: 0.8; }
     #saved { color: #4d9fff; font-size: 12px; min-height: 14px; margin-top: 2px; text-align: right; }
     /* 安装/卸载进行中的进度条：不确定态转圈 + 阶段文字。 */
@@ -263,6 +286,24 @@
     <section class="g-plugins">
       <h2 data-i18n="settings.plugins"></h2>
       <div class="sub" style="margin-bottom:6px;" data-i18n="settings.plugins.sub"></div>
+      <!-- 首次启动卡片：「随包插件默认全部关闭」意味着「装完打开即用」是一句空话。
+           引擎就绪后主进程检测到还有该装没装的，会主动把本窗口打开（见 main.js 的
+           maybeOfferFirstRun），卡片就在最上方：一次点击 = 装齐 + 自动重启一次引擎。 -->
+      <div id="firstRun" class="first-run" hidden>
+        <div class="fr-title" data-i18n="settings.firstRun.title"></div>
+        <div class="fr-body">
+          <span id="firstRunBody"></span>
+          <span id="firstRunBlocked" class="fr-blocked" hidden></span>
+        </div>
+        <div class="fr-actions">
+          <button id="btnFirstRunEnable" type="button" class="dsh-btn attn">
+            <span id="firstRunEnableLabel"></span>
+          </button>
+          <button id="btnFirstRunLater" type="button" class="dsh-btn">
+            <span data-i18n="settings.firstRun.later"></span>
+          </button>
+        </div>
+      </div>
       <div id="pluginList"></div>
       <div id="pluginProgress" hidden>
         <span class="progress-track"><span class="progress-bar"></span></span>
@@ -319,10 +360,19 @@
         "settings.update.checkNow": "立即检查引擎更新",
         "settings.plugins": "第三方插件（勾选即安装，取消即卸载）",
         "settings.plugins.sub": "两个独立状态，与 Harness 页面的插件市场实时双向同步：①「安装」勾选框镜像安装/卸载；②「启用」开关镜像加载/禁用（关掉不卸载）。生效方式：安装/卸载需重启引擎（bundle 列表只在启动时组装），启用/禁用即时生效（引擎热重载补丁层），带页面半边的插件另需刷新页面——该差异标注在对应行上。第三方插件以你的权限运行第三方代码，默认关闭，勾选前请自行审阅源码。",
-        "settings.plugins.installLabel": "安装",
+        "settings.firstRun.title": "首次使用：装上内置插件",
+        "settings.firstRun.body": "内置插件默认不装（勾选才装）。一键开启会装上：{0}。装完自动重启一次引擎，之后才真正生效。",
+        "settings.firstRun.blocked": "当前引擎上装不了（已从推荐里去掉）：{0}",
+        "settings.firstRun.enable": "一键开启（{0} 个）",
+        "settings.firstRun.later": "不用了，我自己选",
+        "settings.firstRun.installing": "正在安装…装插件要跑 pnpm，第一次会慢一些。",
+        "settings.firstRun.done": "已安装：{0}。正在重启引擎，重启后生效。",
+        "settings.firstRun.needRestart": "已安装：{0}。请点上面的「重启引擎」后生效。",
+        "settings.firstRun.skipped": "{0} 与当前引擎不兼容，已跳过。",
+        "settings.firstRun.nothing": "这几个已经装好了，不需要再做一次。",
+        "settings.firstRun.failed": "失败：{0}。卡片留着，可以再点一次。",
         "settings.plugins.enableLabel": "启用",
         "settings.plugins.enabled": "已启用",
-        "settings.plugins.disabled": "已禁用",
         "settings.plugins.disabledByMarket": "已禁用（插件市场）",
         "settings.plugins.disabledByPatch": "已禁用（profile 补丁层）",
         "settings.plugins.driftHint": "插件市场已禁用，但禁用尚未写入 profile 补丁层——引擎重启后由「修复 / 重试」补写，届时才真正不加载。",
@@ -342,6 +392,29 @@
         "settings.plugins.restarting": "正在重启引擎…",
         "settings.plugins.restartHint": "安装/卸载后用上面的按钮重启引擎（不要用 dsh 页面里的重启，那只对页面自身生效）。",
         "settings.plugins.needRestartBadge": "待重启引擎",
+        "settings.engineIncompatible": "与当前引擎不兼容，不可用",
+        "settings.plugins.pageHalfTag": "含页面部分 · 需刷新页面",
+        "settings.currentEngine": "当前引擎 v{0}",
+        "settings.engineNotInstalled": "（引擎未安装）",
+        "settings.plugins.enabling": "正在启用 {0}…",
+        "settings.plugins.disabling": "正在禁用 {0}…",
+        "settings.plugins.installing": "正在安装 {0}…",
+        "settings.plugins.uninstalling": "正在卸载 {0}…",
+        "settings.plugins.reloading": "正在刷新…",
+        "settings.plugins.reloaded": "页面已刷新。",
+        "settings.plugins.reloadUnavailable": "刷新不可用：{0}",
+        "settings.plugins.repairing": "正在修复插件…",
+        "settings.plugins.checking": "检查中…",
+        "settings.plugins.installingShort": "正在安装…",
+        "settings.plugins.uninstallingShort": "正在卸载…",
+        "settings.plugins.preparingPnpm": "正在准备 pnpm 环境…",
+        "settings.plugins.preparingBundle": "正在准备本地捆绑…",
+        "settings.plugins.inSync": "插件状态一致",
+        "settings.plugins.needRestartSuffix": " —— 需重启引擎才能生效。",
+        "settings.plugins.noRestartSuffix": " —— 无需重启引擎。",
+        "settings.plugins.firstError": " 首个错误：{0}",
+        "settings.plugins.restartUnavailable": "重启不可用：{0}",
+        "settings.plugins.checkBusy": "已有检查正在进行…",
         "settings.saved": "已保存",
       },
       en: {
@@ -369,10 +442,19 @@
         "settings.update.checkNow": "Check Engine Update Now",
         "settings.plugins": "Third-party plugins (check = install, uncheck = uninstall)",
         "settings.plugins.sub": "Two independent states, in two-way live sync with the Harness plugin market: (1) the “install” checkbox mirrors install/uninstall; (2) the “enable” toggle mirrors loaded/disabled (off does not uninstall). How each applies: install/uninstall needs an engine restart (the bundle list is assembled only at boot); enable/disable applies immediately (the engine hot-reloads the patch layer); a plugin with a page half also needs a page reload — that difference is tagged on its row. Third-party plugins run third-party code with your permissions — off by default; review their source before enabling.",
-        "settings.plugins.installLabel": "Install",
+        "settings.firstRun.title": "First run: enable the bundled plugins",
+        "settings.firstRun.body": "Bundled plugins are off by default (they install when checked). Enabling them adds: {0}. The engine restarts once right after — that is when they actually take effect.",
+        "settings.firstRun.blocked": "Not installable on the current engine (left out of the recommendation): {0}",
+        "settings.firstRun.enable": "Enable all ({0})",
+        "settings.firstRun.later": "No thanks — I'll pick below",
+        "settings.firstRun.installing": "Installing… this runs pnpm, so the first time takes a while.",
+        "settings.firstRun.done": "Installed: {0}. Restarting the engine now — takes effect when it is back.",
+        "settings.firstRun.needRestart": "Installed: {0}. Click “Restart engine” above to apply.",
+        "settings.firstRun.skipped": "Skipped (engine-incompatible): {0}.",
+        "settings.firstRun.nothing": "They are already installed — nothing to do.",
+        "settings.firstRun.failed": "Failed: {0}. The card stays — you can try again.",
         "settings.plugins.enableLabel": "Enabled",
         "settings.plugins.enabled": "Enabled",
-        "settings.plugins.disabled": "Disabled",
         "settings.plugins.disabledByMarket": "Disabled (plugin market)",
         "settings.plugins.disabledByPatch": "Disabled (profile patch layer)",
         "settings.plugins.driftHint": "Disabled in the plugin market, but the disable has not been written to the profile patch layer yet — “Repair / retry” writes it, and only then does the engine really stop loading it.",
@@ -392,12 +474,42 @@
         "settings.plugins.restarting": "Restarting engine…",
         "settings.plugins.restartHint": "After install/uninstall, restart the engine with the button above (the in-page dsh restart only affects the page itself).",
         "settings.plugins.needRestartBadge": "restart engine",
+        "settings.engineIncompatible": "Engine-incompatible — not available",
+        "settings.plugins.pageHalfTag": "page half · reload page",
+        "settings.currentEngine": "Current engine v{0}",
+        "settings.engineNotInstalled": "(engine not installed)",
+        "settings.plugins.enabling": "Enabling {0}…",
+        "settings.plugins.disabling": "Disabling {0}…",
+        "settings.plugins.installing": "Installing {0}…",
+        "settings.plugins.uninstalling": "Uninstalling {0}…",
+        "settings.plugins.reloading": "Reloading…",
+        "settings.plugins.reloaded": "Page reloaded.",
+        "settings.plugins.reloadUnavailable": "Reload unavailable: {0}",
+        "settings.plugins.repairing": "Repairing plugins…",
+        "settings.plugins.checking": "Checking…",
+        "settings.plugins.installingShort": "Installing…",
+        "settings.plugins.uninstallingShort": "Uninstalling…",
+        "settings.plugins.preparingPnpm": "Preparing pnpm…",
+        "settings.plugins.preparingBundle": "Preparing local bundle…",
+        "settings.plugins.inSync": "Everything is in sync",
+        "settings.plugins.needRestartSuffix": " — restart the engine to apply.",
+        "settings.plugins.noRestartSuffix": " — no restart needed.",
+        "settings.plugins.firstError": " First error: {0}",
+        "settings.plugins.restartUnavailable": "Restart unavailable: {0}",
+        "settings.plugins.checkBusy": "Check already in progress…",
         "settings.saved": "Saved",
       },
     };
 
     // uiLang 优先来自主进程推送（跟随系统时由主进程解析），查询参数兜底。
     let uiLang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "zh";
+
+    /** 取一条文案并做 {0}/{1} 填空（与主进程 L() 的占位符写法一致）。 */
+    function t(key, ...args) {
+      const table = I18N[uiLang] || I18N.zh;
+      const raw = table[key] !== undefined ? table[key] : I18N.zh[key] !== undefined ? I18N.zh[key] : key;
+      return args.reduce((out, value, index) => out.split("{" + index + "}").join(String(value)), raw);
+    }
 
     function applyTexts() {
       const table = I18N[uiLang] || I18N.zh;
@@ -419,23 +531,68 @@
     }
     function stateText(id, s) {
       const st = (s.pluginStatus || {})[id];
-      if (st && st.installed) return (uiLang === "en" ? "Installed v" : "已安装 v") + (st.version || "?");
-      return uiLang === "en" ? "Not installed" : "未安装";
+      if (st && st.installed) return t("settings.plugins.installed", st.version || "?");
+      return t("settings.plugins.notInstalled");
     }
     /** 启用/禁用状态文案（含来源：市场 / profile 补丁层）。 */
     function enabledText(st) {
-      if (!st || !st.installed) return uiLang === "en" ? "Not installed — cannot enable" : "未安装，无法启用";
-      if (st.enabled) return uiLang === "en" ? "Enabled" : "已启用";
-      if (st.disabledBy === "patch")
-        return uiLang === "en" ? "Disabled (profile patch layer)" : "已禁用（profile 补丁层）";
-      return uiLang === "en" ? "Disabled (plugin market)" : "已禁用（插件市场）";
+      if (!st || !st.installed) return t("settings.plugins.notInstalledEnable");
+      if (st.enabled) return t("settings.plugins.enabled");
+      if (st.disabledBy === "patch") return t("settings.plugins.disabledByPatch");
+      return t("settings.plugins.disabledByMarket");
+    }
+
+    /** 目录条目 id → 当前语言的名字（目录来自主进程 payload）。 */
+    function catalogLabel(id) {
+      const entry = (window.__lastCatalog || []).find((c) => c.id === id);
+      if (!entry) return id;
+      return uiLang === "en" ? entry.en || entry.pkg : entry.zh || entry.pkg;
+    }
+
+    // ---- 首次启动卡片 ----------------------------------------------------------
+    // 「随包插件默认全部关闭」的直接后果：装完 GUI 打开，那四个修复一个都没生效。
+    // 主进程在引擎就绪后检测到这种情况会主动把本窗口打开（见 main.js 的 maybeOfferFirstRun），
+    // 卡片就在插件区最上方：一次点击 = 装齐 + 自动重启一次引擎。
+    //
+    // 显示与消失**完全跟随主进程的 payload**（s.firstRun.offer / missing）：渲染层不做任何
+    // 判断，避免两侧各有一套规则而悄悄漂移（装完 missing 空 → offer=false → 下一次 paint 自动隐藏）。
+    let firstRunScrolled = false;
+    function renderFirstRun(s) {
+      const card = document.getElementById("firstRun");
+      if (!card) return;
+      const fr = s.firstRun || {};
+      const missing = Array.isArray(fr.missing) ? fr.missing : [];
+      const blocked = Array.isArray(fr.blocked) ? fr.blocked : [];
+      const show = fr.offer === true && missing.length > 0;
+      card.hidden = !show;
+      if (!show) return;
+      const sep = uiLang === "en" ? ", " : "、";
+      document.getElementById("firstRunBody").textContent = t("settings.firstRun.body", missing.map(catalogLabel).join(sep));
+      const blockedEl = document.getElementById("firstRunBlocked");
+      if (blocked.length > 0) {
+        blockedEl.textContent = t("settings.firstRun.blocked", blocked.map(catalogLabel).join(sep));
+        blockedEl.hidden = false;
+      } else {
+        blockedEl.textContent = "";
+        blockedEl.hidden = true;
+      }
+      document.getElementById("firstRunEnableLabel").textContent = t("settings.firstRun.enable", String(missing.length));
+      // 首次启动是「主进程主动打开这个窗口」的：卡片在插件区，窗口默认停在顶部，不滚过去
+      // 用户只会看到一个普通设置页。每次页面加载只滚一次，之后不跟用户抢滚动条。
+      if (!firstRunScrolled) {
+        firstRunScrolled = true;
+        try {
+          card.scrollIntoView({ block: "center" });
+        } catch {
+          /* 没有该重载也不致命：卡片仍在正确位置 */
+        }
+      }
     }
 
     // ---- 「待重启引擎」标注 ----------------------------------------------------
     // 哪些操作需要重启引擎（按引擎实现）：**安装 / 卸载**改的是 profile 的 bundle 列表，
     // 引擎只在启动时 compose 它，所以必须重启；**启用 / 禁用**写的是补丁层，由引擎 live
     // 热重载即时生效，不需要重启（含页面半边的插件另需刷新页面，走「刷新页面」按钮）。
-    //
     // 标注是**常驻**的（按钮持续脉冲 + 旁边一枚「待重启引擎」小标签），直到引擎真的重启过：
     // 既在点击重启按钮时清除，也在 paint() 里观察到 engineRunning 由 false 变 true 时清除
     // （用户从托盘/重开应用重启也算）。这样不会出现「提示一闪而过、用户没看见」的情况。
@@ -488,11 +645,12 @@
           const engineHint = blocked ? (uiLang === "en" ? entry.enEngine : entry.zhEngine) : "";
           const st = status[entry.id];
           const installed = Boolean(st && st.installed);
-          const enabled = !st || st.enabled !== false;
+          // 与 plugin-state.js 的 `enabled: s.enabled === undefined ? true : Boolean(s.enabled)` 同极性：
+          // 状态缺失时按「引擎默认加载」处理。开关只在 installed 时渲染，所以这里取 false 也
+          // 不会画出错误的勾选态（未安装就不显示开关）。
+          const enabled = st ? st.enabled !== false : false;
           const state = blocked
-            ? uiLang === "en"
-              ? "Engine-incompatible — not available"
-              : "与当前引擎不兼容，不可用"
+            ? t("settings.engineIncompatible")
             : stateText(entry.id, s);
           // 市场已禁用、但补丁层还没落下 → 引擎仍会加载它（两端不一致）。
           const drift = Boolean(st && st.installed && st.marketDisabled && !st.patchDisabled);
@@ -501,14 +659,12 @@
           // 可标注控件当成自己的目标，把启用勾选框嵌进去会让「点启用」顺带切换
           // 安装勾选框（= 意外卸载）。所以启用开关是 .plg-row 的兄弟节点。
           const enableRow = installed
-            ? '<label class="plg-enable-label" style="display:inline-flex;gap:5px;align-items:center;margin:2px 0 0 24px;cursor:' +
-              (busy ? "not-allowed" : "pointer") +
-              ';">' +
+            ? '<label class="plg-enable-label" style="cursor:' + (busy ? "not-allowed" : "pointer") + ';">' +
               '<input type="checkbox" class="plg-enable" data-id="' + escAttr(entry.id) + '" ' + (enabled ? "checked" : "") +
               (busy ? " disabled" : "") +
               ' style="accent-color:#4d9fff;" />' +
               '<span class="hint" style="margin:0;">' +
-              esc(uiLang === "en" ? "Enabled" : "启用") +
+              esc(t("settings.plugins.enableLabel")) +
               "</span></label>"
             : "";
           return (
@@ -530,7 +686,7 @@
             // 状态行：状态 + 仅针对该插件的能力标签。安装/卸载需重启、启用/禁用热重载这两条
             // 通用规则写在段落说明里（每行重复只会把窗口撑大），这里只标「含页面部分」这类
             // 因插件而异的事实（由主进程读 package.json 的 dsh.client 得出，见 pluginHasClientHalf）。
-            '<span class="plg-state hint" style="margin:1px 0 0;display:block;color:' + (blocked ? "#e8806b" : "#4d9fff") + ';">' +
+            '<span class="plg-state hint" style="color:' + (blocked ? "#e8806b" : "#4d9fff") + ';">' +
             esc(state) +
             (installed
               ? ' · <span class="plg-enable-state" style="color:' + (enabled ? "#3fb950" : "#e8806b") + ';">' +
@@ -538,18 +694,12 @@
                 "</span>"
               : "") +
             (st && st.client === true
-              ? '<span class="plg-tag">' +
-                esc(uiLang === "en" ? "page half · reload page" : "含页面部分 · 需刷新页面") +
-                "</span>"
+              ? '<span class="plg-tag">' + esc(t("settings.plugins.pageHalfTag")) + "</span>"
               : "") +
             "</span>" +
             (drift
               ? '<span class="hint" style="margin:0;display:block;color:#e8b96b;">⚠ ' +
-                esc(
-                  uiLang === "en"
-                    ? "Disabled in the plugin market, but the disable has not been written to the profile patch layer yet — “Repair / retry” writes it, and only then does the engine really stop loading it."
-                    : "插件市场已禁用，但禁用尚未写入 profile 补丁层——引擎重启后由「修复 / 重试」补写，届时才真正不加载。",
-                ) +
+                esc(t("settings.plugins.driftHint")) +
                 "</span>"
               : "") +
             "</span></label>" +
@@ -569,18 +719,23 @@
     }
     /** 主进程逐阶段日志 → 友好文案；不认识的原始行保持上一次文案不覆盖。 */
     function friendlyProgress(text) {
-      const t = String(text || "");
-      if (/installing\s|dsh plugin --profile web add|plugin install failed/.test(t))
-        return uiLang === "en" ? "Installing…" : "正在安装…";
-      if (/removing\s|dsh plugin --profile web remove|plugin removed:/.test(t))
-        return uiLang === "en" ? "Uninstalling…" : "正在卸载…";
-      if (/install pnpm/.test(t)) return uiLang === "en" ? "Preparing pnpm…" : "正在准备 pnpm 环境…";
-      if (/stage/i.test(t)) return uiLang === "en" ? "Preparing local bundle…" : "正在准备本地捆绑…";
+      // 注意别把局部变量命名成 `t`：那会遮蔽翻译函数 t()，函数体里再想用翻译函数就会抛
+      // TypeError（这里原先就是 `const t = …`）。
+      const raw = String(text || "");
+      if (/installing\s|dsh plugin --profile web add|plugin install failed/.test(raw))
+        return t("settings.plugins.installingShort");
+      if (/removing\s|dsh plugin --profile web remove|plugin removed:/.test(raw))
+        return t("settings.plugins.uninstallingShort");
+      if (/install pnpm/.test(raw)) return t("settings.plugins.preparingPnpm");
+      if (/stage/i.test(raw)) return t("settings.plugins.preparingBundle");
       return null;
     }
     /** busy 锁：一次只允许一个插件操作；进行中显示进度条并禁用全部操作。 */
     function setPluginBusy(busy, headerText) {
       window.__pluginBusy = Boolean(busy);
+      // 这次 busy 切换直接改了列表里勾选框的 disabled，必须让下一次 paint 重建列表
+      // （见 paint 里的 __pluginsDirty）。
+      window.__pluginsDirty = true;
       const prog = progressEl();
       if (prog) {
         prog.hidden = !window.__pluginBusy;
@@ -590,24 +745,40 @@
       const syncBtn = document.getElementById("btnSyncPlugins");
       const restartBtn = document.getElementById("btnRestartEngine");
       const reloadBtn = document.getElementById("btnReloadPage");
+      // 首次启动卡片的两颗按钮也算插件操作入口（一键开启会跑 pnpm），一样纳入 busy 锁。
+      const frEnableBtn = document.getElementById("btnFirstRunEnable");
+      const frLaterBtn = document.getElementById("btnFirstRunLater");
       if (window.__pluginBusy) {
         if (list) list.querySelectorAll(".plg-check, .plg-enable").forEach((b) => { b.disabled = true; });
         if (syncBtn) { window.__syncWasDisabled = syncBtn.disabled; syncBtn.disabled = true; }
         if (restartBtn) { window.__restartWasDisabled = restartBtn.disabled; restartBtn.disabled = true; }
         if (reloadBtn) { window.__reloadWasDisabled = reloadBtn.disabled; reloadBtn.disabled = true; }
+        if (frEnableBtn) { window.__frEnableWasDisabled = frEnableBtn.disabled; frEnableBtn.disabled = true; }
+        if (frLaterBtn) { window.__frLaterWasDisabled = frLaterBtn.disabled; frLaterBtn.disabled = true; }
       } else {
         // 恢复各按钮进入 busy 前的可用状态（勾选框由 paint 按新状态重绘）。
         if (syncBtn) syncBtn.disabled = window.__syncWasDisabled === true;
         if (restartBtn) restartBtn.disabled = window.__restartWasDisabled === true;
         if (reloadBtn) reloadBtn.disabled = window.__reloadWasDisabled === true;
+        if (frEnableBtn) frEnableBtn.disabled = window.__frEnableWasDisabled === true;
+        if (frLaterBtn) frLaterBtn.disabled = window.__frLaterWasDisabled === true;
         // busy 期间按钮是禁用的，markRestartNeeded 那时加不上高亮；这里按当前状态补一次。
         markRestartNeeded(pendingEngineRestart);
       }
     }
 
+    let lastPaintLang = null;
+    let lastPluginsFingerprint = null;
+
     function paint(s) {
       if (s.uiLang === "zh" || s.uiLang === "en") uiLang = s.uiLang;
-      applyTexts();
+      // applyTexts() 对整个文档跑 querySelectorAll 并重写每个 data-i18n 节点，而它只跟语言
+      // 有关；paint() 在一次操作里会被调用两次（操作完成后一次、busy 解锁后一次），语言没变
+      // 就没必要重跑。
+      if (uiLang !== lastPaintLang) {
+        lastPaintLang = uiLang;
+        applyTexts();
+      }
       document.querySelectorAll('input[name="homeMode"]').forEach((el) => { el.checked = el.value === s.dshHomeMode; });
       document.querySelectorAll('input[name="closeAction"]').forEach((el) => { el.checked = el.value === s.closeAction; });
       document.querySelectorAll('input[name="updatePolicy"]').forEach((el) => { el.checked = el.value === s.updatePolicy; });
@@ -615,14 +786,22 @@
       document.getElementById("updateAutoCheck").checked = s.updateCheckEnabled !== false;
       window.__lastPayload = s;
       window.__lastCatalog = Array.isArray(s.pluginCatalog) ? s.pluginCatalog : [];
-      renderPlugins(s);
+      renderFirstRun(s);
+      // renderPlugins 会整段替换 #pluginList 的 innerHTML，而它渲染用到的输入就这几样：
+      // 语言、busy 锁、目录、每个条目的状态。指纹没变就不重建（否则每次广播都白重建一遍）。
+      // __pluginsDirty 是显式失效位：setPluginBusy 会直接改列表里勾选框的 disabled，并依赖
+      // 下一次 paint 重建来还原 —— 有它在，即使将来 busy 与指纹的耦合变了也不会漏重建。
+      const fingerprint = JSON.stringify([uiLang, window.__pluginBusy === true, s.pluginCatalog, s.pluginStatus]);
+      if (fingerprint !== lastPluginsFingerprint || window.__pluginsDirty === true) {
+        lastPluginsFingerprint = fingerprint;
+        window.__pluginsDirty = false;
+        renderPlugins(s);
+      }
       const cur = document.getElementById("curEngine");
       const eng = s.installedEngine;
       const engTxt = eng
-        ? (uiLang === "en" ? "Current engine v" + eng : "当前引擎 v" + eng)
-        : uiLang === "en"
-          ? "(engine not installed)"
-          : "（引擎未安装）";
+        ? t("settings.currentEngine", String(eng))
+        : t("settings.engineNotInstalled");
       if (cur && cur.textContent !== engTxt) cur.textContent = engTxt;
       // 引擎真的重启过就撤掉「待重启引擎」标注（无论用户是怎么重启的）。
       settleRestartBadge(s);
@@ -631,7 +810,7 @@
     let flashTimer = null;
     function flashSaved() {
       const el = document.getElementById("saved");
-      el.textContent = uiLang === "en" ? "Saved" : "已保存";
+      el.textContent = t("settings.saved");
       clearTimeout(flashTimer);
       flashTimer = setTimeout(() => { el.textContent = ""; }, 1200);
     }
@@ -649,14 +828,91 @@
       if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
     });
 
+    // ---- 首次启动卡片的两颗按钮 -------------------------------------------------
+    // 结果一律写进插件区底部那条 #pluginMsg：卡片在装成功后**必然消失**（offer 由 payload
+    // 推导），把结果写在卡片里就会出现「点完按钮、消息跟着卡片一起没了」。
+    function pluginMsgEl() {
+      return document.getElementById("pluginMsg");
+    }
+    const frMsg = (text) => {
+      const el = pluginMsgEl();
+      if (el) el.textContent = text;
+    };
+    (function wireFirstRun() {
+      const btnEnable = document.getElementById("btnFirstRunEnable");
+      const btnLater = document.getElementById("btnFirstRunLater");
+      if (!btnEnable || !btnLater) return;
+      const sep = () => (uiLang === "en" ? ", " : "、");
+      btnEnable.addEventListener("click", async () => {
+        if (btnEnable.disabled) return;
+        const header = t("settings.firstRun.installing");
+        setPluginBusy(true, header);
+        frMsg("");
+        try {
+          const res = await api.enableRecommendedPlugins();
+          const fresh = await api.get().catch(() => null);
+          if (fresh) paint(fresh);
+          if (res && res.ok) {
+            const installedNames = (res.installed || []).map(catalogLabel).join(sep());
+            const skippedNames = (res.skipped || []).map(catalogLabel).join(sep());
+            let message;
+            if (installedNames) {
+              // 主进程已经自己去重启引擎了：重启回来这些插件才真正加载。引擎没在跑
+              // （或正在重启）时重启请求会被拒 —— 绝不假装已生效，把「待重启引擎」标注打上。
+              message = res.restart
+                ? t("settings.firstRun.done", installedNames)
+                : t("settings.firstRun.needRestart", installedNames);
+              if (!res.restart) markRestartNeeded(true);
+              if (skippedNames) message += " " + t("settings.firstRun.skipped", skippedNames);
+            } else if (skippedNames) {
+              // 一个都没装（全部与引擎不兼容）：没有任何改动，也就不该打「待重启」标注。
+              message = t("settings.firstRun.skipped", skippedNames);
+            } else {
+              // 竞态兜底：点下去的那一刻它们已经被装上了（插件市场那边刚装完）——
+              // 别把这种情况说成「不兼容」，如实说没动作可做。
+              message = t("settings.firstRun.nothing");
+            }
+            frMsg(message);
+          } else {
+            const detail = (res && ((res.errors && res.errors[0]) || res.error)) || "?";
+            frMsg(t("settings.firstRun.failed", String(detail)));
+          }
+        } catch (error) {
+          frMsg(t("settings.firstRun.failed", String((error && error.message) || error)));
+        } finally {
+          setPluginBusy(false);
+          const freshFinal = await api.get().catch(() => window.__lastPayload || null);
+          if (freshFinal) paint(freshFinal);
+        }
+      });
+      btnLater.addEventListener("click", async () => {
+        if (btnLater.disabled) return;
+        btnLater.disabled = true;
+        try {
+          await api.dismissFirstRun();
+          const fresh = await api.get().catch(() => null);
+          if (fresh) paint(fresh);
+        } catch (error) {
+          frMsg(t("settings.firstRun.failed", String((error && error.message) || error)));
+          btnLater.disabled = false;
+        }
+      });
+    })();
+
     // 内容高度自适应：语言切换 / 数据到达 / 主题变化时通知主进程重设窗口高度。
     let rafPending = false;
+    // 上一次真的发出去的高度。ResizeObserver 观察的是 document.body，而主进程收到高度会
+    // setContentSize —— 那又会改变布局、再次触发 observer。没有这个去重就是一个
+    // 「观察 → IPC → 改窗口 → 再观察」的回路（rafPending 只在同一帧内合并，挡不住下一帧）。
+    let lastReportedHeight = -1;
     function reportHeight() {
       if (rafPending) return;
       rafPending = true;
       requestAnimationFrame(() => {
         rafPending = false;
         const h = Math.ceil(document.body.scrollHeight + 8);
+        if (h === lastReportedHeight) return; // 高度没变：不必再惊动主进程
+        lastReportedHeight = h;
         // api.autoSize 是 ipcRenderer.invoke（返回 Promise），try/catch 抓不到它的拒绝，
         // 必须挂 .catch —— 否则窗口在调用途中被销毁就是一条未处理的 rejection。
         api.autoSize(h).catch(() => {})
@@ -668,7 +924,6 @@
     }
     window.addEventListener("load", reportHeight);
     // theme 查询参数在脚本末尾设置，DOM 高度可能变化 → 由 ResizeObserver 兜底。
-
     api.get().then((s) => {
       paint(s);
       document.querySelectorAll('input[name="homeMode"]').forEach((el) => {
@@ -711,10 +966,7 @@
       // 也避免两个操作并发改同一个 profile。
       const pluginList = document.getElementById("pluginList");
       const pluginMsg = document.getElementById("pluginMsg");
-      const pluginLabel = (id) => {
-        const entry = (window.__lastCatalog || []).find((c) => c.id === id);
-        return entry ? (uiLang === "en" ? entry.en : entry.zh) : id;
-      };
+      const pluginLabel = (id) => catalogLabel(id);
       pluginList.addEventListener("change", async (e) => {
         if (!e.target) return;
         // ---- 启用 / 禁用开关（不卸载，只切换引擎是否加载）----
@@ -724,9 +976,7 @@
           const label = pluginLabel(id);
           setPluginBusy(
             true,
-            (wantEnabled ? (uiLang === "en" ? "Enabling " : "正在启用 ") : (uiLang === "en" ? "Disabling " : "正在禁用 ")) +
-              label +
-              "…",
+            wantEnabled ? t("settings.plugins.enabling", label) : t("settings.plugins.disabling", label),
           );
           pluginMsg.textContent = "";
           try {
@@ -739,28 +989,23 @@
               // refresh 并提示「刷新后生效」）。需要重启时则提示重启。
               const reloadBtn = document.getElementById("btnReloadPage");
               if (res.refresh) {
-                pluginMsg.textContent = uiLang === "en"
-                  ? "Applied on the engine side. The plugin's page half needs a Harness page reload to match — click “Reload page”."
-                  : "已生效（引擎侧）。插件页面部分需刷新 Harness 页面才同步 —— 点「刷新页面」。";
+                pluginMsg.textContent = t("settings.plugins.needRefresh");
                 if (reloadBtn) reloadBtn.hidden = false;
               } else {
                 pluginMsg.textContent = wantEnabled
-                  ? (uiLang === "en" ? "Enabled." : "已启用。")
-                  : (uiLang === "en" ? "Disabled." : "已禁用。");
+                  ? t("settings.plugins.enableDone")
+                  : t("settings.plugins.disableDone");
                 if (reloadBtn) reloadBtn.hidden = true;
               }
               if (res.restart) {
-                pluginMsg.textContent = uiLang === "en"
-                  ? "Written to the profile. Restart the engine for it to fully apply."
-                  : "已写入 profile。需重启引擎后完全生效。";
+                pluginMsg.textContent = t("settings.plugins.needRestart");
                 markRestartNeeded(true);
               }
             } else {
-              pluginMsg.textContent =
-                (uiLang === "en" ? "Failed: " : "失败：") + String((res && res.error) || "?");
+              pluginMsg.textContent = t("settings.plugins.failed", String((res && res.error) || "?"));
             }
           } catch (error) {
-            pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
+            pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
             const fresh = await api.get().catch(() => null);
             if (fresh) paint(fresh);
           } finally {
@@ -775,10 +1020,9 @@
         const id = e.target.getAttribute("data-id");
         const wantChecked = e.target.checked;
         const label = pluginLabel(id);
-        const header =
-          (wantChecked
-            ? (uiLang === "en" ? "Installing " : "正在安装 ")
-            : (uiLang === "en" ? "Uninstalling " : "正在卸载 ")) + label + "…";
+        const header = wantChecked
+          ? t("settings.plugins.installing", label)
+          : t("settings.plugins.uninstalling", label);
         setPluginBusy(true, header);
         pluginMsg.textContent = "";
         try {
@@ -787,19 +1031,15 @@
           paint(fresh);
           if (res && res.ok) {
             // 安装和卸载都改了 profile 的 bundle 列表 → 两者都需要重启引擎才挂载/消失。
-            pluginMsg.textContent = wantChecked
-              ? (uiLang === "en" ? "Installed — restart engine to apply." : "已安装 —— 重启引擎后生效。")
-              : (uiLang === "en" ? "Uninstalled — restart engine to apply." : "已卸载 —— 重启引擎后生效。");
+            pluginMsg.textContent = t("settings.plugins.needRestart");
             markRestartNeeded(true);
           } else if (res && res.skipped) {
-            pluginMsg.textContent =
-              (uiLang === "en" ? "Engine-incompatible — not installed." : "与当前引擎不兼容，未安装。");
+            pluginMsg.textContent = t("settings.engineIncompatible");
           } else {
-            pluginMsg.textContent =
-              (uiLang === "en" ? "Failed: " : "失败：") + String((res && res.error) || "?");
+            pluginMsg.textContent = t("settings.plugins.failed", String((res && res.error) || "?"));
           }
         } catch (error) {
-          pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
+          pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
           const fresh = await api.get().catch(() => null);
           if (fresh) paint(fresh);
         } finally {
@@ -819,20 +1059,19 @@
       if (btnReloadPage) {
         btnReloadPage.addEventListener("click", async () => {
           btnReloadPage.disabled = true;
-          pluginMsg.textContent = uiLang === "en" ? "Reloading…" : "正在刷新…";
+          pluginMsg.textContent = t("settings.plugins.reloading");
           try {
             const res = await api.reloadEngineWindow();
             if (res && res.ok === false) {
-              pluginMsg.textContent =
-                (uiLang === "en" ? "Reload unavailable: " : "刷新不可用：") + String(res.error || "?");
-              btnReloadPage.disabled = false;
+              pluginMsg.textContent = t("settings.plugins.reloadUnavailable", String(res.error || "?"));
               return;
             }
-            btnReloadPage.hidden = true;
-            pluginMsg.textContent = uiLang === "en" ? "Page reloaded." : "页面已刷新。";
+            // 刷新成功后按钮**保持可见**：下一次「启用/禁用带页面半边的插件」还要用它。
+            // 之前这里是 hidden = true，而只有 enable 成功路径会把它重新显示 —— 于是刷过一次
+            // 之后，用户再禁用/启用别的插件就再也找不到这个按钮了（提示里却还在让他点它）。
+            pluginMsg.textContent = t("settings.plugins.reloaded");
           } catch (error) {
-            pluginMsg.textContent =
-              (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
+            pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
           } finally {
             btnReloadPage.disabled = false;
           }
@@ -846,13 +1085,12 @@
         const wasPending = pendingEngineRestart;
         markRestartNeeded(false);
         const orig = restartLabel.textContent;
-        restartLabel.textContent = uiLang === "en" ? "Restarting engine…" : "正在重启引擎…";
+        restartLabel.textContent = t("settings.plugins.restarting");
         pluginMsg.textContent = "";
         try {
           const res = await api.restartEngine();
           if (res && res.ok === false) {
-            pluginMsg.textContent =
-              (uiLang === "en" ? "Restart unavailable: " : "重启不可用：") + String(res.reason || "?");
+            pluginMsg.textContent = t("settings.plugins.restartUnavailable", String(res.reason || "?"));
             restartLabel.textContent = orig;
             btnRestartEngine.disabled = false;
             if (wasPending) markRestartNeeded(true); // 重启没发生：标注放回去
@@ -864,7 +1102,7 @@
             btnRestartEngine.disabled = false;
           }, 2000);
         } catch (error) {
-          pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
+          pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
           restartLabel.textContent = orig;
           btnRestartEngine.disabled = false;
           if (wasPending) markRestartNeeded(true); // 重启没发生：标注放回去
@@ -872,12 +1110,13 @@
       });
       btnSyncPlugins.addEventListener("click", async () => {
         if (btnSyncPlugins.disabled) return;
-        btnSyncPlugins.disabled = true;
         const orig = syncLabel.textContent;
-        syncLabel.textContent = uiLang === "en" ? "Repairing…" : "修复中…";
+        syncLabel.textContent = t("settings.plugins.syncing");
         pluginMsg.textContent = "";
         markRestartNeeded(false);
-        setPluginBusy(true, uiLang === "en" ? "Repairing plugins…" : "正在修复插件…");
+        // busy 锁由 setPluginBusy 统一管理（它会先快照当前 disabled 再置 true，退出时还原）。
+        // 这里**不要**自己先 `disabled = true`：那样快照到的就是 true，还原后按钮永远点不动。
+        setPluginBusy(true, t("settings.plugins.repairing"));
         try {
           const res = await api.syncPlugins();
           const fresh = await api.get();
@@ -888,38 +1127,29 @@
           const skipN = (res && Array.isArray(res.skipped) ? res.skipped.length : 0) || 0;
           // 安装/捆绑更新真的发生才提示重启引擎；否则明确告知无需重启。
           const changed = Boolean(res && res.changed) || okN + remN > 0;
-          const msg = [];
-          if (okN > 0) msg.push(uiLang === "en" ? okN + " installed" : "新装 " + okN);
-          if (remN > 0) msg.push(uiLang === "en" ? remN + " uninstalled" : "卸载 " + remN);
-          if (skipN > 0) msg.push(uiLang === "en" ? skipN + " skipped (engine-incompatible)" : "跳过 " + skipN + " 个引擎不兼容项");
-          if (failN > 0) msg.push(uiLang === "en" ? failN + " failed" : "失败 " + failN);
           const head =
-            msg.length > 0
-              ? (uiLang === "en" ? "Done: " : "完成：") + msg.join(uiLang === "en" ? ", " : "，")
-              : uiLang === "en"
-                ? "Everything is in sync"
-                : "插件状态一致";
+            okN + remN + skipN + failN > 0
+              ? t("settings.plugins.done", String(okN), String(remN), String(failN + skipN))
+              : t("settings.plugins.inSync");
           const tail = changed
-            ? uiLang === "en"
-              ? " — restart the engine to apply."
-              : " —— 需重启引擎才能生效。"
-            : uiLang === "en"
-              ? " — no restart needed."
-              : " —— 无需重启引擎。";
+            ? t("settings.plugins.needRestartSuffix")
+            : t("settings.plugins.noRestartSuffix");
           pluginMsg.textContent = head + tail;
           if (failN > 0 && Array.isArray(res.errors) && res.errors[0]) {
-            pluginMsg.textContent += (uiLang === "en" ? " First error: " : " 首个错误：") + String(res.errors[0]);
+            pluginMsg.textContent += t("settings.plugins.firstError", String(res.errors[0]));
           }
           // 有实际变动（新装/卸载/捆绑更新）：标注「待重启引擎」；没有变动则撤掉旧标注。
           markRestartNeeded(changed);
         } catch (error) {
-          pluginMsg.textContent = (uiLang === "en" ? "Failed: " : "失败：") + String((error && error.message) || error);
+          pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
         } finally {
           setPluginBusy(false);
           const freshFinal = await api.get().catch(() => window.__lastPayload || null);
           if (freshFinal) paint(freshFinal);
           syncLabel.textContent = orig;
-          btnSyncPlugins.disabled = false;
+          // 不能用 `= false` 硬覆盖：setPluginBusy(false) 刚刚按进入 busy 前的快照恢复了
+          // 这个按钮（它可能本就该是禁用的），硬写 false 会把快照结论推翻。
+          btnSyncPlugins.disabled = window.__syncWasDisabled === true;
         }
       });
       const btnCheck = document.getElementById("btnCheckUpdate");
@@ -928,7 +1158,7 @@
         if (btnCheck.disabled) return;
         btnCheck.disabled = true;
         const orig = checkLabel.textContent;
-        checkLabel.textContent = uiLang === "en" ? "Checking…" : "检查中…";
+        checkLabel.textContent = t("settings.plugins.checking");
         const restore = (text, delay) => {
           setTimeout(() => {
             checkLabel.textContent = text;
@@ -939,7 +1169,7 @@
           const res = await api.checkUpdate();
           if (res && res.busy) {
             // 主进程已有检查在进行：提示后恢复按钮。
-            checkLabel.textContent = uiLang === "en" ? "Check already in progress…" : "已有检查正在进行…";
+            checkLabel.textContent = t("settings.plugins.checkBusy");
             restore(orig, 1500);
             return;
           }

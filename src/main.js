@@ -48,6 +48,7 @@ const {
   engineThemeForAppearance,
 } = require("./settings-ui");
 const { statusFingerprint } = require("./plugin-state");
+const { firstRunOffer } = require("./first-run");
 const { acceptableEngineUrl, sameOrigin } = require("./engine-url");
 const { preferredOrder, fetchLatestRelease, likelyMainland } = require("./update-sources");
 const { defaultDshHome, hasHomeData, moveHomeData } = require("./home-migrate");
@@ -55,7 +56,6 @@ const { migrateLegacyUserData } = require("./userdata-migrate");
 const { ensureEnginePatches } = require("./engine-patch");
 const {
   CATALOG: PLUGIN_CATALOG,
-  CATALOG_IDS: pluginCatalogIds,
   catalogStatus: pluginCatalogStatus,
   catalogEngineCompat: pluginEngineCompat,
   bundledSourceDir,
@@ -503,6 +503,9 @@ const DEFAULT_SETTINGS = {
   // UI 外观：engine=跟随引擎（Harness 页面主题，默认）/ system=跟随系统 / light / dark。
   // 选 system/light/dark 会同时写回引擎设置文件，两侧一起切换。
   appearance: "engine",
+  // 首次启动的「一键开启内置插件」卡片：用户点过一键开启、或点过「不用了」之后置 true。
+  // 这是**唯一**记录「问过了」的地方 —— 安装状态本身不在这里（勾选框始终镜像真实状态）。
+  firstRunOfferDone: false,
 };
 
 let ENGINE_DIR = null;
@@ -532,6 +535,9 @@ let bundledPluginsUpdatedThisLaunch = [];
 // 本次启动已经提示过插件更新没有（onUrl 每次引擎（重）启动都会跑，只提示第一次）。
 let pluginUpdateNoticeShown = false;
 let pluginFailureRecoveryDone = false;
+// 首次启动的「一键开启」卡片本次启动已经弹过没有：引擎就绪可能发生多次（重启/崩溃重拉），
+// 而模态窗口弹第二次就是骚扰。一次启动只主动弹一次（用户没做决定的话，下次启动再问）。
+let firstRunOfferShownThisLaunch = false;
 let pluginReadyWatchdog = null;
 // 插件特权操作（安装/卸载/启用开关/修复）的主进程互斥：并发调用会对同一个 profile 的
 // package.json 与补丁层做「读—改—写」而互相覆盖（渲染层的 busy 态只覆盖其中一条路径）。
@@ -672,6 +678,7 @@ async function loadSettings() {
     if (typeof parsed.updateCheckEnabled === "boolean") settings.updateCheckEnabled = parsed.updateCheckEnabled;
     if (parsed.closeAction === "tray" || parsed.closeAction === "quit") settings.closeAction = parsed.closeAction;
     if (typeof parsed.autoRestoreLastSession === "boolean") settings.autoRestoreLastSession = parsed.autoRestoreLastSession;
+    if (typeof parsed.firstRunOfferDone === "boolean") settings.firstRunOfferDone = parsed.firstRunOfferDone;
     // 旧版本持久化的 autoPlugins（勾选意图）已废弃：勾选框=安装状态实时镜像，
     // 不再保存期望集合。旧字段保留在 settings.json 里但不再参与任何逻辑。
     if (UI_LOCALES[parsed.locale]) settings.locale = parsed.locale;
@@ -949,6 +956,24 @@ function broadcastSettings() {
   }
 }
 
+/**
+ * 首次启动该不该给出「一键开启内置插件」——决策逻辑全在 src/first-run.js（纯函数、有单测）。
+ * 这里只负责把三份真实状态喂给它：用户是否已做过决定 / 引擎是否已装 / 每个条目的安装与兼容性。
+ */
+function firstRunPayload() {
+  const currentEngine = engineVersion ?? installedVersionNow();
+  const compat = pluginEngineCompat(currentEngine);
+  return firstRunOffer({
+    done: settings.firstRunOfferDone === true,
+    engineInstalled: Boolean(currentEngine),
+    catalog: PLUGIN_CATALOG.map((entry) => ({
+      id: entry.id,
+      engineOk: (compat[entry.id] && compat[entry.id].ok) ?? true,
+    })),
+    status: pluginCatalogStatus(effectiveHomePath()),
+  });
+}
+
 /** 设置窗口看到的数据：持久设置 + 界面语言 + 引擎版本信息 + 插件目录。 */
 function settingsPayload() {
   const currentEngine = engineVersion ?? installedVersionNow();
@@ -974,6 +999,8 @@ function settingsPayload() {
     })),
     // 勾选框 = 安装状态实时镜像：插件状态在这里，设置窗口据此勾/不勾。
     pluginStatus: pluginCatalogStatus(effectiveHomePath()),
+    // 首次启动的「一键开启」卡片：offer=true 时设置窗口才显示；missing 只列该装还没装的。
+    firstRun: firstRunPayload(),
   };
 }
 
@@ -1404,8 +1431,17 @@ function spawnDsh(nodeExec, { onUrl, onExit, onError }) {
 }
 
 function killProcessTree(child, done) {
-  if (!child || child.pid === undefined) {
+  // done 只允许被调用一次：taskkill 的 close 与 error 在某些情况下都会触发，
+  // 而调用方（will-quit / restartEngineNow）会用 done 去启动下一次引擎 —— 调两次
+  // 就会拉起两个引擎进程，其中一个再也不受 GUI 管理。
+  let finished = false;
+  const once = () => {
+    if (finished) return;
+    finished = true;
     done?.();
+  };
+  if (!child || child.pid === undefined) {
+    once();
     return;
   }
   if (process.platform === "win32") {
@@ -1421,10 +1457,10 @@ function killProcessTree(child, done) {
       } catch {
         /* already gone */
       }
-      done?.();
+      once();
     };
     killer.on("close", (code) => {
-      if (code === 0) done?.();
+      if (code === 0) once();
       else fallback();
     });
     killer.on("error", fallback);
@@ -1440,7 +1476,7 @@ function killProcessTree(child, done) {
       } catch {
         /* already gone */
       }
-      done?.();
+      once();
     }, 2000);
   }
 }
@@ -1813,6 +1849,10 @@ function notifyChildWindowsTheme() {
 let engineSettingsWatcher = null;
 let engineSettingsWatchTimer = null;
 let engineSettingsWatchRetries = 0;
+// 「目录还没建出来 → 稍后重试」的定时器。必须持有句柄：stop* 只能清掉它，否则退出/切换
+// 数据目录时一个在途重试会在之后又挂上一个**没人再关**的 fs.watch（句柄泄漏），而且它读的
+// 还是切换前那个 home。
+let engineSettingsWatchRetryTimer = null;
 
 function startEngineSettingsWatcher() {
   stopEngineSettingsWatcher();
@@ -1836,7 +1876,10 @@ function startEngineSettingsWatcher() {
     err("cannot watch engine settings.yaml:", error.message);
     if (engineSettingsWatchRetries < 10) {
       engineSettingsWatchRetries += 1;
-      setTimeout(() => startEngineSettingsWatcher(), 5000);
+      engineSettingsWatchRetryTimer = setTimeout(() => {
+        engineSettingsWatchRetryTimer = null;
+        startEngineSettingsWatcher();
+      }, 5000);
     }
   }
 }
@@ -1845,6 +1888,10 @@ function stopEngineSettingsWatcher() {
   if (engineSettingsWatchTimer) {
     clearTimeout(engineSettingsWatchTimer);
     engineSettingsWatchTimer = null;
+  }
+  if (engineSettingsWatchRetryTimer) {
+    clearTimeout(engineSettingsWatchRetryTimer);
+    engineSettingsWatchRetryTimer = null;
   }
   if (engineSettingsWatcher) {
     try {
@@ -1872,6 +1919,10 @@ let profileWatcher = null;
 let profileWatchTimer = null;
 let profileWatchRetries = 0;
 let lastPluginStatusFingerprint = null;
+// 同 engineSettingsWatchRetryTimer：重试定时器必须可被 stopProfileWatcher 取消，
+// 否则退出/切换数据目录后在途的一次重试会重新挂上两个再也关不掉的 watcher。
+let profileWatchRetryTimer = null;
+let marketWatchRetryTimer = null;
 
 /** profile 清单路径（可能尚不存在：引擎首次运行前由 dsh 创建）。 */
 function profileManifestPath() {
@@ -1910,7 +1961,10 @@ function startProfileWatcher() {
     err("cannot watch profile manifest:", error.message);
     if (profileWatchRetries < 10) {
       profileWatchRetries += 1;
-      setTimeout(() => startProfileWatcher(), 5000);
+      profileWatchRetryTimer = setTimeout(() => {
+        profileWatchRetryTimer = null;
+        startProfileWatcher();
+      }, 5000);
     }
   }
   // 市场状态目录单独 watch：它建得比 profile 晚（引擎首次跑市场才出现），
@@ -1936,7 +1990,10 @@ function startMarketWatcher() {
     // startProfileWatcher（引擎重启/profile 变化）再挂。
     if (marketWatchRetries < 10) {
       marketWatchRetries += 1;
-      setTimeout(() => startMarketWatcher(), 3000);
+      marketWatchRetryTimer = setTimeout(() => {
+        marketWatchRetryTimer = null;
+        startMarketWatcher();
+      }, 3000);
     }
     return;
   }
@@ -1961,6 +2018,14 @@ function stopProfileWatcher() {
   if (profileWatchTimer) {
     clearTimeout(profileWatchTimer);
     profileWatchTimer = null;
+  }
+  if (profileWatchRetryTimer) {
+    clearTimeout(profileWatchRetryTimer);
+    profileWatchRetryTimer = null;
+  }
+  if (marketWatchRetryTimer) {
+    clearTimeout(marketWatchRetryTimer);
+    marketWatchRetryTimer = null;
   }
   if (profileWatcher) {
     try {
@@ -2557,10 +2622,17 @@ function buildMenu() {
   const setHomeMode = (mode) => {
     if (mode === currentHome) return;
     // switchHomeMode handles: data check -> optional move -> save -> restart.
-    applySettingsPatch({ dshHomeMode: mode }).then(() => {
-      log("dsh home mode ->", mode);
-      buildMenu();
-    });
+    // 必须接住 rejection：这条路径来自托盘菜单，没有调用方能接 —— 落成 unhandled
+    // rejection 会让「切换数据目录」失败得无声无息（用户只看到单选框跳回去）。
+    applySettingsPatch({ dshHomeMode: mode })
+      .then(() => {
+        log("dsh home mode ->", mode);
+        buildMenu();
+      })
+      .catch((error) => {
+        err("dsh home mode switch failed:", error);
+        buildMenu(); // 无论成败都按真实 settings 重画单选框
+      });
   };
   const template = [
     {
@@ -3418,6 +3490,14 @@ async function startEngine(nodeExec) {
           err("plugin update notice failed:", error.message);
         }
       }
+      // 首次启动检测：内置插件一个都没装时，主动把设置窗口打开并给出「一键开启」。
+      // 放在这里（而不是 app.whenReady）是因为「引擎已装」是能装插件的前提 ——
+      // 而首次运行时引擎正是在这条流程里刚装上的。
+      try {
+        maybeOfferFirstRun();
+      } catch (error) {
+        err("first-run offer failed:", error.message);
+      }
       scheduleAutoQuit();
     },
     onExit: (code, signal) => {
@@ -3773,6 +3853,106 @@ function rejectForeignSender(event, allow, channel) {
   return true;
 }
 
+/**
+ * 首次启动检测：内置插件还有该装没装的，就主动把设置窗口打开。
+ *
+ * 为什么是「主动打开设置窗口」而不是发个角标：角标是 5 秒自动消失的只读提示（notice.html），
+ * 而装不装插件必须由用户点。设置窗口本身就是模态的，用户在它上面做完决定之前，主窗口不会
+ * 被误操作；卡片就在这一屏的最上方（见 settings.html 的 renderFirstRun）。
+ *
+ * 只在引擎就绪后调用 —— 「引擎已装」是能装插件的前提，而首次运行时引擎正是在这条流程里
+ * 刚装上的。一次启动只主动弹一次（用户没做决定的话，下次启动再问）。
+ */
+function maybeOfferFirstRun() {
+  if (firstRunOfferShownThisLaunch) return;
+  if (settings.firstRunOfferDone === true) return;
+  const offer = firstRunPayload();
+  if (!offer.offer) return;
+  firstRunOfferShownThisLaunch = true;
+  log(
+    "first-run: offering bundled plugins:",
+    offer.missing.join(", "),
+    ...(offer.blocked.length > 0 ? [`(engine-incompatible: ${offer.blocked.join(", ")})`] : []),
+  );
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.show();
+    settingsWin.focus();
+    return;
+  }
+  openSettingsWindow();
+}
+
+/**
+ * 「一键开启」：把内置的四个插件一次装齐（缺哪个装哪个），装完立刻重启一次引擎。
+ *
+ * 为什么必须跟着重启：bundle 列表只在引擎启动时组装（见 plugin-manager 的说明），
+ * 装完不重启 = 什么都没生效 —— 那正是这次改动要消灭的「打开之后其实一个问题都没解决」。
+ * 所以这里不接受「装完让用户自己去点重启」：一次点击 = 真的能用。
+ *
+ * 复用与勾选框**完全相同**的那条路径（syncEnabledPlugins，mode=install：只增不删，不动
+ * 用户手动装的别的东西），并复用启动期那套兜底：本次新装的插件如果让引擎起不来，会走
+ * recoverFromPluginFailure（诊断 → 剔除可疑插件 → 重拉），而不是把用户丢在一个启动不了的壳里。
+ */
+async function enableRecommendedPlugins() {
+  const progressLog = progressLogFor("first-run: enabling bundled plugins");
+  const common = {
+    engineDir: ENGINE_DIR,
+    dshHome: effectiveHomePath(),
+    nodeExec: resolveNodeExecutable(),
+    pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+    stagingRoot: pluginBundledPluginsDir(),
+    log: progressLog,
+  };
+  try {
+    const offer = firstRunPayload();
+    // 期望集合 = 该装的（missing）+ 已经装着的内置条目：后者一并传进去是为了让「随包版本
+    // 更新」也顺带对账掉；install 模式只增不删，不会卸载任何东西。
+    const status = pluginCatalogStatus(effectiveHomePath());
+    const enabledIds = PLUGIN_CATALOG.filter(
+      (entry) => entry.localSource && (offer.missing.includes(entry.id) || (status[entry.id] && status[entry.id].installed)),
+    ).map((entry) => entry.id);
+    if (enabledIds.length === 0) {
+      await saveSettings({ firstRunOfferDone: true });
+      broadcastSettings();
+      return { ok: true, changed: false, installed: [], skipped: [], errors: [] };
+    }
+    const result = await syncEnabledPlugins({ enabledIds, mode: "install", ...common });
+    if (result.installed.length > 0) {
+      pluginsInstalledThisLaunch = [...new Set([...pluginsInstalledThisLaunch, ...result.installed])];
+    }
+    // 真的装上了、或明确因引擎不兼容而跳过 → 这次询问算有过结论，不再主动弹；
+    // 完全失败（多半是网络 / pnpm）时**不置位**：卡片留着，用户可以直接再点一次。
+    const settled = result.installed.length > 0 || result.skipped.length > 0;
+    if (settled) await saveSettings({ firstRunOfferDone: true });
+    sendSettingsProgress("install done");
+    let restarted = false;
+    if (result.installed.length > 0) {
+      const r = restartEngineNow("first-run bundled plugins installed");
+      restarted = Boolean(r && r.ok);
+    }
+    broadcastSettings();
+    return {
+      ok: result.installed.length > 0 || result.errors.length === 0,
+      changed: result.changed,
+      installed: result.installed,
+      skipped: result.skipped,
+      errors: result.errors,
+      restart: restarted,
+      status: pluginCatalogStatus(effectiveHomePath()),
+    };
+  } catch (error) {
+    err("first-run: enabling bundled plugins failed:", error);
+    sendSettingsProgress("failed: " + ((error && error.message) || error));
+    return {
+      ok: false,
+      changed: false,
+      installed: [],
+      skipped: [],
+      errors: [String((error && error.message) || error)],
+    };
+  }
+}
+
 function registerIpc() {
   ipcMain.handle("settings:get", (event) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "settings:get")) return null;
@@ -3858,6 +4038,27 @@ function registerIpc() {
     if (!lastEngineUrl) return { ok: false, error: "engine is not running" };
     win.loadURL(lastEngineUrl).catch((error) => err("engine reload failed:", error.message));
     return { ok: true };
+  });
+
+  // 首次启动的「一键开启（4 个内置插件）」：走与勾选框同一条安装路径，装完自动重启引擎。
+  ipcMain.handle("plugins:enable-recommended", async (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "plugins:enable-recommended")) {
+      return { ok: false, error: "unauthorized" };
+    }
+    return gatePluginOp(() => enableRecommendedPlugins());
+  });
+
+  // 首次启动卡片的「不用了，我自己选」：只记「问过了」，一个插件都不动。
+  // 之后设置窗口里照样能逐个勾选 —— 这条路不替用户做任何安装决定。
+  ipcMain.handle("first-run:dismiss", async (event) => {
+    if (rejectForeignSender(event, isFromSettingsWindow, "first-run:dismiss")) {
+      return { ok: false, error: "unauthorized" };
+    }
+    const already = settings.firstRunOfferDone === true;
+    if (!already) await saveSettings({ firstRunOfferDone: true });
+    else broadcastSettings();
+    log("first-run: user chose to pick plugins manually");
+    return { ok: true, changed: !already };
   });
 
   // 设置窗口「修复 / 重试」：勾选框已实时镜像安装状态，不再有“收敛到勾选”的

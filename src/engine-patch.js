@@ -103,42 +103,65 @@ function injectedState(lines) {
 }
 
 /**
- * 移除锚点之后、引擎原句 `const slots = ctx.slots;` 之前的**全部**注入块
- * （历史版本可能重复插入 v1/v2/v3，例如旧 GUI 补丁过同一引擎后新 GUI 又打一份），
- * 并清掉文件中游离的 vN 标记行。返回 false 表示无法安全定位边界（引擎布局变化），
- * 调用方必须放弃而非冒险删除。
+ * 移除锚点之后注入的补丁块（历史版本可能重复插入 v1/v2/v3，例如旧 GUI 补丁过同一
+ * 引擎后新 GUI 又打一份），并清掉文件中游离的 vN 标记行。返回 false 表示无法安全
+ * 定位边界（引擎布局变化），调用方必须放弃而非冒险删除。
+ *
+ * 边界**不能**用「下一个 `const slots = ctx.slots;`」来定：那是引擎自己的语句，注入块
+ * 与它之间只要多出任何一行引擎代码（引擎升级时的正常改动），那片代码就会被一起删掉，
+ * 而且删完仍是合法 JS —— 语法检查发现不了，等于静默破坏引擎页面。这里改为按**花括号
+ * 配平**找出注入块自身的结束行：块体第一行是 `if (typeof window !== "undefined") {`，
+ * 从它开始数括号，回到 0 即块结束。解不出配平（缺起始行 / 括号不闭合）就返回 false，
+ * 交给调用方放弃。
  */
 function stripInjectedBlocks(lines, anchorPatterns) {
   const anchorIdx = findBlock(lines, anchorPatterns);
   if (anchorIdx === -1) return false;
-  let start = -1;
-  for (let i = anchorIdx + anchorPatterns.length; i < lines.length; i += 1) {
-    if (lines[i].trim().startsWith("// dsh-gui:")) {
-      start = i;
-      break;
+  for (;;) {
+    let start = -1;
+    for (let i = anchorIdx + anchorPatterns.length; i < lines.length; i += 1) {
+      if (lines[i].trim().startsWith("// dsh-gui:")) {
+        start = i;
+        break;
+      }
     }
-  }
-  if (start === -1) {
-    // 本就没有注入块：只清理可能的游离标记。
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      if (/dsh-gui-last-session-patch v\d+/.test(lines[i])) lines.splice(i, 1);
+    if (start === -1) {
+      // 本就没有注入块：只清理可能的游离标记。
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (/dsh-gui-last-session-patch v\d+/.test(lines[i])) lines.splice(i, 1);
+      }
+      return true;
     }
-    return true;
-  }
-  let end = -1;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (lines[i].trim() === "const slots = ctx.slots;") {
-      end = i;
-      break;
+    // 块体的第一行 `{`（注入块本身是 `if (…) { … }` 一个整体）。
+    let bodyStart = -1;
+    for (let i = start + 1; i < lines.length && i - start <= 8; i += 1) {
+      if (lines[i].trim().endsWith("{")) {
+        bodyStart = i;
+        break;
+      }
     }
-    if (i - start > 2000) break; // 防御：找不到结束行不冒险
+    if (bodyStart === -1) return false;
+    // 花括号配平：跳过字符串/注释不可能引入花括号的干扰 —— 这段代码是我们自己注入的，
+    // 只含 `{` `}` 与不含括号的表达式，直接计数即可。
+    let depth = 0;
+    let end = -1;
+    for (let i = bodyStart; i < lines.length; i += 1) {
+      const text = lines[i];
+      for (const ch of text) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") depth -= 1;
+      }
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+      if (depth < 0) return false; // 配平失败：不敢删
+      if (i - bodyStart > 2000) break; // 防御：找不到结束行不冒险
+    }
+    if (end === -1) return false;
+    lines.splice(start, end - start + 1);
+    // 循环继续：旧 GUI 可能注入过多份，逐块删干净为止。
   }
-  if (end === -1) return false;
-  lines.splice(start, end - start);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/dsh-gui-last-session-patch v\d+/.test(lines[i])) lines.splice(i, 1);
-  }
-  return true;
 }
 
 /**
@@ -161,6 +184,10 @@ function applyLastSession(engineDir, log = () => {}) {
 
   const text = fs.readFileSync(clientFile, "utf8");
   const lines = text.split(/\r?\n/);
+  // 原文件的行尾风格要保住：这个文件有 16000+ 行，写回时统一 join("\n") 会把整份 CRLF
+  // 文件改成 LF —— 虽然 JS 不在乎，但补丁后的文件与包自身的校验/完整性记录差异会变得
+  // 没必要地大（也让人在 diff 里看不出真正改了什么）。
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const { blocks, markers } = injectedState(lines);
 
   // 版本告警（不再是硬门槛）：这个补丁是 `dsh-gui-last-session` 插件的**兜底**，
@@ -287,7 +314,7 @@ function applyLastSession(engineDir, log = () => {}) {
     return { ok: false, reason: "apply(ctx) anchor missing" };
   }
   lines.push(LAST_MARKER);
-  const next = lines.join("\n");
+  const next = lines.join(eol);
   try {
     new Function("window", "__ModuleLoader__", next); // eslint-disable-line no-new-func
   } catch (error) {
@@ -326,14 +353,6 @@ function ensureEnginePatches({ engineDir, log = () => {} }) {
 
 module.exports = {
   ensureEnginePatches,
-  ensureLastSessionPatches: ({ engineDir, log = () => {} }) => {
-    try {
-      return applyLastSession(engineDir, log);
-    } catch (error) {
-      log("last-session patch failed:", error.message);
-      return { ok: false, reason: String(error && error.message) };
-    }
-  },
   // 内部工具（导出供纯单测）。
   findBlock,
   insertAfter,

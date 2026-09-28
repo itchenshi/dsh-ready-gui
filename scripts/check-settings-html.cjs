@@ -98,9 +98,9 @@ check("i18n 中英文都有启用/禁用文案", () => {
   const keys = [
     "settings.plugins.enableLabel",
     "settings.plugins.enabled",
-    "settings.plugins.disabled",
     "settings.plugins.disabledByMarket",
     "settings.plugins.disabledByPatch",
+    "settings.plugins.notInstalledEnable",
     "settings.plugins.driftHint",
     "settings.plugins.reloadPage",
     "settings.plugins.needRefresh",
@@ -109,6 +109,22 @@ check("i18n 中英文都有启用/禁用文案", () => {
     const occurrences = html.split('"' + key + '"').length - 1;
     if (occurrences < 2) throw new Error(key + " should exist in both zh and en tables (found " + occurrences + ")");
   }
+});
+
+check("每个 t() 用到的键在中英文表里都有定义（否则界面会直接显示键名）", () => {
+  // 这条检查是补上「只验存在、不验使用」的漏洞：上面那条只确认某些键被定义过，
+  // 而 t("…") 引用了一个**没定义**的键时，t() 会回退成键名本身显示给用户
+  // （实测踩过：settings.currentEngine / settings.engineNotInstalled 用了却没定义）。
+  const script = html.slice(html.indexOf("<script>"), html.indexOf("</script>"));
+  const tableKeys = new Set();
+  for (const m of html.matchAll(/^\s*"(settings\.[^"]+)"\s*:/gm)) tableKeys.add(m[1]);
+  const used = new Set();
+  for (const m of script.matchAll(/\bt\(\s*"([^"]+)"/g)) used.add(m[1]);
+  const missing = [...used].filter((k) => !tableKeys.has(k));
+  if (missing.length > 0) throw new Error("t() keys with no definition: " + missing.join(", "));
+  // 顺带确认每个键都在两种语言里出现（表是按 zh / en 各写一份的）。
+  const notBoth = [...used].filter((k) => (html.split('"' + k + '"').length - 1) < 2);
+  if (notBoth.length > 0) throw new Error("t() keys missing from one language: " + notBoth.join(", "));
 });
 
 check("刷新页面按钮存在、默认隐藏，且由 refresh 信号驱动", () => {
@@ -137,6 +153,41 @@ check("「待重启引擎」标注存在、默认隐藏，且安装与卸载都�
   if (!/markRestartNeeded\(changed\)/.test(html)) throw new Error("the repair path must follow its own result");
   if (!/settleRestartBadge\(s\)/.test(html)) throw new Error("paint() must settle the badge when the engine restarted");
   if (!/\.plg-need-restart/.test(html)) throw new Error("the badge needs its stylesheet rule");
+});
+
+check("首次使用卡片存在、默认隐藏，且完全跟随主进程 payload", () => {
+  const tag = /<div id="firstRun"[^>]*>/.exec(html);
+  if (!tag) throw new Error("firstRun card not found in the markup");
+  if (!/\bhidden\b/.test(tag[0])) throw new Error("the firstRun card must start hidden");
+  for (const id of ["btnFirstRunEnable", "btnFirstRunLater", "firstRunBody", "firstRunBlocked", "firstRunEnableLabel"]) {
+    if (!html.includes('id="' + id + '"')) throw new Error("missing #" + id);
+  }
+  // 该不该显示只由主进程决定（s.firstRun.offer / missing）：渲染层再判一次就会两侧漂移。
+  if (!/function renderFirstRun\(/.test(html)) throw new Error("renderFirstRun helper missing");
+  if (!/fr\.offer === true/.test(html)) throw new Error("renderFirstRun must follow the payload (fr.offer)");
+  if (!/renderFirstRun\(s\)/.test(html)) throw new Error("paint() must call renderFirstRun(s)");
+  // 两颗按钮各接一条 IPC：一键开启走安装路径，另一颗只记「问过了」，不装任何东西。
+  if (!/api\.enableRecommendedPlugins\(\)/.test(html)) throw new Error("the card must call api.enableRecommendedPlugins");
+  if (!/api\.dismissFirstRun\(\)/.test(html)) throw new Error("the dismiss path must call api.dismissFirstRun");
+  // 结果必须写进 #pluginMsg：卡片在装成功后必然消失（offer 由 payload 推导），写在卡片里等于消息丢失。
+  if (!/function pluginMsgEl\(/.test(html)) throw new Error("results must go to #pluginMsg, not into the card");
+  const keys = [
+    "settings.firstRun.title",
+    "settings.firstRun.body",
+    "settings.firstRun.blocked",
+    "settings.firstRun.enable",
+    "settings.firstRun.later",
+    "settings.firstRun.installing",
+    "settings.firstRun.done",
+    "settings.firstRun.needRestart",
+    "settings.firstRun.skipped",
+    "settings.firstRun.nothing",
+    "settings.firstRun.failed",
+  ];
+  for (const key of keys) {
+    const occurrences = html.split('"' + key + '"').length - 1;
+    if (occurrences < 2) throw new Error(key + " should exist in both zh and en tables (found " + occurrences + ")");
+  }
 });
 
 if (failures > 0) {

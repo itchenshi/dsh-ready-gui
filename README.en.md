@@ -22,7 +22,7 @@ yours, and closing the window leaves one tray icon.**
 |---|---|
 | No command line | Double-click the app. The shell downloads and installs the engine itself (1–2 min on first run, progress on the status page) |
 | No update babysitting | It checks on every launch and **asks** before updating by default; it also notifies you when DSH Ready GUI itself has a new version |
-| No model wiring | Tick a box in **Settings → Third-party plugins** and the bundled plugins are there: model surplus, session resume, gateway routes, key bindings |
+| No model wiring | The first launch asks you: a card at the top of the settings window installs them all in one click — model surplus, session resume, gateway routes, key bindings |
 | Don't lose my conversation | Restarting reopens the conversation you were last in (bundled "session resume") |
 | Don't let anything else read my account | The shell binds to loopback only, and the plugins' own HTTP routes are authenticated — a bare `curl` gets 401 instead of your usage and balance |
 | Take my data with me | The data directory is switchable (default: system `~/.dsh`) and migration is offered when you switch |
@@ -69,7 +69,7 @@ DeepSeek account balance.
 
 On the **models page**, `deepseek-v4.1-flash` under `opencode-go` was **detected, added and hoisted to
 the top by the plugin** — it is the first entry right after install, with nothing added by hand. The
-Command Code route gets both its endpoint and its whole model list (81 models) declared and completed
+Command Code route gets both its endpoint and its whole model list declared and completed
 the same way — nothing to type:
 
 | Auto-added V4.1 model (DSH Settings → Models) |
@@ -96,18 +96,25 @@ npm install    # electron / build dependencies
 npm start      # launch
 ```
 
-Two things worth doing on first launch: tick the plugins you want in **Settings → Third-party
-plugins**, and pick your language and theme in the **Harness page → Settings** (the shell follows
-live, no restart).
+You do not have to go hunting in settings: if any bundled plugin is still missing, the settings window
+opens itself on first launch with the "Enable all" card at the top (one click installs them and restarts
+the engine once; "No thanks — I'll pick below" only records the answer and touches no plugin). All that is
+left is picking your language and theme in the **Harness page → Settings** (the shell follows live, no
+restart).
 
 ## Settings window
 
 | Page | What it changes | Default |
 |---|---|---|
 | Engine updates | Update policy / channel / automatic checks | **Ask before updating** · npm latest · checks on |
-| Third-party plugins | Per-plugin "install" checkbox + "enabled" switch | Mirrors the real state |
+| Third-party plugins | Per-plugin "install" checkbox + "enabled" switch (plus a "Enable all" card on first launch) | Mirrors the real state; bundled plugins start **uninstalled** |
 | Data & desktop | Data directory, close behaviour (hide to tray / quit), reopen last conversation | System `~/.dsh` · hide to tray · on |
 | Language & appearance | Not here — set it in the **Harness page → Settings**; the shell follows live | — |
+
+**First-launch card**: bundled plugins start uninstalled, so once the engine is up the shell checks,
+**opens this window itself**, and lists only what is missing. "Enable all" installs them and restarts the
+engine once; whether to install them is still your call — "No thanks" records the answer and touches
+nothing, and it will not ask again.
 
 The two plugin controls:
 

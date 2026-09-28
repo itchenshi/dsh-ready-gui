@@ -39,8 +39,9 @@ both ends:
    model page probes with `draft.baseURL ?? fallback.baseURL` — so **while the route carries the
    address, you never type it**.
 2. **The models**: at startup it reads the provider's own **public catalog**
-   (`GET .../provider/v1/models`, **no credential required**, 81 models, each carrying
-   `context_length`) and completes the list.
+   (`GET .../provider/v1/models`, **no credential required**) and completes the whole list
+   (how many entries that is depends on upstream and changes, so no count is hard-coded here;
+   each entry carries `context_length`).
 
 Filling is **add-only**: entries you already have (including names and limits you edited) are kept
 verbatim, and missing ones are **appended**, so your own ordering survives. A second pass writes nothing
@@ -188,8 +189,8 @@ of needing to be deleted and re-added.
   API key** — it only writes route configuration; the engine resolves the key itself from `apiKeyEnv`.
 - **Write gate**: the Command Code half touches settings only for routes **you configured yourself** (a
   user-layer entry, e.g. after adding the key). The patch layer declares the default route for everyone
-  purely to supply its endpoint, which says nothing about whether you use it, so 81 models are never
-  pushed into the settings of someone who does not. Which routes count is decided by their endpoint
+  purely to supply its endpoint, which says nothing about whether you use it, so dozens of models are
+  never pushed into the settings of someone who does not. Which routes count is decided by their endpoint
   (`api.commandcode.ai`), not by their name.
 - **Failure boundary**: it depends on the public contracts of the engine's assembly layer, the
   `settings` service and the `llm` events — not on an engine version. If those change, the engine

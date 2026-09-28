@@ -34,7 +34,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 
 const REPO = path.join(__dirname, "..");
 const pm = require(path.join(REPO, "src", "plugin-manager.js"));
@@ -44,6 +44,43 @@ const keep = argv.includes("--keep");
 const engineArgIndex = argv.indexOf("--engine");
 const ENGINE_DIR = engineArgIndex >= 0 ? argv[engineArgIndex + 1] : defaultEngineDir();
 const NODE_EXEC = process.execPath;
+
+/**
+ * 被启动的引擎子进程（第 4 步）。必须能**在任何退出路径上**被杀掉：
+ *   - `child.kill()` 在 Windows 上杀不掉进程树，引擎的孙进程会继续占着端口与临时目录；
+ *   - 早先只在「走到第 4 步之后」显式 kill，而它之后的任何一步抛错都会走 `.catch` →
+ *     `process.exit(2)`，把引擎留在后台（一次失败的验证会泄漏一个常驻服务）。
+ */
+let engineChild = null;
+function killEngineChild() {
+  const child = engineChild;
+  if (!child) return;
+  engineChild = null;
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      try {
+        process.kill(-child.pid, "SIGKILL"); // 负 pid = 整个进程组（spawn 时 detached）
+      } catch {
+        child.kill("SIGKILL");
+      }
+    }
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+}
+process.on("exit", killEngineChild);
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    killEngineChild();
+    process.exit(130);
+  });
+}
 
 /** Where the app puts the engine it downloads: <userData>/dsh-engine. */
 function defaultEngineDir() {
@@ -164,7 +201,10 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   const child = spawn(NODE_EXEC, [engineBin, "web", "--no-open", "--port", "0"], {
     env: { ...process.env, DSH_HOME: home },
     stdio: ["ignore", "pipe", "pipe"],
+    // POSIX 上要能按进程组杀（见 killEngineChild）；Windows 用 taskkill /T。
+    detached: process.platform !== "win32",
   });
+  engineChild = child;
   let out = "";
   let err = "";
   child.stdout.on("data", (chunk) => {
@@ -189,11 +229,7 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
     child.on("close", () => settle(null));
   });
   check(url !== null, `booted${url ? ` -> ${url}` : ` (stderr tail: ${err.slice(-300)})`}`);
-  try {
-    child.kill();
-  } catch {
-    /* already gone */
-  }
+  killEngineChild();
 
   const remaining = ALL.filter((name) => !pm.installedBundles(home).includes(name));
   check(remaining.length === 0, `all four plugins are in the bundle list${remaining.length ? ` (missing: ${remaining.join(", ")})` : ""}`);
@@ -360,5 +396,6 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   process.exit(failures === 0 ? 0 : 1);
 })().catch((error) => {
   console.error("HARNESS ERROR", error);
+  killEngineChild(); // 别把引擎留在后台（它会占着端口与临时 home）
   process.exit(2);
 });

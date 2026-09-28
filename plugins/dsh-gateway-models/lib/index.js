@@ -995,7 +995,7 @@ export function commandCodeRouteIds(userProviders, resolvedProviders, extra = []
  * The guard is the USER layer: the patch layer declares `commandcode` for
  * everyone (that is what supplies the endpoint), so "the route exists" is always
  * true and says nothing about whether the user actually uses Command Code.
- * Writing 81 models into the settings of someone who never configured such a
+ * Writing a catalog's worth of models into the settings of someone who never configured such a
  * route would be exactly the kind of uninvited write this plugin avoids
  * elsewhere — so nothing happens until the user has an entry of their own (which
  * is what adding the API key does).

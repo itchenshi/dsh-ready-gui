@@ -1,4 +1,4 @@
-# smoke-plugin-enable.ps1 - E2E test: install state + enable state, both synced,
+﻿# smoke-plugin-enable.ps1 - E2E test: install state + enable state, both synced,
 # with the enable toggle ACTUALLY taking effect in the engine.
 #
 # A plugin has TWO orthogonal states and the settings window must show both:
@@ -32,7 +32,9 @@
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
+# READ-ONLY source: the engine + profile are copied into a temp userData. $env:APPDATA
+# instead of a hard-coded user name, so this runs on any machine / any account.
+$liveUd = Join-Path $env:APPDATA "DSH Ready GUI"
 
 $PLUGIN = "dsh-model-surplus"
 $ROWID = "model-usage"
@@ -207,51 +209,13 @@ function Wait-Activation($origin, $name, $expected, $timeoutSec, $desc) {
 # rendered state so we can assert the row explains WHY it is disabled.
 $driverFile = Join-Path $env:TEMP ("dsh-plgen-driver-" + [guid]::NewGuid().ToString("N") + ".cjs")
 $driver = @'
-(async () => {
+const { connectToPage, runDriver } = require(process.env.DSH_SMOKE_CDP_LIB);
+runDriver(async () => {
 const port = Number(process.argv[2]);
 const id = process.argv[3];
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function findTarget() {
-  for (let i = 0; i < 60; i++) {
-    try {
-      const res = await fetch("http://127.0.0.1:" + port + "/json");
-      if (res.ok) {
-        const targets = await res.json();
-        const t = targets.find((x) => x.type === "page" && String(x.url).includes("settings.html"));
-        if (t) return t;
-      }
-    } catch (_) { /* app not up yet */ }
-    await wait(500);
-  }
-  throw new Error("settings window target not found");
-}
-
-const target = await findTarget();
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  ws.addEventListener("open", resolve, { once: true });
-  ws.addEventListener("error", () => reject(new Error("ws error")), { once: true });
-});
-let nextId = 1;
-const pending = new Map();
-ws.addEventListener("message", (ev) => {
-  const msg = JSON.parse(String(ev.data));
-  if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-});
-function rpc(method, params) {
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error("rpc timeout: " + method)); }, 30000);
-    pending.set(id, (msg) => { clearTimeout(timer); if (msg.error) reject(new Error(JSON.stringify(msg.error))); else resolve(msg.result); });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-}
-async function evaluate(expression) {
-  const r = await rpc("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error("evaluate failed: " + JSON.stringify(r.exceptionDetails));
-  return r.result.value;
-}
+const page = await connectToPage({ port, urlIncludes: "settings.html" });
+const evaluate = (expr) => page.evaluate(expr);
 
 const stateExpr = `(() => {
   const ins = document.querySelector('.plg-check[data-id="${id}"]');
@@ -291,7 +255,7 @@ async function waitFor(pred, timeoutMs, desc) {
   while (Date.now() < deadline) {
     last = await evaluate(stateExpr);
     if (pred(last)) return last;
-    await wait(300);
+    await page.wait(300);
   }
   throw new Error("timeout: " + desc + " (last=" + JSON.stringify(last) + ")");
 }
@@ -300,7 +264,7 @@ async function waitSettled(expected, timeoutMs, desc) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await evaluate(settledExpr(expected))) return await evaluate(stateExpr);
-    await wait(250);
+    await page.wait(250);
   }
   throw new Error("timeout: " + desc + " (last=" + JSON.stringify(await evaluate(stateExpr)) + ")");
 }
@@ -323,21 +287,33 @@ console.log("driver: ENABLE ok; reloadVisible=" + afterEnable.reloadVisible + ";
 // The plugin has a client half, so the engine reports refresh:true and the UI
 // must offer the page reload (the same signal the market's own switch uses).
 if (!afterEnable.reloadVisible) throw new Error("enabling a client-part plugin must surface the reload action");
-await wait(1500);
+await page.wait(1500);
 
 console.log("driver: toggling DISABLE...");
 if (!(await evaluate(clickExpr))) throw new Error("enable toggle not clickable (disable)");
 const afterDisable = await waitSettled(false, 90000, "disable never settled");
-if (afterDisable.installChecked !== true) throw new Error("disabling must NOT uninstall the plugin");
+if (afterDisable.installChecked !== true) {
+  // Distinguish the two ways this can go wrong: the plugin really was uninstalled, or the
+  // row is mid-repaint and the checkbox simply is not there yet. The old code reported a
+  // bare "disable never settled", which hid both.
+  throw new Error(
+    "disabling must NOT uninstall the plugin, but the install checkbox is now " +
+      JSON.stringify(afterDisable.installChecked) +
+      " (row text: " + afterDisable.text + ")",
+  );
+}
 if (afterDisable.enableChecked !== false) throw new Error("disable did not stick");
 console.log("driver: DISABLE ok; reloadVisible=" + afterDisable.reloadVisible);
 if (!afterDisable.reloadVisible) throw new Error("disabling a client-part plugin must surface the reload action");
 
-ws.close();
+page.close();
 console.log("CDP-STEP PASS");
-})().catch((e) => { console.error("DRIVER FAIL: " + (e && e.stack || e)); process.exit(1); });
+});
 '@
 [System.IO.File]::WriteAllText($driverFile, $driver, [System.Text.UTF8Encoding]::new($false))
+# The driver requires the shared CDP helper by absolute path (the temp .cjs lives outside
+# the repo, so a relative require would not resolve).
+$env:DSH_SMOKE_CDP_LIB = Join-Path $PSScriptRoot "lib\cdp.cjs"
 
 try {
   Write-Host "copying engine into isolated userData..."
@@ -358,6 +334,16 @@ try {
   # (they used to be staged from <repo>/plugins). There is no repo-local source
   # to assert any more; the install itself is exercised by the steps below.
   Write-Host "isolated copy verified"
+
+  # The rename migration must find the REPLACEMENT ($PLUGIN) already installed, and then
+  # carry the old registration over to it. This test used to inherit that precondition from
+  # whatever the developer's live profile happened to contain - so it silently failed with
+  # "boot never removed the pre-rename plugin" whenever the live profile had been cleaned
+  # (the migration had nothing to rename). Install it here instead: the copied profile is
+  # a temp copy, and the plugin is staged from this repo's own plugins/ dir (no network).
+  & node (Join-Path $root "scripts\ensure-plugin-installed.cjs") $ud $homeDir $PLUGIN
+  if ($LASTEXITCODE -ne 0) { throw "could not pre-install $PLUGIN into the isolated profile (exit $LASTEXITCODE)" }
+  Write-Host "precondition: $PLUGIN is installed in the isolated profile"
 
   $patchFile = Join-Path $homeDir "profiles\web\cordis.patch.yml"
   $stateFile = Join-Path $homeDir "profiles\web\.dsh-market\state.json"
@@ -410,6 +396,11 @@ console.log("seeded pre-rename install:", oldPkg);
   [System.IO.File]::WriteAllText($seedFile, $seed, [System.Text.UTF8Encoding]::new($false))
   & node $seedFile $homeDir $LEGACY_PLUGIN
   if ($LASTEXITCODE -ne 0) { throw "seed failed (exit $LASTEXITCODE)" }
+  if ($env:DSH_SMOKE_DEBUG -eq "1") {
+    Write-Host "----- seeded profile manifest -----"
+    Get-Content (Join-Path $homeDir "profiles\web\package.json") -Raw
+    Write-Host "----- end manifest -----"
+  }
 
   $template = "# Your patch layer for this dsh profile`n[]`n"
   [System.IO.File]::WriteAllText($patchFile, $template, [System.Text.UTF8Encoding]::new($true))
@@ -424,11 +415,14 @@ console.log("seeded pre-rename install:", oldPkg);
   }
   Write-Host "precondition set: pre-rename install + BOM'd empty patch layer + market disabled list"
 
+  # firstRunOfferDone=true: this scenario installs ONE plugin itself and asserts the
+  # exact resulting bundle set; the first-run card would install the other three too.
   $json = @{
     updatePolicy       = "ask"
     dshHomeMode        = "app"
     updateCheckEnabled = $false
     closeAction        = "quit"
+    firstRunOfferDone  = $true
   } | ConvertTo-Json -Depth 4
   [System.IO.File]::WriteAllText((Join-Path $ud "settings.json"), $json, [System.Text.UTF8Encoding]::new($false))
 
@@ -455,7 +449,14 @@ console.log("seeded pre-rename install:", oldPkg);
   # the engine's own reconcile re-adopts any resolvable dependency that declares
   # `dsh.bundle`, so pruning bundles alone lets the old plugin come back. That is
   # exactly how the duplicate widget shipped once already.
-  Wait-Log "legacy plugin removed \(renamed\)" 180 "boot never removed the pre-rename plugin"
+  #
+  # Which log line proves it depends on HOW the registration came out: the migration
+  # first runs `dsh plugin remove` (which itself drops bundles + dependency, so the
+  # follow-up prune finds nothing and logs nothing), and only falls back to
+  # "removed (renamed)" when that prune is what actually removes it. Assert the
+  # migration itself instead of one of its two paths: it always logs which
+  # replacement the old entry was carried over to.
+  Wait-Log "legacy plugin replaced by: .*dsh-opencode-go-usage -> dsh-model-surplus" 180 "boot never migrated the pre-rename plugin"
   $profileManifest = Join-Path $homeDir "profiles\web\package.json"
   [void](Wait-Until {
       $b = Get-Bundles $profileManifest

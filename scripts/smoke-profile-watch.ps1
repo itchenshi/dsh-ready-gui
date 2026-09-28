@@ -1,4 +1,4 @@
-# smoke-profile-watch.ps1 - E2E test: settings window <-> plugin market live sync.
+﻿# smoke-profile-watch.ps1 - E2E test: settings window <-> plugin market live sync.
 #
 # The settings window and the in-engine plugin market (dshmarket) both mutate
 # the SAME file <DSH_HOME>/profiles/web/package.json (`dsh.profile.bundles`).
@@ -25,7 +25,9 @@
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$liveUd = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
+# READ-ONLY source: the engine + profile are copied into a temp userData. $env:APPDATA
+# instead of a hard-coded user name, so this runs on any machine / any account.
+$liveUd = Join-Path $env:APPDATA "DSH Ready GUI"
 
 $ud = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-profw-ud-" + [guid]::NewGuid().ToString("N"))
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-profw-home-" + [guid]::NewGuid().ToString("N"))
@@ -123,51 +125,13 @@ console.log("flip " + mode + " -> bundles: " + JSON.stringify(b));
 # immediate install/uninstall) through Chrome DevTools Protocol.
 $driverFile = Join-Path $env:TEMP ("dsh-profw-driver-" + [guid]::NewGuid().ToString("N") + ".cjs")
 $driver = @'
-(async () => {
+const { connectToPage, runDriver } = require(process.env.DSH_SMOKE_CDP_LIB);
+runDriver(async () => {
 const port = Number(process.argv[2]);
 const id = process.argv[3];
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function findTarget() {
-  for (let i = 0; i < 60; i++) {
-    try {
-      const res = await fetch("http://127.0.0.1:" + port + "/json");
-      if (res.ok) {
-        const targets = await res.json();
-        const t = targets.find((x) => x.type === "page" && String(x.url).includes("settings.html"));
-        if (t) return t;
-      }
-    } catch (_) { /* app not up yet */ }
-    await wait(500);
-  }
-  throw new Error("settings window target not found");
-}
-
-const target = await findTarget();
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  ws.addEventListener("open", resolve, { once: true });
-  ws.addEventListener("error", () => reject(new Error("ws error")), { once: true });
-});
-let nextId = 1;
-const pending = new Map();
-ws.addEventListener("message", (ev) => {
-  const msg = JSON.parse(String(ev.data));
-  if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-});
-function rpc(method, params) {
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error("rpc timeout: " + method)); }, 30000);
-    pending.set(id, (msg) => { clearTimeout(timer); if (msg.error) reject(new Error(JSON.stringify(msg.error))); else resolve(msg.result); });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-}
-async function evaluate(expression) {
-  const r = await rpc("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error("evaluate failed: " + JSON.stringify(r.exceptionDetails));
-  return r.result.value;
-}
+const page = await connectToPage({ port, urlIncludes: "settings.html" });
+const evaluate = (expr) => page.evaluate(expr);
 const sel = '.plg-check[data-id="' + id + '"]';
 const stateExpr = `(() => { const b = document.querySelector('${sel}'); return b ? { checked: b.checked, disabled: b.disabled } : null; })()`;
 const clickExpr = `(() => { const b = document.querySelector('${sel}'); if (!b || b.disabled) return false; b.click(); return true; })()`;
@@ -177,7 +141,7 @@ async function waitState(expected, timeoutMs, desc) {
   while (Date.now() < deadline) {
     const s = await evaluate(stateExpr);
     if (s && !s.disabled && s.checked === expected) return;
-    await wait(400);
+    await page.wait(400);
   }
   throw new Error("timeout: " + desc + " (last=" + JSON.stringify(await evaluate(stateExpr)) + ")");
 }
@@ -190,7 +154,7 @@ async function waitProgressVisible(timeoutMs, desc) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await evaluate(progressVisibleExpr)) return;
-    await wait(100);
+    await page.wait(100);
   }
   throw new Error("timeout: " + desc + " (progress banner never appeared)");
 }
@@ -220,11 +184,13 @@ await waitState(true, 180000, "reinstall: checkbox never turned on");
 if (!(await progressHidden())) throw new Error("reinstall: progress banner should be hidden after done");
 console.log("driver: reinstall OK, checkbox checked, banner hidden");
 
-ws.close();
+page.close();
 console.log("CDP-STEP PASS");
-})().catch((e) => { console.error("DRIVER FAIL: " + (e && e.stack || e)); process.exit(1); });
+});
 '@
 [System.IO.File]::WriteAllText($driverFile, $driver, [System.Text.UTF8Encoding]::new($false))
+# The driver requires the shared CDP helper by absolute path.
+$env:DSH_SMOKE_CDP_LIB = Join-Path $PSScriptRoot "lib\cdp.cjs"
 
 try {
   Write-Host "copying engine into isolated userData..."
@@ -239,17 +205,27 @@ try {
 
   # The smoke run needs exactly these: the engine, the web profile manifest,
   # and the catalog packages resolved inside profiles/web/node_modules.
-  Assert-Paths @(
+  #
+  # NOTE: this list used to require `dsh-opencode-go-path`, which was renamed to
+  # `dsh-gateway-models` in v0.6.0. The assertion therefore only held while the
+  # developer's live profile still carried the old name, and started failing with
+  # "isolated copy is missing a required path" once that profile was cleaned - even
+  # though nothing was wrong with the app. Assert the CURRENT package instead, and
+  # derive it from the repo's own catalog so the next rename cannot break it again.
+  $catalogPackages = @(& node -e "const m=require('./src/plugin-manager.js');console.log(m.CATALOG.map(e=>e.pkg).join(' '))")
+  if ($LASTEXITCODE -ne 0 -or -not $catalogPackages) { throw "could not read the plugin catalog" }
+  $required = @(
     (Join-Path $ud "dsh-engine\node_modules\@deepseek-ai\dsh\package.json"),
-    (Join-Path $homeDir "profiles\web\package.json"),
-    (Join-Path $homeDir "profiles\web\node_modules\dshmarket\package.json"),
-    (Join-Path $homeDir "profiles\web\node_modules\dsh-gui-last-session\package.json"),
-    # Renamed chain: dsh-opencode-go-session + dsh-opencode-go-api merged into
-    # dsh-opencode-go, which v0.5.0 split out to npm as dsh-opencode-go-path
-    # (the npm name dsh-opencode-go was already taken by another author).
-    (Join-Path $homeDir "profiles\web\node_modules\dsh-opencode-go-path\package.json")
+    (Join-Path $homeDir "profiles\web\package.json")
   )
-  Write-Host "isolated copy verified"
+  foreach ($pkg in ($catalogPackages -split '\s+' | Where-Object { $_ })) {
+    $candidate = Join-Path $homeDir "profiles\web\node_modules\$pkg\package.json"
+    # Only assert packages that the copied profile actually has: this test does not
+    # install every catalog entry, it just needs the profile to be usable.
+    if (Test-Path $candidate) { $required += $candidate }
+  }
+  Assert-Paths $required
+  Write-Host "isolated copy verified ($($required.Count) paths)"
 
   # Seed a PRE-RENAME install deterministically instead of depending on whatever
   # the live home happens to hold (it may already have migrated). The GUI's boot
@@ -317,11 +293,14 @@ console.log("seeded pre-rename install:", oldPkg);
   # Production-like settings: app-dir mode (overridden by DSH_SHELL_HOME), no
   # update checks. The plugin set is NOT persisted in settings anymore - the
   # checkboxes mirror the real install state, which comes from the profile.
+  # firstRunOfferDone=true: this scenario owns the settings window; the first-run
+  # plugin card (and the pnpm work behind it) must not butt in.
   $json = @{
     updatePolicy       = "ask"
     dshHomeMode        = "app"
     updateCheckEnabled = $false
     closeAction        = "quit"
+    firstRunOfferDone  = $true
   } | ConvertTo-Json -Depth 4
   [System.IO.File]::WriteAllText((Join-Path $ud "settings.json"), $json, [System.Text.UTF8Encoding]::new($false))
 
@@ -431,5 +410,11 @@ console.log("seeded pre-rename install:", oldPkg);
   Start-Sleep -Milliseconds 500
   Remove-Item $ud -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $homeDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item $log, $errLog, $flipFile, $driverFile, $seedFile -Force -ErrorAction SilentlyContinue
+  # Only the files this script actually creates. `$seedFile` used to be listed here but is
+  # never assigned in this script, and PS 5.1 turns a null path into a **terminating** error
+  # under $ErrorActionPreference='Stop' - so the cleanup threw and masked the real result
+  # ("ALL PASS" or the actual failure) with "Cannot bind argument to parameter 'Path'".
+  foreach ($f in @($log, $errLog, $flipFile, $driverFile)) {
+    if ($f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+  }
 }

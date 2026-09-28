@@ -98,7 +98,10 @@ foreach ($name in $Plugins) {
 
   # ---- 3. 工作区干净？ ------------------------------------------------------
   $dirty = & git -C $repoDir status --porcelain
-  if ($dirty) { Write-Warn "工作区有未提交改动，tarball 会包含未提交内容 —— 建议先提交" }
+  # 必须看退出码：git 失败（目录不是仓库 / git 不在 PATH）时 $dirty 是空，
+  # 「工作区干净」与「根本没查成功」在输出上完全一样，脚本会继续去打包一棵来路不明的树。
+  if ($LASTEXITCODE -ne 0) { Write-Warn "无法读取工作区状态（git exit $LASTEXITCODE），跳过该检查" }
+  elseif ($dirty) { Write-Warn "工作区有未提交改动，tarball 会包含未提交内容 —— 建议先提交" }
 
   # ---- 4. 用 git archive 打包（只含被追踪的文件，天然排除 .git / node_modules）----
   # 资产名用 .tgz：注册表（awesome-dsh-plugin）的 tarball: 字段要求 https 的 .tgz，

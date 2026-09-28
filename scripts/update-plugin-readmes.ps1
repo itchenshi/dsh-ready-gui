@@ -112,10 +112,10 @@ foreach ($p in $Plugins) {
     # 到「空行 + > npm 上暂时没有」之前的整块（文件是 CRLF）。
     if ($pair.En) {
       $pattern = '(?ms)^- \*\*Any other DSH host\*\*.*?(?=\r?\n\r?\n> Not on npm yet)'
-      $replacement = (New-InstallBlockEn $name $p.Version)
+      $replacement = (New-InstallBlockEn $name $version)
     } else {
       $pattern = '(?ms)^- \*\*其它 DSH 宿主\*\*.*?(?=\r?\n\r?\n> npm 上暂时没有)'
-      $replacement = (New-InstallBlockZh $name $p.Version)
+      $replacement = (New-InstallBlockZh $name $version)
     }
     # 保持 CRLF 行尾
     if ($text.Contains("`r`n")) { $replacement = $replacement -replace "`r?`n", "`r`n" }

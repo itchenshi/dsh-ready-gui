@@ -19,14 +19,33 @@ public static class Win32Close {
 "@
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$ud = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
+# 隔离的 userData：这个脚本以前把 settings.json **直接写进真实的 %APPDATA%**（跑一次就
+# 覆盖掉用户自己的设置，而且 closeAction 会被永久改成这个测试用的值）。现在只写临时副本。
+$liveUd = Join-Path $env:APPDATA "DSH Ready GUI"
+$ud = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-e2e-ud-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $ud | Out-Null
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-e2e-home-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $homeDir | Out-Null
 $log = Join-Path $env:TEMP ("dsh-e2e-" + $Mode + "-" + [guid]::NewGuid().ToString("N") + ".log")
 $errLog = $log + ".err"
 
-# Preseed closeAction (keep everything else minimal).
-$json = @{ updatePolicy = "ask"; dshHomeMode = "system"; updateCheckEnabled = $true; closeAction = $Mode } | ConvertTo-Json
+function Copy-Tree($src, $dst) {
+  if (-not (Test-Path $src)) { return }
+  $roboLog = Join-Path $env:TEMP ("dsh-e2e-robo-" + [guid]::NewGuid().ToString("N") + ".log")
+  robocopy $src $dst /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /LOG:$roboLog | Out-Null
+  if ($LASTEXITCODE -ge 8) { Write-Host "WARN: robocopy exit $LASTEXITCODE for $src" }
+  Remove-Item $roboLog -Force -ErrorAction SilentlyContinue
+}
+# 引擎必须真的在跑，测试才等得到 "embedded web contents loaded"；pnpm 工具一并带上，
+# 免得启动维护去联网自举。
+Copy-Tree (Join-Path $liveUd "dsh-engine") (Join-Path $ud "dsh-engine")
+Copy-Tree (Join-Path $liveUd "pnpm-tools") (Join-Path $ud "pnpm-tools")
+
+# Preseed closeAction (keep everything else minimal). firstRunOfferDone=true keeps the
+# first-run plugin card out of this scenario: a fresh temp home has no bundled plugins
+# installed, so the app would otherwise open the (modal) settings window on engine
+# ready and steal the main window handle this test sends WM_CLOSE to.
+$json = @{ updatePolicy = "ask"; dshHomeMode = "system"; updateCheckEnabled = $true; closeAction = $Mode; firstRunOfferDone = $true } | ConvertTo-Json
 [System.IO.File]::WriteAllText((Join-Path $ud "settings.json"), $json, [System.Text.UTF8Encoding]::new($false))
 
 $env:DSH_SHELL_USERDATA = $ud
@@ -96,6 +115,7 @@ try {
     Stop-App
   }
 } finally {
+  Remove-Item $ud -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $homeDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
 }

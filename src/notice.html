@@ -2,7 +2,7 @@
 <html data-theme="dark" lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>更新通知</title>
+  <title>DSH Ready GUI</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; }
@@ -46,19 +46,26 @@
     <div id="t"></div>
     <div id="s"></div>
   </div>
-  <button onclick="window.close()" title="关闭">✕</button>
+  <button type="button" onclick="window.close()">✕</button>
   <script>
     const params = new URLSearchParams(location.search);
+    const isEn = params.get("lang") === "en";
     const theme = params.get("theme");
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
-    document.documentElement.lang = params.get("lang") === "en" ? "en" : "zh-CN";
-    document.querySelector("button").title = params.get("lang") === "en" ? "Close" : "关闭";
-    document.getElementById("t").textContent = params.get("lang") === "en" ? "Updated" : "已更新";
+    document.documentElement.lang = isEn ? "en" : "zh-CN";
+    // 文案一律由脚本设置：写死在 HTML 里的中文会在英文界面（或脚本没跑起来时）露出来。
+    document.title = isEn ? "Update" : "更新通知";
+    document.querySelector("button").title = isEn ? "Close" : "关闭";
+    document.getElementById("t").textContent = isEn ? "Updated" : "已更新";
 
     // 右下角提示：默认 5 秒后自动关闭；鼠标悬停暂停计时，移开再计。
     const AUTO_CLOSE_MS = 5000;
     let closeTimer = null;
+    // 指针可能**一开始就在**这个窗口上（提示弹在鼠标底下）：那时不会收到 mouseenter，
+    // 计时器会照常把用户正在看的提示关掉。所以悬停状态要显式记着，arm() 悬停时直接不排程。
+    let hovering = false;
     function arm() {
+      if (hovering) return;
       clearTimeout(closeTimer);
       closeTimer = setTimeout(() => window.close(), AUTO_CLOSE_MS);
     }
@@ -66,8 +73,14 @@
       clearTimeout(closeTimer);
       closeTimer = null;
     }
-    document.body.addEventListener("mouseenter", disarm);
-    document.body.addEventListener("mouseleave", arm);
+    document.body.addEventListener("mouseenter", () => {
+      hovering = true;
+      disarm();
+    });
+    document.body.addEventListener("mouseleave", () => {
+      hovering = false;
+      arm();
+    });
     // 主进程会随后写入标题/副标题；标题一旦非空即开始 5 秒计时。
     const titleEl = document.getElementById("t");
     const observer = new MutationObserver(() => {

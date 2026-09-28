@@ -44,13 +44,30 @@ public static class Win32Modal {
 "@
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$ud = "C:\Users\31352\AppData\Roaming\DSH Ready GUI"
+# 隔离的 userData：这个脚本以前把 settings.json **直接写进真实的 %APPDATA%**，而它还会
+# 用 taskkill /T /F 结束自己启动的进程树 —— 写真实目录等于拿用户的环境做破坏性测试。
+$liveUd = Join-Path $env:APPDATA "DSH Ready GUI"
+$ud = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-modal-ud-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $ud | Out-Null
 $homeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-modal-home-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $homeDir | Out-Null
 $log = Join-Path $env:TEMP ("dsh-modal-" + [guid]::NewGuid().ToString("N") + ".log")
 $errLog = $log + ".err"
 
-$json = @{ updatePolicy = "ask"; dshHomeMode = "system"; updateCheckEnabled = $true; closeAction = "tray" } | ConvertTo-Json
+function Copy-Tree($src, $dst) {
+  if (-not (Test-Path $src)) { return }
+  $roboLog = Join-Path $env:TEMP ("dsh-modal-robo-" + [guid]::NewGuid().ToString("N") + ".log")
+  robocopy $src $dst /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /LOG:$roboLog | Out-Null
+  if ($LASTEXITCODE -ge 8) { Write-Host "WARN: robocopy exit $LASTEXITCODE for $src" }
+  Remove-Item $roboLog -Force -ErrorAction SilentlyContinue
+}
+# 引擎要真的跑起来（这个测试等的是真实窗口与模态行为），pnpm 工具一并带上免联网。
+Copy-Tree (Join-Path $liveUd "dsh-engine") (Join-Path $ud "dsh-engine")
+Copy-Tree (Join-Path $liveUd "pnpm-tools") (Join-Path $ud "pnpm-tools")
+
+# firstRunOfferDone=true: this test drives the settings window itself; the first-run
+# plugin card would be an uninvited second modal on top of its scenario.
+$json = @{ updatePolicy = "ask"; dshHomeMode = "system"; updateCheckEnabled = $true; closeAction = "tray"; firstRunOfferDone = $true } | ConvertTo-Json
 [System.IO.File]::WriteAllText((Join-Path $ud "settings.json"), $json, [System.Text.UTF8Encoding]::new($false))
 
 $env:DSH_SHELL_USERDATA = $ud
@@ -149,7 +166,7 @@ try {
   Stop-App
   Write-Host "ALL PASS"
 } finally {
+  Remove-Item $ud -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $homeDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
-  Remove-Item $env:DSH_SHELL_HOME -Recurse -Force -ErrorAction SilentlyContinue
 }
