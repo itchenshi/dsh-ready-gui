@@ -389,6 +389,48 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   // Leave the home in the state the earlier phases expect.
   for (const e of bundled) setVersion(e.pkg, shippedVersionOf(e));
 
+  // ---------------------------------------------------------------------------
+  // 7) uninstalling is clean.
+  //
+  // The store asks for install / start / uninstall evidence on a disposable profile.
+  // Install and start are phases 1-4; this is the missing third: remove one bundled
+  // plugin through the engine's own path and assert nothing is left behind — neither
+  // the bundle registration nor a dependency entry (a leftover `file:` spec is what
+  // lets the engine reconcile the package straight back in on the next boot).
+  // Done last, because it deliberately changes the home.
+  // ---------------------------------------------------------------------------
+  console.log("\n7) uninstalling a bundled plugin leaves nothing behind");
+  const REMOVE_TARGET = "dsh-keys-setting";
+  const removeEntry = entryOf(REMOVE_TARGET);
+  check(pm.installedBundles(home).includes(REMOVE_TARGET), `precondition: ${REMOVE_TARGET} is installed`);
+
+  const removed = await pm.removePlugin({
+    engineDir: ENGINE_DIR,
+    dshHome: home,
+    pnpmBinDir,
+    pkg: REMOVE_TARGET,
+    nodeExec: NODE_EXEC,
+    log: (...a) => console.log("      [pm]", ...a),
+  });
+  console.log(`      removePlugin ok=${removed.ok}`);
+  pm.pruneProfilePackages(home, [REMOVE_TARGET]);
+
+  check(!pm.installedBundles(home).includes(REMOVE_TARGET), `${REMOVE_TARGET}: gone from the bundle list`);
+  check(
+    !Object.prototype.hasOwnProperty.call(readDeps(), REMOVE_TARGET),
+    `${REMOVE_TARGET}: gone from dependencies (a leftover would be reconciled back in)`,
+  );
+  check(
+    pm.catalogStatus(home)[removeEntry.id].installed === false,
+    `${REMOVE_TARGET}: the settings window would now show it as not installed`,
+  );
+  // The others must be untouched by the removal.
+  const stillThere = bundled.filter((e) => e.pkg !== REMOVE_TARGET && pm.installedBundles(home).includes(e.pkg));
+  check(
+    stillThere.length === bundled.length - 1,
+    `the other ${bundled.length - 1} bundled plugins are unaffected`,
+  );
+
   console.log("\nfinal deps = " + JSON.stringify(readDeps(), null, 2));
   if (keep) console.log(`\nkept: ${root}`);
   else fs.rmSync(root, { recursive: true, force: true });

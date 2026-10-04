@@ -33,7 +33,7 @@
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.0/dsh-keys-setting-0.2.0.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.1/dsh-keys-setting-0.2.1.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
@@ -95,18 +95,37 @@ composer-keys:
 
 ## 权限与边界（给会静态扫描的商城看的）
 
-- **运行依赖：`schemastery`**（纯 JS 的 schema 校验库，无原生制品、无安装脚本）—— 宿主半边用它向
-  引擎的设置服务注册本插件命名空间的 schema。这是唯一的 `dependencies`。
+- **运行依赖：无。** `dependencies` 是空的 —— 和其它三个随包插件一致。
+  宿主半边需要 schema 校验库，用的是**引擎自带的 `@deepseek-ai/schemastery`**
+  （`dsh-settings` / `dsh-llm-pi-ai` 等引擎包 import 的就是它），**不是 npm 上同名的非 scoped 包**。
+  两者同属 3.18.x、API 一致，但只有前者是「随引擎而来」的：它在 `profiles/node_modules/@deepseek-ai/`
+  下，插件装到哪儿都解析得到，而且与引擎设置服务拿到的是**同一个模块实例**。
+  （此前依赖的是非 scoped 的 `schemastery` —— 那既是一份第三方供应链面，也让本插件成为四个随包插件里
+  **唯一**带运行时依赖的一个；0.2.1 已移除。）
 - **文件：本插件不直接读写任何文件。** 偏好值通过引擎自己的设置服务落进 `$DSH_HOME/settings.yaml`，
   源码里没有 `node:fs`。扫描器报的「files 信号」来自这个**间接**写入（以及注释里对 `settings.yaml`
   的说明），不是直接的磁盘操作。
 - **本机路由：一条。** 宿主注册 `GET/POST /composer-keys` 供页面读写偏好 —— 页面拿不到插件私有的设置
   命名空间（设置 RPC 域只服务固定命名空间），这是唯一通道。路由走引擎自己的信任围栏（Host 白名单 +
   浏览器会话 cookie），拿不到围栏时**失败即关闭**；不带 cookie 的裸 `curl` 会得到 `401`。
-- **出站网络：无。** 页面半边的 `fetch` 只打上面那条同源路由。
-- **凭据 / 命令 / 原生制品 / 生命周期脚本：无。**
+- **出站网络：无。** 页面半边的 `fetch` 只打上面那条同源路由 —— 它是**同源**请求，不产生任何对外流量，
+  也不携带凭据。
+- **凭据 / 命令 / 原生制品 / 生命周期脚本：无。** `package.json` 没有 `scripts` 生命周期钩子
+  （只有 `test` / `prepublishOnly`）。
 - **失败边界：** 路由或 settings 服务不可用时，键盘引擎**仍然工作**（只是失去持久化或设置入口）——
   属于降级而不是崩溃。卸载后 `settings.yaml` 里的 `composer-keys` 段会留下，重建插件即恢复原设置。
+
+### 一次性 Profile 的安装 / 启动 / 卸载证据
+
+上面的边界不是只靠读代码得出的，按「一次性 profile」实测过（每次都在临时数据目录里，不碰你的数据）：
+
+| 环节 | 做法 | 结果 |
+|---|---|---|
+| **安装** | 把随包源码 staging 成磁盘目录，再用引擎自己的 `dsh plugin --profile web add file:…` 装进一个临时 profile | 装成功，`node_modules/dsh-keys-setting/` 落地，登记进 profile 的 `dsh.profile.bundles` |
+| **启动** | 用同一 profile 启动引擎（`dsh web --no-open --port 0`） | 引擎正常输出界面地址，四个插件都在 bundle 列表里 —— 即宿主编译期真的 import 了本插件（含 schema 库） |
+| **卸载** | 走引擎自己的 `dsh plugin remove` + 摘掉 profile 里的登记 | 干净移除，不留「登记还在、文件已丢」的条目 |
+
+这三步是仓库里的 `verify:builtin`（GUI 侧）与 `plugin-enable` 用例在跑的路径；本次改动后重跑，**ALL CHECKS PASSED**。
 
 ## 两部分构成
 

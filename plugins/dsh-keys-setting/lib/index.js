@@ -17,7 +17,18 @@
 // half therefore talks to the small route below — the same pattern the
 // third-party side-card plugin uses for its own preferences.
 
-import Schema from 'schemastery'
+// The schema builder comes from the ENGINE'S OWN VENDORED COPY
+// (`@deepseek-ai/schemastery`, the one `dsh-settings` itself imports), not from the
+// unscoped `schemastery` on npm.
+//
+// Both are the same library (3.18.x) and drop-in compatible, but the unscoped one
+// is a THIRD-PARTY runtime dependency this plugin used to pull into every host's
+// profile. That is both a supply-chain surface and exactly what marketplace policy
+// review flags — and it made this the only one of the four bundled plugins with a
+// non-empty `dependencies`. The scoped copy is already present wherever the engine
+// is (it resolves through the profile's node_modules, where the engine's packages
+// live), so importing it removes the dependency instead of swapping one for another.
+import Schema from '@deepseek-ai/schemastery'
 import { ACTIONS, DEFAULTS, sanitizePatch, rejectUntrusted } from './shared.js'
 
 export const name = 'composer-keys'

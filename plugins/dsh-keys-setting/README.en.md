@@ -33,7 +33,7 @@ Settings → General
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # Fallback: install the release tarball (use this if github.com is unreachable for you)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.0/dsh-keys-setting-0.2.0.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.1/dsh-keys-setting-0.2.1.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
@@ -101,9 +101,14 @@ The plugin row's switch (in the `cordis.patch.yml` row config):
 
 ## Permissions and boundaries (for marketplaces that scan statically)
 
-- **Runtime dependency: `schemastery`** (a pure-JS schema library — no native artifacts, no install
-  scripts). The host half uses it to register this plugin's namespace schema with the engine's settings
-  service. It is the only entry under `dependencies`.
+- **Runtime dependencies: none.** `dependencies` is empty — same as the other three bundled plugins.
+  The host half needs a schema library, and uses the **engine's own `@deepseek-ai/schemastery`** (the
+  package `dsh-settings` / `dsh-llm-pi-ai` themselves import) rather than the unscoped `schemastery` on
+  npm. The two are the same 3.18.x library with the same API, but only the former ships **with the
+  engine**: it lives under `profiles/node_modules/@deepseek-ai/`, resolves from wherever the plugin is
+  installed, and is the very same module instance the settings service holds.
+  (It used to depend on the unscoped package — a third-party supply-chain surface, and the only reason
+  this plugin carried a dependency at all. Removed in 0.2.1.)
 - **Files: the plugin reads and writes none directly.** The preference reaches
   `$DSH_HOME/settings.yaml` through the engine's own settings service; there is no `node:fs` in the
   source. A reported "files signal" comes from that **indirect** write (and from the comments mentioning
@@ -112,11 +117,27 @@ The plugin row's switch (in the `cordis.patch.yml` row config):
   the preference — the page cannot reach a plugin-private settings namespace (the settings RPC domain
   serves fixed namespaces only), so this is the only channel. It goes through the engine's trust fence
   (Host allow-list + browser session cookie) and **fails closed**; a bare `curl` gets `401`.
-- **Outbound network: none.** The page half's `fetch` only calls that same-origin route.
-- **Credentials / commands / native artifacts / lifecycle scripts: none.**
+- **Outbound network: none.** The page half's `fetch` only calls that same-origin route — a same-origin
+  request produces no external traffic and carries no credentials.
+- **Credentials / commands / native artifacts / lifecycle scripts: none.** `package.json` declares no
+  lifecycle hooks (only `test` / `prepublishOnly`).
 - **Failure boundary:** if the route or the settings service is unavailable the keyboard engine **still
   works** (only persistence or the settings entry is lost) — a degradation, not a crash. Uninstalling
   leaves the `composer-keys` section in `settings.yaml`, and reinstalling restores the old values.
+
+### Disposable-profile install / start / uninstall evidence
+
+The boundaries above are not just read off the source — they were exercised in throwaway profiles (temp
+data directories; your own data is never touched):
+
+| Step | How | Result |
+|---|---|---|
+| **Install** | stage the bundled source onto disk, then install it into a temp profile with the engine's own `dsh plugin --profile web add file:…` | installed, `node_modules/dsh-keys-setting/` materialised, registered in the profile's `dsh.profile.bundles` |
+| **Start** | boot the engine against that profile (`dsh web --no-open --port 0`) | engine prints its UI URL with all four plugins in the bundle list — i.e. the host half (schema library included) really was imported at assembly time |
+| **Uninstall** | the engine's own `dsh plugin remove` plus pruning the profile registration | removed cleanly, leaving no "registered but missing" entry behind |
+
+These are the paths the repository's `verify:builtin` (GUI side) and the `plugin-enable` suite exercise;
+both were re-run after this change with **ALL CHECKS PASSED**.
 
 ## Two halves
 
