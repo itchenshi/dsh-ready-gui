@@ -33,7 +33,7 @@
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.1/dsh-keys-setting-0.2.1.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.2/dsh-keys-setting-0.2.2.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-gui-last-session",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "DeepSeek Harness plugin: remember the conversation you were last in and reopen it after a restart — implemented as a first-class plugin (host half persists the pointer, client half records and reopens) instead of patching engine files.",
   "type": "module",
   "main": "lib/index.js",
@@ -52,8 +52,10 @@
   "dsh": {
     "compatibility": {
       "node": ">=20",
+      "dsh": ">=0.1.5-rc.2",
       "dshReleases": {
-        "0.1.5-rc.2": "compatible"
+        "0.1.5-rc.2": "compatible",
+        "0.2.0-rc.2": "compatible"
       }
     },
     "bundle": {
