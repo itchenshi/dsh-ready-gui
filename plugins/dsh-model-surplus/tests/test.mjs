@@ -15,6 +15,7 @@ import {
   fetchCommandCode,
   commandCodeApiRoot,
   credentialRefsFor,
+  credentialRoutesFrom,
   normalizeCommandCodeWindow,
   normalizeCommandCodeCredits,
   normalizeCommandCodeUsage,
@@ -428,6 +429,27 @@ await check('credentialRefsFor follows the ROUTE, falling back to the configured
   assert.deepEqual(credentialRefsFor({}, null), [])
   assert.deepEqual(credentialRefsFor(null, null), [])
   assert.deepEqual(credentialRefsFor(undefined, undefined), [])
+})
+
+await check('credentialRoutesFrom reads the resolved providers out of describe()', () => {
+  // The shape engine 0.2.0 returns: descriptors keyed by profile entry id, each with
+  // `value` = fully resolved config (base + user) — which is where `apiKeyEnv` lives.
+  const described = [
+    { ns: 'ui-theme', value: { preference: 'dark' } },
+    { ns: 'llm-pi-ai', value: { providers: { commandcode: { apiKeyEnv: 'COMMANDCODE_API_KEY' } } }, base: {}, user: {} },
+  ]
+  assert.deepEqual(credentialRoutesFrom(described), { commandcode: { apiKeyEnv: 'COMMANDCODE_API_KEY' } })
+  // Anything unexpected must fall back to null (the caller then uses the configured
+  // ref) instead of throwing — this path used to fail SILENTLY on engine 0.2.0, so it
+  // is pinned here rather than left to the live widget to discover.
+  assert.equal(credentialRoutesFrom(undefined), null)
+  assert.equal(credentialRoutesFrom(null), null)
+  assert.equal(credentialRoutesFrom({}), null)
+  assert.equal(credentialRoutesFrom([]), null)
+  assert.equal(credentialRoutesFrom([{ ns: 'other', value: { providers: {} } }]), null)
+  assert.equal(credentialRoutesFrom([{ ns: 'llm-pi-ai' }]), null)
+  assert.equal(credentialRoutesFrom([{ ns: 'llm-pi-ai', value: {} }]), null)
+  assert.equal(credentialRoutesFrom([{ ns: 'llm-pi-ai', value: { providers: 'nope' } }]), null)
 })
 
 await check('resolveSections applies defaults and validates providers', () => {

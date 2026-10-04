@@ -6,11 +6,20 @@
 # package name. Renaming the package must not orphan that choice.
 #
 # Mounts this plugin's halves:
-#   - host  (lib/index.js):   owns the preference in the engine's settings
-#                             document (namespace `composer-keys`) and serves it
-#                             to the page over GET/POST /composer-keys.
+#   - host  (lib/index.js):   owns the preference in this row's own `config` (the
+#                             engine's replacement for the retired settings
+#                             document), and serves it to the page over
+#                             GET/POST /composer-keys.
 #   - client (client/client.js): remaps the composer's Enter gestures and adds
 #                             the settings row to Settings → General.
+#
+# `config: {}` is REQUIRED, not decoration: an inserted row without a config block
+# has no settings entry, so the host half could neither read its own entry id and
+# revision nor write to it (`settings.update()` needs both). Verified against engine
+# 0.2.0-rc.2: with `config: {}` the entry appears in `settings.describe()` and a write
+# through it reaches the running plugin without a restart; without it, neither.
+# The three field defaults live in the plugin's exported `Config`, so an empty block
+# here means "take the schema defaults" rather than "no configuration".
 #
 # Nothing else is patched: the engine's own keymap is left intact, and the page
 # half only intervenes when the user's choice differs from the engine default.
@@ -20,3 +29,4 @@
 - insert:
     - id: composer-keys
       name: dsh-keys-setting
+      config: {}

@@ -3,19 +3,27 @@
 // Owns the "which key sends / which key breaks the line" preference and serves
 // it to the page half over a same-origin JSON route.
 //
-// WHY A HOST HALF AT ALL
-// The preference has to survive restarts, and the page is served from a
-// per-launch random port (the shell spawns `dsh web --port 0`), so browser
-// storage is a different origin on every launch and cannot hold it. The engine's
-// settings document is the durable place: this half registers a namespace with
-// the settings service, so the value lands in `$DSH_HOME/settings.yaml`,
-// is schema-validated, and travels with the data directory.
+// WHERE THE PREFERENCE LIVES (engine 0.2.0)
+// In the plugin's OWN row config, not in a settings document. Engine 0.2.0 replaced
+// the old `settings` service (`register/get/section` — all gone) with `SettingsForms`,
+// and retired `settings.yaml`: tunable values now belong in the plugin's `Config`
+// ("put tunable values in the plugin's Config so users change them in
+// cordis.patch.yml", cordis-plugin-development → references/practices.md), which the
+// Loader validates at activation and the engine can rewrite in place.
+//
+// The three fields are declared `.volatile()` — the marker schemastery provides (the
+// engine's own `dsh-agent-default-model` does the same). That is what makes them
+// live-editable: a write through `settings.update()` reaches the running plugin's
+// config reference WITHOUT a restart, which is exactly what this plugin needs, because
+// the page half reads the value on every keystroke decision.
+//
+// Writing therefore goes through the settings service by ROW ID (+ the revision read
+// from `describe()`), and reading goes through the config reference's `.get()`.
 //
 // WHY A ROUTE
-// The settings RPC domain serves configuration clients a fixed set of
-// namespaces, so a plugin-owned namespace is only readable in-process. The page
-// half therefore talks to the small route below — the same pattern the
-// third-party side-card plugin uses for its own preferences.
+// The page is served from a per-launch random port (the shell spawns
+// `dsh web --port 0`), so browser storage is a different origin on every launch and
+// cannot hold the preference. The page half therefore talks to the small route below.
 
 // The schema builder comes from the ENGINE'S OWN VENDORED COPY
 // (`@deepseek-ai/schemastery`, the one `dsh-settings` itself imports), not from the
@@ -29,14 +37,19 @@
 // is (it resolves through the profile's node_modules, where the engine's packages
 // live), so importing it removes the dependency instead of swapping one for another.
 import Schema from '@deepseek-ai/schemastery'
-import { ACTIONS, DEFAULTS, sanitizePatch, rejectUntrusted } from './shared.js'
+import { ACTIONS, DEFAULTS, readPrefs, sanitizePatch, rejectUntrusted } from './shared.js'
 
 export const name = 'composer-keys'
 
-// `settings` owns the durable value; `webServer` carries the page-facing route.
+// `settings` addresses our own row (and lends the live config write path);
+// `webServer` carries the page-facing route.
 export const inject = ['settings', 'webServer']
 
-/** Settings namespace (lowercase-hyphenated) holding this plugin's preference. */
+/**
+ * Our row id — deliberately the same string as the plugin `name` and the id in
+ * cordis.patch.yml, because that row IS the settings entry this plugin reads and
+ * writes. Renaming the package must not orphan the user's stored choice.
+ */
 const NS = 'composer-keys'
 
 /** Host route the page half reads and writes. */
@@ -45,11 +58,19 @@ const ROUTE_PATH = '/composer-keys'
 /** Reserved body cap: the request is a three-field JSON object. */
 const MAX_BODY_BYTES = 8 * 1024
 
-/** The settings schema: three enums, each defaulting to the engine's behaviour. */
+/**
+ * The plugin's config schema: three enums, each defaulting to the engine's behaviour.
+ *
+ * `.volatile()` on every field is REQUIRED, not cosmetic: `settings.update()` refuses
+ * an entry with no volatile fields ("has no volatile fields"), and only a volatile
+ * field reaches the running plugin without a restart. Omitting it would put the
+ * preference back to "changes do nothing until you restart" — silent, and precisely
+ * the failure this plugin just came back from.
+ */
 export const Config = Schema.object({
-  enter: Schema.union(ACTIONS).default(DEFAULTS.enter),
-  shiftEnter: Schema.union(ACTIONS).default(DEFAULTS.shiftEnter),
-  ctrlEnter: Schema.union(ACTIONS).default(DEFAULTS.ctrlEnter),
+  enter: Schema.union(ACTIONS).default(DEFAULTS.enter).volatile(),
+  shiftEnter: Schema.union(ACTIONS).default(DEFAULTS.shiftEnter).volatile(),
+  ctrlEnter: Schema.union(ACTIONS).default(DEFAULTS.ctrlEnter).volatile(),
 })
 
 /** Read one request body (bounded, JSON object only) or null when unusable. */
@@ -117,14 +138,40 @@ export function apply(ctx, config = {}) {
   }
 
   // Registered through an injection: the settings service may mount after this
-  // plugin, and the namespace must exist before the route can answer.
+  // plugin, and it must be usable before the route can answer.
   ctx.inject(['settings'], (settingsCtx) => {
-    const scope = settingsCtx.settings.register(NS, Config)
+    const settings = settingsCtx.settings
+
+    /**
+     * This plugin's own settings entry, or null while it is not describable yet.
+     * `ns` is the profile entry id — our row id — and `revision` is what
+     * `update()` requires as its conflict guard.
+     */
+    const ownEntry = () => {
+      try {
+        const list = settings.describe({ redactSecrets: true })
+        return Array.isArray(list) ? (list.find((d) => d && d.ns === NS) ?? null) : null
+      } catch (error) {
+        ctx.logger?.warn?.('[composer-keys] describe() failed: %s', error?.message ?? String(error))
+        return null
+      }
+    }
+
     // effect 必须挂在 inject 回调自己的 fiber 上：`ctx.inject(deps, cb)` 起的是**新 fiber**，
     // 挂在外部 ctx 上时，settings 服务被销毁/重建（GUI 热切换插件就会）后这条路由不会随之
-    // 销毁 —— handler 里握着一个已死的 scope（500），而回调再次执行又会重复注册同一个
-    // exact 路由（webServer 会报 duplicate exact route）。
+    // 销毁 —— handler 里握着已死的东西（500），而回调再次执行又会重复注册同一个 exact
+    // 路由（webServer 会报 duplicate exact route）。
     settingsCtx.effect(() => {
+      // We ship our own Settings → General row (the page half), so the engine must not
+      // also auto-generate a page for this namespace — the same call the engine's own
+      // `dsh-agent-default-model` makes, for the same reason.
+      let disposePolicy = null
+      try {
+        disposePolicy = settings.configure({ auto: false })
+      } catch (error) {
+        ctx.logger?.warn?.('[composer-keys] settings.configure() failed: %s', error?.message ?? String(error))
+      }
+
       const dispose = settingsCtx.webServer.register({
         kind: 'exact',
         path: ROUTE_PATH,
@@ -135,7 +182,7 @@ export function apply(ctx, config = {}) {
             // both reads and WRITES the preference.
             if (rejectUntrusted(ctx, req, res)) return
             if (req.method === 'GET') {
-              return sendJson(res, 200, { ok: true, value: scope.get(), defaults: DEFAULTS })
+              return sendJson(res, 200, { ok: true, value: readPrefs(config), defaults: DEFAULTS })
             }
             if (req.method !== 'POST') {
               res.setHeader('allow', 'GET, POST')
@@ -144,22 +191,33 @@ export function apply(ctx, config = {}) {
             const body = await readJsonBody(req)
             if (body === null) return sendJson(res, 400, { ok: false, error: 'invalid body' })
             const patch = sanitizePatch(body)
-            if (Object.keys(patch).length > 0) await scope.update(patch)
-            return sendJson(res, 200, { ok: true, value: scope.get(), defaults: DEFAULTS })
+            if (Object.keys(patch).length > 0) {
+              // The revision is not optional in spirit: without it the engine cannot
+              // tell "the user changed this from another window" from "we are the only
+              // writer", and it refuses with SETTINGS_CONFLICT.
+              const entry = ownEntry()
+              if (entry === null) {
+                ctx.logger?.warn?.('[composer-keys] own settings entry %s is not describable; cannot save', NS)
+                return sendJson(res, 503, { ok: false, error: 'settings namespace unavailable' })
+              }
+              await settings.update(NS, patch, entry.revision)
+            }
+            return sendJson(res, 200, { ok: true, value: readPrefs(config), defaults: DEFAULTS })
           } catch (error) {
             ctx.logger?.warn?.('[composer-keys] request failed: %s', error?.message ?? String(error))
             return sendJson(res, 500, { ok: false, error: 'internal error' })
           }
         },
       })
-      ctx.logger?.info?.('[composer-keys] route ready at %s (namespace %s)', ROUTE_PATH, NS)
+      ctx.logger?.info?.('[composer-keys] route ready at %s (entry %s)', ROUTE_PATH, NS)
       return () => {
         if (typeof dispose === 'function') dispose()
+        if (typeof disposePolicy === 'function') disposePolicy()
       }
     }, 'composer-keys.route')
   })
 }
 
-export { ACTIONS, DEFAULTS, sanitizePatch }
+export { ACTIONS, DEFAULTS, sanitizePatch, readPrefs }
 
 export default { name, inject, apply, Config }

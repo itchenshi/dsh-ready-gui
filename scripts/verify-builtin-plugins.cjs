@@ -245,20 +245,20 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
   //   - dsh-gateway-models has no route; its effect is a settings WRITE (it puts the
   //     DeepSeek V4.1 models in front of the opencode-go list the patch declares).
   //
-  // KNOWN INERT (this is a finding, not a flaky test): engine 0.2.0-rc.2 replaced the
-  // `settings` service with `SettingsForms`, whose API is
-  // `describe / update / replace / mutate / configure` — `get`, `section` and
-  // `register` are GONE (they appear nowhere in the engine; its own code only uses the
-  // five above). dsh-keys-setting calls `settings.register` and dsh-gateway-models
-  // calls `settings.get`/`settings.section`, so on this engine the first never
-  // registers its route and the second returns before writing anything. Both are
-  // SKIPPED SILENTLY — no error on stdout — which is exactly the failure mode this
-  // file exists to catch. They are reported loudly below instead of failing the run,
-  // and the moment either one starts working the assertion turns into a real check.
-  // ---------------------------------------------------------------------------
+  // NOT OBSERVABLE HERE (this is a limitation of the probe, not a verdict on the
+  // plugin): dsh-gateway-models has no HTTP route, and its only effect is a settings
+  // write that it only performs once it can DESCRIBE an `opencode-go` model catalog
+  // (`llm.discoverModels(NS, { provider: 'opencode-go' })`). This disposable profile
+  // configures no opencode-go models and the engine's built-in pi-ai catalog has no
+  // such provider, so there is nothing to detect and the plugin correctly does
+  // nothing — the probe would report the same "no write" whether the plugin were
+  // healthy or dead. Its settings-API port is therefore pinned by unit tests in that
+  // repository (settingsEntry/updateEntry against the describe() shape) instead.
+  //
+  // The other three plugins ARE asserted: if one of them stops applying, the check
+  // below fails.
   const INERT_ON_THIS_ENGINE = {
-    "dsh-keys-setting": "calls settings.register(), removed in engine 0.2.0-rc.2",
-    "dsh-gateway-models": "calls settings.get()/section(), removed in engine 0.2.0-rc.2",
+    "dsh-gateway-models": "no observable effect in this profile (no opencode-go catalog to describe)",
   };
   const inertSeen = [];
 

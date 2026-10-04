@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { CC_PROVIDER, V4_1_MODELS, catalogMemoValue, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
+import { CC_PROVIDER, V4_1_MODELS, catalogMemoValue, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, settingsEntry, updateEntry, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -545,6 +545,47 @@ check('catalogMemoValue: a failure expires fast, a success is reused', () => {
   )
   // A backwards clock jump counts as stale, never as "fresh forever".
   assert.equal(catalogMemoValue({ at: 5000, ok: true, value: 'ok' }, 1000, OK, FAIL), null)
+})
+
+await checkAsync('settingsEntry reads the resolved/user layers out of describe()', async () => {
+  // The shape engine 0.2.0's SettingsForms.describe() returns: one descriptor per
+  // profile entry id, carrying `value` (resolved = base + user), `base`, `user` and
+  // the `revision` that update() now demands. `get()`/`section()` — what this plugin
+  // used to call — no longer exist, and the calls were swallowed into a silent no-op.
+  const described = [
+    { ns: 'ui-theme', value: { preference: 'dark' }, revision: 0 },
+    {
+      ns: 'llm-pi-ai',
+      value: { providers: { 'opencode-go': { api: 'openai-completions', baseURL: 'https://x/v1' } } },
+      user: { providers: { 'opencode-go': { models: [{ id: 'a' }] } } },
+      base: { providers: { 'opencode-go': { api: 'openai-completions' } } },
+      revision: 7,
+    },
+  ]
+  const fake = { describe: () => described, calls: [] }
+  const entry = settingsEntry(fake)
+  assert.equal(entry.resolved.providers['opencode-go'].baseURL, 'https://x/v1', 'resolved layer is read')
+  assert.deepEqual(entry.user.providers['opencode-go'].models, [{ id: 'a' }], 'user layer is read separately')
+  assert.equal(entry.revision, 7, 'the revision is carried through')
+
+  // A missing entry, a junk return value, or a service without describe() must all
+  // yield null (the callers then skip) instead of throwing.
+  assert.equal(settingsEntry({ describe: () => [{ ns: 'other' }] }), null)
+  assert.equal(settingsEntry({ describe: () => [] }), null)
+  assert.equal(settingsEntry({ describe: () => null }), null)
+  assert.equal(settingsEntry({ describe: () => [{ ns: 'llm-pi-ai', value: 'nope' }] })?.resolved, undefined)
+  // describe() being absent is a TypeError in the real service — it must not escape.
+  assert.throws(() => settingsEntry({}), TypeError)
+
+  // updateEntry must send the FRESH revision, so a write planned from an older read
+  // cannot be refused with SETTINGS_CONFLICT.
+  const writes = []
+  const service = {
+    describe: () => [{ ns: 'llm-pi-ai', value: {}, revision: 11 }],
+    update: async (ns, patch, revision) => writes.push({ ns, patch, revision }),
+  }
+  await updateEntry(service, { providers: { 'opencode-go': { models: [] } } })
+  assert.deepEqual(writes, [{ ns: 'llm-pi-ai', patch: { providers: { 'opencode-go': { models: [] } } }, revision: 11 }])
 })
 
 await Promise.resolve()

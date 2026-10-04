@@ -504,7 +504,7 @@ export function withV41ModelsFirst(existing) {
  * have tuned its name or limits) and is never overwritten with our default.
  *
  * @param userProfile - the route exactly as the USER configured it
- *   (`settings.section(NS).providers[PROVIDER]`), or undefined.
+ *   (`settingsEntry(settings).user.providers[PROVIDER]`), or undefined.
  * @param resolvedRoute - the route as the engine resolves it (base + user layers).
  * @param catalog - the models the installed catalog describes for the route, as
  *   `llm.discoverModels()` reports them.
@@ -594,6 +594,48 @@ async function waitForNamespace(settings) {
 }
 
 /**
+ * Read this plugin's `llm-pi-ai` settings entry, or null when it is not readable.
+ *
+ * Engine 0.2.0 replaced the `settings` service with `SettingsForms`: `get(ns)` and
+ * `section(ns)` are GONE (they appear nowhere in the engine; its own code uses only
+ * `describe/update/replace/mutate`). `describe()` is therefore the supported read
+ * path, and per profile entry id it returns `value` (fully RESOLVED — base + user),
+ * `base`, `user`, and the `revision` that `update()` now requires as its conflict
+ * guard.
+ *
+ * Why this is not cosmetic: calling the removed `get()`/`section()` threw
+ * `TypeError`, and every call site swallowed that into a silent no-op — the plugin
+ * still loaded, still served its route, and simply stopped filling model lists. That
+ * is the failure mode the runtime probe in the GUI's verify:builtin caught.
+ *
+ * @returns `{ resolved, user, revision }`, or null.
+ */
+export function settingsEntry(settings) {
+  const list = settings.describe({ redactSecrets: true })
+  if (!Array.isArray(list)) return null
+  const entry = list.find((d) => d !== null && typeof d === 'object' && d.ns === NS)
+  if (entry === null || typeof entry !== 'object') return null
+  return {
+    resolved: entry.value !== null && typeof entry.value === 'object' ? entry.value : undefined,
+    user: entry.user !== null && typeof entry.user === 'object' ? entry.user : undefined,
+    revision: entry.revision,
+  }
+}
+
+/**
+ * Merge one patch into our entry.
+ *
+ * The revision is re-read immediately before writing rather than reused from the
+ * read that planned the patch: another writer (the Models page, a hand edit) can
+ * land in between, and the engine refuses a stale revision with SETTINGS_CONFLICT —
+ * which would otherwise surface as an unexplained failure to fill a list.
+ */
+export async function updateEntry(settings, patch) {
+  const entry = settingsEntry(settings)
+  await settings.update(NS, patch, entry?.revision)
+}
+
+/**
  * Ensure the opencode-go route carries the DeepSeek V4.1 models FIRST. No-ops
  * when the route is absent (only touch it when opencode-go exists), when its
  * catalog cannot be detected, or when the route already has the shape this
@@ -603,30 +645,12 @@ async function ensureV41Models(ctx, settings) {
   const catalog = await detectCatalogModels(ctx)
   if (catalog === undefined) return
 
-  let resolved
-  try {
-    resolved = settings.get(NS)
-  } catch {
-    return
-  }
-  const route = resolved?.providers?.[PROVIDER]
+  const entry = settingsEntry(settings)
+  if (entry === null) return
+  const route = entry.resolved?.providers?.[PROVIDER]
   if (!route) return // no opencode-go route configured
 
-  let userSection
-  try {
-    if (typeof settings.section !== 'function') {
-      // 引擎的 settings provider 没实现 section()（它在类型里是 private）时，自动补模型会
-      // 变成静默失效 —— 正是本仓库别处批评过的那种「什么都没发生也没有日志」。
-      ctx.logger?.warn('[gateway-models] settings.section() is unavailable; skipping the V4.1 auto-add')
-      return
-    }
-    userSection = settings.section(NS)
-  } catch (error) {
-    ctx.logger?.warn('[gateway-models] reading the user settings section failed: %s', error?.message ?? String(error))
-    userSection = undefined
-  }
-
-  const patch = planRouteUpdate(userSection?.providers?.[PROVIDER], route, catalog)
+  const patch = planRouteUpdate(entry.user?.providers?.[PROVIDER], route, catalog)
   if (patch === null) return // already in the shape we maintain
 
   ctx.logger.info(
@@ -636,7 +660,7 @@ async function ensureV41Models(ctx, settings) {
     V4_1_MODELS.map((m) => m.id).join(', '),
     patch.baseURL === undefined ? '' : ` and declaring baseURL ${patch.baseURL}`,
   )
-  await settings.update(NS, { providers: { [PROVIDER]: patch } })
+  await updateEntry(settings, { providers: { [PROVIDER]: patch } })
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,26 +1025,11 @@ export function commandCodeRouteIds(userProviders, resolvedProviders, extra = []
  * is what adding the API key does).
  */
 async function ensureCommandCodeModels(ctx, settings, config = {}) {
-  let userSection
-  try {
-    if (typeof settings.section !== 'function') {
-      ctx.logger?.warn('[gateway-models] settings.section() is unavailable; skipping the Command Code auto-add')
-      return
-    }
-    userSection = settings.section(NS)
-  } catch (error) {
-    ctx.logger?.warn('[gateway-models] reading the user settings section failed: %s', error?.message ?? String(error))
-    return
-  }
-  let resolvedSection
-  try {
-    resolvedSection = settings.get(NS)
-  } catch {
-    resolvedSection = undefined
-  }
+  const entry = settingsEntry(settings)
+  if (entry === null) return
 
-  const userProviders = userSection?.providers
-  const ids = commandCodeRouteIds(userProviders, resolvedSection?.providers, config.commandcodeProviders)
+  const userProviders = entry.user?.providers
+  const ids = commandCodeRouteIds(userProviders, entry.resolved?.providers, config.commandcodeProviders)
   if (ids.length === 0) return // no Command Code route is in use
 
   // One catalog serves every route, so it is resolved once and shared. The memo
@@ -1054,7 +1063,7 @@ async function ensureCommandCodeModels(ctx, settings, config = {}) {
       after,
       declared.length === 0 ? '' : ` and declaring ${declared.join(' + ')}`,
     )
-    await settings.update(NS, { providers: { [id]: patch } })
+    await updateEntry(settings, { providers: { [id]: patch } })
   }
 }
 

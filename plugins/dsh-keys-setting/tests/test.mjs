@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 
 // Host-side pure helpers (./lib/index.js pulls in schemastery; the pure half lives
 // in ./lib/shared.js so this suite runs without an install step).
-import { ACTIONS, DEFAULTS, normalizePrefs, rejectUntrusted, sanitizePatch } from '../lib/shared.js'
+import { ACTIONS, DEFAULTS, normalizePrefs, readPrefs, rejectUntrusted, sanitizePatch } from '../lib/shared.js'
 
 // --- load the client bundle exactly the way the engine does -----------------
 // The engine requires a lazy CJS factory registration (NOT plain ESM):
@@ -108,6 +108,35 @@ check('normalizePrefs falls back to defaults per field', () => {
   assert.deepEqual(normalizePrefs(undefined), DEFAULTS)
   assert.deepEqual(normalizePrefs({ enter: 'newline' }), { enter: 'newline', shiftEnter: 'newline', ctrlEnter: 'send' })
   assert.deepEqual(normalizePrefs({ enter: 'bogus' }), DEFAULTS)
+})
+
+check('readPrefs reads the engine\'s Volatile references', () => {
+  // Engine 0.2.0 hands a `.volatile()` Config field as a reference with .get() —
+  // that is how a settings write reaches the running plugin without a restart.
+  const ref = (value) => ({ get: () => value })
+  assert.deepEqual(
+    readPrefs({ enter: ref('newline'), shiftEnter: ref('send'), ctrlEnter: ref('newline') }),
+    { enter: 'newline', shiftEnter: 'send', ctrlEnter: 'newline' },
+  )
+  // Plain values must keep working: an older engine, a hand-written `config:` block
+  // in the row, and these tests all pass plain strings.
+  assert.deepEqual(
+    readPrefs({ enter: 'newline' }),
+    { enter: 'newline', shiftEnter: 'newline', ctrlEnter: 'send' },
+  )
+  // Invalid and hostile shapes fall back per field, never as a whole.
+  assert.deepEqual(readPrefs({ enter: 'explode', shiftEnter: 42, ctrlEnter: null }), DEFAULTS)
+  assert.deepEqual(readPrefs(undefined), DEFAULTS)
+  assert.deepEqual(readPrefs(null), DEFAULTS)
+  assert.deepEqual(readPrefs([]), DEFAULTS)
+  assert.deepEqual(readPrefs('nope'), DEFAULTS)
+  // The value must be read on EVERY call. Caching it at activation would freeze the
+  // preference at its startup value — the exact bug this port exists to fix.
+  let current = 'send'
+  const live = { enter: { get: () => current } }
+  assert.equal(readPrefs(live).enter, 'send')
+  current = 'newline'
+  assert.equal(readPrefs(live).enter, 'newline')
 })
 
 console.log('\n--- client: gesture recognition ---')

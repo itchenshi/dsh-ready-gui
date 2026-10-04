@@ -472,7 +472,31 @@ export function normalizeBalance(body) {
 }
 
 /**
- * The `llm-pi-ai` provider map, or null when this host has no settings service.
+ * Pull the `llm-pi-ai` provider map out of a `settings.describe()` result.
+ *
+ * Engine 0.2.0 replaced the `settings` service with `SettingsForms`: `get(ns)` and
+ * `section(ns)` are gone, and `describe()` is how a plugin reads another entry's
+ * RESOLVED configuration (each descriptor carries `value` = resolved, `base`, `user`).
+ * The engine's own code uses only `describe/update/replace/mutate`, so this is the
+ * supported read path — `settings.get('llm-pi-ai')` would throw TypeError on 0.2.0 and
+ * silently drop the widget back to the hardcoded ref name.
+ *
+ * Split out as a pure function because that silent fallback is exactly what went
+ * unnoticed once already: keeping the lookup testable means a shape change fails a
+ * test instead of quietly degrading the Command Code quota display.
+ *
+ * @param descriptors - the array `settings.describe()` returns (or anything else).
+ * @returns the resolved provider map, or null when it is not there.
+ */
+export function credentialRoutesFrom(descriptors) {
+  if (!Array.isArray(descriptors)) return null
+  const entry = descriptors.find((d) => d !== null && typeof d === 'object' && d.ns === 'llm-pi-ai')
+  const providers = entry?.value?.providers
+  return providers !== null && typeof providers === 'object' ? providers : null
+}
+
+/**
+ * The `llm-pi-ai` provider map, or null when this host has no usable settings service.
  *
  * Read lazily rather than injected: a host without `settings` must still get the
  * widget (it just falls back to the configured ref), and a missing service must
@@ -480,7 +504,9 @@ export function normalizeBalance(body) {
  */
 function credentialRoutes(ctx) {
   try {
-    return ctx?.get?.('settings')?.get?.('llm-pi-ai')?.providers ?? null
+    const settings = ctx?.get?.('settings')
+    if (typeof settings?.describe !== 'function') return null
+    return credentialRoutesFrom(settings.describe({ redactSecrets: true }))
   } catch {
     return null
   }

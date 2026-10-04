@@ -50,6 +50,33 @@ export function normalizePrefs(raw) {
 }
 
 /**
+ * Read the three preferences out of this plugin's own config.
+ *
+ * Engine 0.2.0 delivers a `.volatile()` Config field as a **Volatile reference** —
+ * an object with `get()` — rather than the plain value, because that is how the
+ * engine hot-applies a change without restarting the plugin (see
+ * `@deepseek-ai/cosmokit`'s volatile protocol, used the same way by the engine's own
+ * `dsh-agent-default-model`). The plugin therefore must call `.get()` on every read;
+ * caching it at activation would freeze the preference at its startup value.
+ *
+ * Plain values are accepted too: an older engine, a hand-written row with a literal
+ * `config:` value, or a test all pass a plain string, and that must keep working.
+ *
+ * @param config - the row config as `apply(ctx, config)` received it.
+ * @returns the normalized preference (always all three keys).
+ */
+export function readPrefs(config) {
+  const raw = {}
+  if (config !== null && typeof config === 'object' && !Array.isArray(config)) {
+    for (const key of Object.keys(DEFAULTS)) {
+      const field = config[key]
+      raw[key] = field !== null && typeof field === 'object' && typeof field.get === 'function' ? field.get() : field
+    }
+  }
+  return normalizePrefs(raw)
+}
+
+/**
  * The engine's own trust fence for a browser-facing route.
  *
  * `ctx.webServer` serves every registered route to ANY caller: the engine's
