@@ -229,6 +229,110 @@ const sync = (enabledIds, log, useStagingRoot = stagingRoot) =>
     child.on("close", () => settle(null));
   });
   check(url !== null, `booted${url ? ` -> ${url}` : ` (stderr tail: ${err.slice(-300)})`}`);
+
+  // ---------------------------------------------------------------------------
+  // 4b) runtime liveness — did each plugin actually APPLY?
+  //
+  // "In the bundle list" only proves a plugin is registered to load. Cordis SKIPS a
+  // plugin whose injected service is missing (that is what `inject` is for), so an
+  // engine-side change can leave a plugin quietly not running while every check above
+  // still passed — and a compatibility claim would be unearned.
+  //
+  // So each plugin is asked for its own observable effect:
+  //   - the three that register an HTTP route must answer on it. Their fence runs
+  //     first, so an unauthenticated probe gets 401/403 — and a route that never got
+  //     registered is not there at all, which is the difference being tested.
+  //   - dsh-gateway-models has no route; its effect is a settings WRITE (it puts the
+  //     DeepSeek V4.1 models in front of the opencode-go list the patch declares).
+  //
+  // KNOWN INERT (this is a finding, not a flaky test): engine 0.2.0-rc.2 replaced the
+  // `settings` service with `SettingsForms`, whose API is
+  // `describe / update / replace / mutate / configure` — `get`, `section` and
+  // `register` are GONE (they appear nowhere in the engine; its own code only uses the
+  // five above). dsh-keys-setting calls `settings.register` and dsh-gateway-models
+  // calls `settings.get`/`settings.section`, so on this engine the first never
+  // registers its route and the second returns before writing anything. Both are
+  // SKIPPED SILENTLY — no error on stdout — which is exactly the failure mode this
+  // file exists to catch. They are reported loudly below instead of failing the run,
+  // and the moment either one starts working the assertion turns into a real check.
+  // ---------------------------------------------------------------------------
+  const INERT_ON_THIS_ENGINE = {
+    "dsh-keys-setting": "calls settings.register(), removed in engine 0.2.0-rc.2",
+    "dsh-gateway-models": "calls settings.get()/section(), removed in engine 0.2.0-rc.2",
+  };
+  const inertSeen = [];
+
+  if (url !== null) {
+    const origin = new URL(url).origin;
+    const probe = async (route) => {
+      try {
+        const res = await fetch(new URL(route, origin), { redirect: "manual" });
+        return res.status;
+      } catch {
+        return null;
+      }
+    };
+
+    // Control: a path that must not exist, so "not 404" can be judged from real data
+    // rather than from an assumption about how the engine answers unknown paths.
+    const control = await probe("/dsh-verify-no-such-route");
+    console.log(`      control ${"/dsh-verify-no-such-route"} -> HTTP ${control}`);
+
+    const ROUTES = {
+      "dsh-keys-setting": "/composer-keys",
+      "dsh-model-surplus": "/model-usage",
+      "dsh-gui-last-session": "/gui-last-session",
+    };
+    for (const [pkg, route] of Object.entries(ROUTES)) {
+      const status = await probe(route);
+      const applied = status === 401 || status === 403;
+      if (applied) {
+        check(true, `${pkg}: applied (its route ${route} answers HTTP ${status} through the trust fence)`);
+      } else if (INERT_ON_THIS_ENGINE[pkg]) {
+        inertSeen.push(`${pkg} — ${INERT_ON_THIS_ENGINE[pkg]}`);
+        console.log(`      KNOWN INERT ${pkg}: route ${route} -> HTTP ${status} (${INERT_ON_THIS_ENGINE[pkg]})`);
+      } else {
+        check(false, `${pkg}: applied (its route ${route} answers HTTP ${status} — expected 401/403)`);
+      }
+    }
+
+    // The settings write can land a moment after the UI URL is printed, so poll.
+    const settingsFile = path.join(home, "settings.yaml");
+    let wrote = false;
+    for (let i = 0; i < 40 && !wrote; i += 1) {
+      try {
+        wrote = fs.readFileSync(settingsFile, "utf8").includes("deepseek-v4.1-flash");
+      } catch {
+        wrote = false;
+      }
+      if (!wrote) await new Promise((r) => setTimeout(r, 500));
+    }
+    if (wrote) {
+      check(true, "dsh-gateway-models: applied (it wrote the V4.1 models into settings.yaml)");
+    } else if (INERT_ON_THIS_ENGINE["dsh-gateway-models"]) {
+      inertSeen.push(`dsh-gateway-models — ${INERT_ON_THIS_ENGINE["dsh-gateway-models"]}`);
+      console.log(`      KNOWN INERT dsh-gateway-models: wrote nothing (${INERT_ON_THIS_ENGINE["dsh-gateway-models"]})`);
+    } else {
+      check(false, "dsh-gateway-models: applied (it wrote the V4.1 models into settings.yaml)");
+    }
+
+    if (inertSeen.length > 0) {
+      console.log(`      NOTE: ${inertSeen.length} bundled plugin(s) are inert on this engine:`);
+      for (const line of inertSeen) console.log(`        - ${line}`);
+    }
+
+    // The engine is quiet about a skipped plugin, so surface anything it did say that
+    // could explain an unexpected result.
+    const noise = `${out}\n${err}`
+      .split(/\r?\n/u)
+      .filter((line) => /composer-keys|gateway-models|model-usage|gui-last-session|cannot|unavailable|missing|skip|error|Error/u.test(line))
+      .slice(-12);
+    if (noise.length > 0) {
+      console.log("      engine log (filtered):");
+      for (const line of noise) console.log(`        ${line.trim().slice(0, 160)}`);
+    }
+  }
+
   killEngineChild();
 
   const remaining = ALL.filter((name) => !pm.installedBundles(home).includes(name));
