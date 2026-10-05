@@ -1,231 +1,105 @@
 # DSH Ready GUI
 
-> A desktop shell for DeepSeek Harness (DSH) on Windows, macOS and Linux: **open it and you have a UI — no command line.**
+A desktop shell for DeepSeek Harness (`@deepseek-ai/dsh`): it installs and updates the engine itself and embeds the engine's web UI in a native window. Current version **0.8.0**.
 
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![license](https://img.shields.io/github/license/itchenshi/dsh-ready-gui)](LICENSE)
 [![release](https://img.shields.io/github/v/release/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/releases)
-[![stars](https://img.shields.io/github/stars/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)]()
 [![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/dsh-ready-gui)
 [![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/dsh-ready-gui)
 [![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/dsh-ready-gui)
 
-DSH itself is an open-source agent framework (`@deepseek-ai/dsh`) that ships as a CLI and a web UI.
-This shell puts it in a native window: **it installs and updates the engine for you, your data stays
-yours, and closing the window leaves one tray icon.**
+## What it does
 
-## Open it and go
-
-| What you want | How it works here |
-|---|---|
-| No command line | Double-click the app. The shell downloads and installs the engine itself (1–2 min on first run, progress on the status page) |
-| No update babysitting | It checks on every launch and **asks** before updating by default; it also notifies you when DSH Ready GUI itself has a new version |
-| No model wiring | The first launch asks you: a card at the top of the settings window installs them all in one click — model surplus, session resume, gateway routes, key bindings |
-| Don't lose my conversation | Restarting reopens the conversation you were last in (bundled "session resume") |
-| Don't let anything else read my account | The shell binds to loopback only, and the plugins' own HTTP routes are authenticated — a bare `curl` gets 401 instead of your usage and balance |
-| Take my data with me | The data directory is switchable (default: system `~/.dsh`) and migration is offered when you switch |
-
-Each bundled plugin is also its own repository (installable into any other DSH host):
-
-| Plugin | One line | Repo |
-|---|---|---|
-| Model surplus `dsh-model-surplus` | Usage / account balance for the active model, right of the session title | [repo](https://github.com/itchenshi/dsh-model-surplus) |
-| Session resume `dsh-gui-last-session` | Reopens your last conversation after a restart | [repo](https://github.com/itchenshi/dsh-gui-last-session) |
-| Gateway routes `dsh-gateway-models` | Declares the OpenCode Go / Command Code route protocol and endpoint, and completes their model lists | [repo](https://github.com/itchenshi/dsh-gateway-models) |
-| Key bindings `dsh-keys-setting` | Enter / Shift+Enter / Ctrl+Enter each set to send or newline | [repo](https://github.com/itchenshi/dsh-keys-setting) |
-
-> **Why bundled instead of installed from npm?** The plan was to publish them, so plugin updates would
-> not wait for a shell release. npm account sign-up is unreachable (`www.npmjs.com` answers with a
-> Cloudflare challenge), so nothing can be published — and a profile that registers a package the
-> registry does not have loses the plugin from the engine's bundle list *and* fails every later install
-> in that profile (both measured). So they stay **bundled**: install the GUI and they are one tick away.
-
-## Screenshots
-
-**Main window**: the **model surplus** sits right of the session title and follows whichever model you
-select — OpenCode Go plan usage (rolling / weekly / monthly percentages plus reset times) and the
-**active model's** total cap, Command Code 5-hour / weekly window usage with remaining credits, or your
-DeepSeek account balance.
-
-| OpenCode Go usage and model cap | Command Code usage and remaining credits | DeepSeek balance |
-|---|---|---|
-| ![OpenCode Go usage and model cap](screenshots/主窗口-opencode-go余量与模型总额-english.png) | ![Command Code usage and remaining credits](screenshots/主窗口-commandcode余量与模型总额-english.png) | ![DeepSeek balance](screenshots/主窗口-deepseek余额-english.png) |
-
-**Settings window**: engine updates, third-party plugins, and data & desktop, all in one place.
-
-| Settings window |
-|---|
-| ![Settings window](screenshots/设置窗口-english.png) |
-
-**DSH settings dialog**: the engine's own settings plus the rows the bundled plugins add.
-
-**Key bindings** on the General page — Enter / Shift+Enter / Ctrl+Enter each set to send or newline:
-
-| Key bindings (DSH Settings → General) |
-|---|
-| ![Key bindings](screenshots/DSH设置弹窗-快捷键设置-english.png) |
-
-On the **models page**, `deepseek-v4.1-flash` under `opencode-go` was **detected, added and hoisted to
-the top by the plugin** — it is the first entry right after install, with nothing added by hand. The
-Command Code route gets both its endpoint and its whole model list declared and completed
-the same way — nothing to type:
-
-| Auto-added V4.1 model (DSH Settings → Models) |
-|---|
-| ![Auto-added V4.1 model](screenshots/DSH设置弹窗-自动添加V4.1模型-english.png) |
+- **Open it and you have a UI**: no command line and no system browser; the shell starts the engine and loads its page inside the window.
+- **Engine updates handled**: checked at launch and every 30 minutes, then installed silently / asked (default) / only notified, per your policy; it also tells you when DSH Ready GUI itself has a new version.
+- **Data folder is your choice**: system `~/.dsh` by default, or the app folder; switching offers to move the data with it.
+- **Four bundled plugins**: shipped inside the app, one tick in the settings window installs them; the first launch offers a one-click "Enable all" card.
+- **Tray and close behaviour**: closing the window hides it to the tray (open window / settings / quit from there), or quits outright.
+- **Multiple instances**: each one gets its own window and its own engine process.
 
 ## Install
 
-**From a release** — download from [Releases](https://github.com/itchenshi/dsh-ready-gui/releases) and
-open it.
+**Windows (the one actually used in practice)** — download from [GitHub Releases](https://github.com/itchenshi/dsh-ready-gui/releases):
 
-All three platforms have a release page, but **installers live on GitHub only**: producing Windows, macOS
-and Linux artifacts at once needs three kinds of runner, which only GitHub Actions provides.
-[Gitee](https://gitee.com/itchenshi/dsh-ready-gui/releases) and
-[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui/releases) publish **source archives and the release
-notes**; download the installer from GitHub (Gitee's free tier caps attachments at 100 MB per file and
-1 GB per repository, while our installers are 133–194 MB).
+- `DSH.Ready.GUI.Setup.<version>.exe` — installer, you can choose the install directory;
+- `DSH.Ready.GUI-<version>-win.zip` — portable build, unzip and run.
 
-**From source** (development only; needs [Node.js](https://nodejs.org/) ≥ 23 — packaged builds ship
-their own portable Node, so end users install nothing):
+**macOS / Linux (built by CI, never verified on real hardware)** — the same page has `DSH.Ready.GUI-<version>.dmg` (arm64 / x64) and `DSH.Ready.GUI-<version>.AppImage`. GitHub Actions produces them, but they have not been run on real machines here, so they are **not guaranteed to work**; the macOS builds are unsigned, so Gatekeeper may block them.
+
+**Installers live on GitHub only**: [Gitee](https://gitee.com/itchenshi/dsh-ready-gui) and [GitCode](https://gitcode.com/itchenshi/dsh-ready-gui) are code mirrors whose releases hold source archives only.
+
+**From source** (development only): [Node.js](https://nodejs.org/) ≥ 23, then
 
 ```sh
-npm install    # electron / build dependencies
-npm start      # launch
+npm install
+npm start
 ```
 
-You do not have to go hunting in settings: if any bundled plugin is still missing, the settings window
-opens itself on first launch with the "Enable all" card at the top (one click installs them and restarts
-the engine once; "No thanks — I'll pick below" only records the answer and touches no plugin). All that is
-left is picking your language and theme in the **Harness page → Settings** (the shell follows live, no
-restart).
+Packaged builds ship their own portable Node, so end users install no runtime.
 
-## Settings window
+## First run
 
-| Page | What it changes | Default |
+1. The shell reads the engine's language / theme first, then opens the window; the status page shows progress while the engine is being installed.
+2. The first launch downloads the engine: using the bundled portable Node, it fetches `@deepseek-ai/dsh` from the npm registry into the app data folder's `dsh-engine/` (`%APPDATA%\DSH Ready GUI\dsh-engine` on Windows), then loads the UI.
+3. Engine data goes under the system `~/.dsh` (`$DSH_HOME`) by default; Settings can switch it to the app folder (`%APPDATA%\DSH Ready GUI\dsh-home` on Windows). If the source folder holds data, the switch asks "move and switch / switch only / cancel".
+4. Bundled plugins are **not** installed by default. Once the engine is up, if something is missing the shell opens the settings window by itself with an "Enable all" card on top: one click installs them and restarts the engine once. "No thanks — I'll pick below" installs nothing and it will not ask again.
+5. The shell's own preferences (close behaviour, data folder, update policy) live in `%APPDATA%\DSH Ready GUI\settings.json`.
+
+## Bundled plugins
+
+| Plugin | What it does | Shipped version |
 |---|---|---|
-| Engine updates | Update policy / channel / automatic checks | **Ask before updating** · npm latest · checks on |
-| Third-party plugins | Per-plugin "install" checkbox + "enabled" switch (plus a "Enable all" card on first launch) | Mirrors the real state; bundled plugins start **uninstalled** |
-| Data & desktop | Data directory, close behaviour (hide to tray / quit), reopen last conversation | System `~/.dsh` · hide to tray · on |
-| Language & appearance | Not here — set it in the **Harness page → Settings**; the shell follows live | — |
+| `dsh-model-surplus` | Shows usage / balance for the active model right of the session title: OpenCode Go plan usage and the selected model's monthly cap, plus the DeepSeek account balance | 0.4.6 |
+| `dsh-gui-last-session` | Reopens your last conversation after a restart | 0.1.9 |
+| `dsh-gateway-models` | Declares the opencode-go / Command Code route protocol and endpoint, and completes their model lists | 0.2.6 |
+| `dsh-keys-setting` | Sets, on the General page of DSH Settings, whether Enter / Shift+Enter / Ctrl+Enter sends or inserts a newline | 0.2.6 |
 
-**First-launch card**: bundled plugins start uninstalled, so once the engine is up the shell checks,
-**opens this window itself**, and lists only what is missing. "Enable all" installs them and restarts the
-engine once; whether to install them is still your call — "No thanks" records the answer and touches
-nothing, and it will not ask again.
+Each plugin is also its own repository ([model-surplus](https://github.com/itchenshi/dsh-model-surplus), [gui-last-session](https://github.com/itchenshi/dsh-gui-last-session), [gateway-models](https://github.com/itchenshi/dsh-gateway-models), [keys-setting](https://github.com/itchenshi/dsh-keys-setting)); `plugins/` here is the copy shipped inside the app — installing uses that local copy, not npm.
 
-The two plugin controls:
+## Settings
 
-- **Install** — whether it is installed at all. Ticking installs immediately, unticking uninstalls
-  (the same mechanism the plugin market in the Harness page uses).
-- **Enabled** — whether the engine loads it. Turning it off does **not** uninstall it, and it stays in
-  sync with the plugin market both ways.
-- **How changes take effect**: install/uninstall needs an **engine restart** (the engine assembles
-  plugins at startup); enable/disable is hot-reloaded **immediately**; plugins with a page half (model
-  surplus, session resume, key bindings) also need a **page refresh** — the settings row shows a
-  "refresh page" button for those.
+The real options in the settings window (tray menu or app menu):
 
-## Where your data lives
-
-All of it under `$DSH_HOME` (default `~/.dsh`; switchable to the app directory in Settings):
-
-| What | Path |
+| Option | Values / default |
 |---|---|
-| Model / system / plugin settings | `<DSH_HOME>/settings.yaml` |
-| Conversation history | `<DSH_HOME>/sessions/…` |
-| Workspace records | `<DSH_HOME>/storages/` (your workspace files stay in their real directories) |
-| Profile and plugins | `<DSH_HOME>/profiles/web/…` |
-| Credentials | `<DSH_HOME>/.credentials.yaml` |
-
-The GUI's own preferences (window behaviour, data directory, update policy) live in
-`<userData>/settings.json`. The embedded page uses an in-memory session, so every launch starts clean,
-and quitting kills the whole child process tree.
+| Close window | Hide to tray (default) / quit |
+| Data folder | Follow system `~/.dsh` (default) / app folder; switching asks about migrating |
+| Engine update policy | Silently update / **ask before updating** (default) / notify only |
+| Version channel | Follow the npm latest tag (default) / skip alpha / include alpha, beta and rc |
+| Auto-check for engine updates | On (default; at launch and every 30 minutes) / off |
+| Check engine update now | Button |
+| Third-party plugins | Per plugin: the "install" checkbox, the "enabled" toggle, "Update" when the shipped copy is newer, "Repair / retry" when the state drifted |
+| Restart engine / Reload page | After install or uninstall, press "Restart engine" (the "restart engine" badge sits next to it); a plugin with a page half also needs "Reload page" |
+| Language / theme | Not here — set them in the Harness page's Settings; the shell follows live, no restart |
 
 ## FAQ
 
-- **First launch sits on "downloading and installing…"** — that is the DeepSeek Harness engine being
-  installed, once, for 1–2 minutes.
-- **A plugin/engine change did not take effect** — install/uninstall needs an engine restart (the
-  settings window has a "restart engine" action and tells you when it is needed); language and theme
-  are changed in the Harness page and apply live.
-- **I switched the data directory and my old conversations are gone** — the switch offers to move the
-  data; choosing "switch only" leaves it in the original location.
-- **`npm run dist` fails on Windows with `mksquashfs ENOENT`** — AppImage can only be built on
-  Linux/macOS (or CI/Docker).
-- **How does this relate to the official CLI?** The shell is a launcher; the process it runs is the
-  official `@deepseek-ai/dsh`. For Harness capabilities, see the
-  [official docs](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart).
+- **Where is my data?** Engine sessions, config and plugins live in `$DSH_HOME` (default `~/.dsh`, or the app folder if you switched); the engine itself is in the app data folder's `dsh-engine/`; the shell's own preferences are in the app data folder's `settings.json`.
+- **How do I get my last conversation back?** The bundled "session resume" plugin does it and is on by default (Settings → Session → reopen the last conversation on launch). Turn it off and every launch starts blank; the conversation records themselves stay in `$DSH_HOME` either way.
+- **Why does it say a plugin needs a restart?** The engine assembles its plugin list only at startup, so install / uninstall needs an engine restart (the settings window shows a "restart engine" badge — press the button next to it). Enable / disable is hot-reloaded and applies immediately; a plugin with a page half also needs a Harness page reload.
+- **What if the engine fails to start?** A "DeepSeek Harness failed to start" dialog shows the engine's last output and the log path: `logs/dsh-start-fail-<time>.log` in the app data folder. If a plugin's package name appears in that output, the dialog offers to disable it and restart.
+- **Does the app keep running after I close the window?** Yes by default — it only hides to the tray (right-click the tray icon to open the window, reach settings or quit). Switch "Close window" to "quit" to exit on close.
 
-## For developers
-
-Architecture and data flow:
-
-```
-start → single-instance lock → read settings.json + Harness theme → create window (maximized, in-memory session)
-   └─ boot()
-       ├─ resolve Node: bundled portable → $DSH_SHELL_NODE → system PATH
-       ├─ check/install the engine when needed (npm registry, per policy)
-       ├─ reconcile installed directory plugins (refresh bundled ones; leave hand-installed ones alone)
-       ├─ clean up renamed legacy plugins (bundle + dependencies, so two copies never load at once)
-       ├─ spawn dsh web --no-open --port 0 → parse the URL from stdout → load it in the window
-       └─ on quit: kill the process tree + destroy the tray
-```
-
-```
-├─ src/                 # source
-│  ├─ main.js           # main process: engine updates, window, tray, settings, data migration
-│  ├─ plugin-manager.js # third-party plugins (catalog + dsh plugin install reconciliation)
-│  ├─ engine-patch.js   # idempotent fallback patch for the engine page
-│  ├─ preload.js / workspace-preload.js  # the two IPC bridges (settings window / narrow main-window bridge)
-│  ├─ settings.html / status.html / notice.html
-│  └─ home-migrate.js   # data-directory detection and migration (pure Node, unit-tested)
-├─ plugins/             # the four bundled plugin copies (**generated**, synced from plugin-repos/)
-├─ scripts/             # build, release, sync and smoke scripts
-├─ marketing/           # promotional material (one directory per version)
-├─ electron-builder.yml
-└─ dist/                # build output (gitignored)
-```
-
-### Plugin sources → bundled copies
-
-The plugins live in sibling repositories; `plugins/` here is their bundled copy:
-
-```
-dsh-dev/
-├─ dsh-ready-gui/     # this repository
-└─ plugin-repos/      # the four plugin repositories
-```
+## Development
 
 ```sh
-npm run sync:plugins                             # plugin repos → plugins/ (full mirror)
-node scripts/sync-bundled-plugins.mjs --check    # drift check, exit code 1 on drift (for CI)
+npm start                 # run it directly (Electron)
+npm test                  # unit tests + settings-page inline JS, doc images, PowerShell encoding checks
+npm run test:e2e          # Windows end-to-end smoke (launches the real app with an isolated userData)
+npm run test:e2e:ui       # close / tray / modal UI smoke (Windows)
+npm run verify:builtin    # bundled-plugin self-healing check (temp DSH_HOME + real engine + real pnpm)
+npm run sync:plugins      # plugin repos -> plugins/ (full mirror)
+npm run dist:win          # Windows: installer + portable zip
+npm run dist:mac          # macOS dmg (must run on macOS)
+npm run dist:linux        # Linux AppImage
 ```
 
-- **Edit plugins in `plugin-repos/<name>/`**, then `npm run sync:plugins`. **Do not hand-edit
-  `plugins/`** — the next sync overwrites it.
-- The plugin repositories are found automatically (`dsh-dev/plugin-repos`, a sibling directory of this
-  repository, or `plugin-repos/` inside it); override with `--repos <dir>` or `DSH_PLUGIN_REPOS`.
-- **Bump `version` when you change plugin code**: the GUI replaces an installed copy only when the
-  bundled version is newer, so an equal version is left alone (that keeps a user-updated copy from
-  being silently downgraded).
-- `npm run dist:*` runs the sync first, so a release can never ship stale plugins.
-
-### Build and test
-
-```sh
-npm test               # all unit tests
-npm run test:e2e       # Windows end-to-end (close a running instance first)
-npm run verify:builtin # bundled-plugin self-healing check (temp DSH_HOME, real engine + real pnpm)
-npm run dist:win       # Windows: installer + portable zip
-npm run dist:mac       # macOS (must run on macOS)
-npm run dist:linux     # Linux
-```
-
-Optional environment variables: `DSH_SHELL_NODE` (the node used for the engine), `DSH_SHELL_HOME`
-(isolated `DSH_HOME`), `DSH_SHELL_USERDATA`, `DSH_SHELL_REGISTRY_URL`, `DSH_NODE_VERSION` /
-`DSH_NODE_MIRROR` (for packaging).
+- The smoke tests drive the real app and a real engine, not mocks; close a running instance first.
+- Edit plugins in their own repositories (`plugin-repos/<name>/`), then `npm run sync:plugins`; `plugins/` is generated and hand edits get overwritten. For a drift check only: `node scripts/sync-bundled-plugins.mjs --check`.
+- CI is [`.github/workflows/build-all.yml`](.github/workflows/build-all.yml): it runs `npm test` first, then builds on Windows / macOS / Linux runners and attaches the artifacts to the release.
 
 ## License
 

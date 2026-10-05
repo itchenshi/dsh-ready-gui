@@ -1,211 +1,107 @@
 # DSH Ready GUI
 
-> DeepSeek Harness（DSH）的桌面壳（Windows / macOS / Linux）：**装上就有界面，不用碰命令行。**
+DeepSeek Harness（`@deepseek-ai/dsh`）的桌面外壳：它自己安装、自己更新引擎，并把引擎的网页界面嵌进一个原生窗口。当前版本 **0.8.0**。
 
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 [![license](https://img.shields.io/github/license/itchenshi/dsh-ready-gui)](LICENSE)
 [![release](https://img.shields.io/github/v/release/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/releases)
-[![stars](https://img.shields.io/github/stars/itchenshi/dsh-ready-gui)](https://github.com/itchenshi/dsh-ready-gui/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)]()
 [![GitHub](https://img.shields.io/badge/GitHub-host-blue)](https://github.com/itchenshi/dsh-ready-gui)
 [![Gitee](https://img.shields.io/badge/Gitee-mirror-red)](https://gitee.com/itchenshi/dsh-ready-gui)
 [![GitCode](https://img.shields.io/badge/GitCode-mirror-green)](https://gitcode.com/itchenshi/dsh-ready-gui)
 
-DSH 本体是一套开源 Agent 框架（`@deepseek-ai/dsh`），官方只给命令行和网页。这个壳把它装进一个
-原生窗口：**引擎它自己装、自己升级，数据在你自己手里，关掉就是托盘里的一个图标。**
+## 它做什么
 
-## 打开就能用
-
-| 你想要 | 这里怎么做 |
-|---|---|
-| 不想敲命令 | 双击应用图标就完事。引擎由壳自己下载安装（首次 1–2 分钟，状态页有进度） |
-| 不想管升级 | 每次启动都自动检查，默认「问你要不要更新」；DSH Ready GUI 自己有新版也会通知你 |
-| 不想配模型 | 首次启动会主动问你：设置窗口最上方一张卡片，点一次「一键开启」就装齐 —— 模型余量、会话续接、网关路由、按键设置 |
-| 不想丢会话 | 重启后自动回到你上次那个对话（内置「会话续接」） |
-| 不想被人乱看 | 壳只监听本机回环地址；插件自己的 HTTP 路由都开了鉴权，裸 `curl` 拿不到你的用量和余额 |
-| 想搬走数据 | 数据目录可切换（默认跟随系统 `~/.dsh`），切换时问你要不要一起搬，会话记录跟着走 |
-
-四个内置插件各自也是独立仓库（可以单独装到别的 DSH 宿主）：
-
-| 插件 | 一句话 | 仓库 |
-|---|---|---|
-| 模型余量 `dsh-model-surplus` | 会话标题右侧显示当前模型的用量 / 账户余额 | [仓库](https://github.com/itchenshi/dsh-model-surplus) |
-| 会话续接 `dsh-gui-last-session` | 重启后回到上次那个对话 | [仓库](https://github.com/itchenshi/dsh-gui-last-session) |
-| 网关路由 `dsh-gateway-models` | 声明 OpenCode Go / Command Code 的路由协议与地址，并自动补齐它们的模型 | [仓库](https://github.com/itchenshi/dsh-gateway-models) |
-| 按键设置 `dsh-keys-setting` | Enter / Shift+Enter / Ctrl+Enter 各自设成发送或换行 | [仓库](https://github.com/itchenshi/dsh-keys-setting) |
-
-> **它们为什么内置、而不是从 npm 装？** 原计划是发布到 npm，让插件更新不必等壳发版。但 npm
-> 账号注册走不通（`www.npmjs.com` 返回 Cloudflare 托管挑战），包发不出去；而 profile 里登记一个
-> registry 上没有的包，会让插件直接从引擎的 bundle 列表里消失，并让这个 profile 里每一次安装
-> 操作一起失败（都实测到了）。所以**保持内置**：装上 GUI 就有，勾选即在，不需要命令行。
-
-## 界面预览
-
-**主窗口**：会话标题右侧就是**模型余量**，跟着你选的模型自动切换 —— 用 OpenCode Go 时显示套餐用量
-（滚动 / 周 / 月百分比 + 重置时间）和**当前模型**的总额上限，用 Command Code 时显示 5 小时 / 周两个
-窗口的用量与剩余额度，用 DeepSeek 时显示账户余额。
-
-| OpenCode Go 余量与模型总额 | Command Code 余量与剩余额度 | DeepSeek 余额 |
-|---|---|---|
-| ![OpenCode Go 余量与模型总额](screenshots/主窗口-opencode-go余量与模型总额.png) | ![Command Code 余量与剩余额度](screenshots/主窗口-commandcode余量与模型总额.png) | ![DeepSeek 余额](screenshots/主窗口-deepseek余额.png) |
-
-**设置窗口**：引擎更新、第三方插件、数据与桌面，一个窗口管完。
-
-| 设置窗口 |
-|---|
-| ![设置窗口](screenshots/设置窗口.png) |
-
-**DSH 设置弹窗**：除了引擎自己的设置项，还有内置插件加的行。
-
-「通用」页的**按键设置** —— Enter / Shift+Enter / Ctrl+Enter 各自设成发送还是换行：
-
-| 按键设置（DSH 设置 → 通用） |
-|---|
-| ![按键设置](screenshots/DSH设置弹窗-快捷键设置.png) |
-
-**模型页**里，`opencode-go` 的 `deepseek-v4.1-flash` 是插件**自动检测目录、补进列表并置顶**的
-—— 装完就排在第一项，不用手动添加；Command Code 路由连 API 地址带整份模型清单都由插件
-声明并补齐，一个都不用填：
-
-| 自动添加 V4.1 模型（DSH 设置 → 模型） |
-|---|
-| ![自动添加 V4.1 模型](screenshots/DSH设置弹窗-自动添加V4.1模型.png) |
+- **打开就是界面**：不用命令行，也不打开系统浏览器；外壳启动引擎，把它的页面直接嵌在窗口里。
+- **引擎自动更新**：启动时和运行中每 30 分钟检查一次，按你选的策略静默更新 / 询问（默认）/ 仅提示；DSH Ready GUI 自己有新版也会提示。
+- **数据目录可选**：默认跟随系统 `~/.dsh`，也可以改成随应用携带；切换时问你要不要把数据一起搬走。
+- **四个内置插件**：随包携带，设置窗口里勾选即装；首次启动会主动弹出「一键开启」卡片。
+- **托盘与关窗行为**：关闭窗口默认隐藏到托盘（托盘里可以打开窗口 / 设置 / 退出），也可以设为直接退出。
+- **可以多开**：每个实例一个窗口和一份自己的引擎进程，互不干扰。
 
 ## 安装
 
-**用安装包** —— 到 [Releases](https://github.com/itchenshi/dsh-ready-gui/releases) 下载，装完打开即可。
+**Windows（实际用过的就是它）** —— 到 [GitHub Releases](https://github.com/itchenshi/dsh-ready-gui/releases) 下载：
 
-三个平台都有 Release 页，但**安装包只在 GitHub**：要同时产出 Windows / macOS / Linux 三种产物，只有
-GitHub Actions 能一次提供三种 runner；[Gitee](https://gitee.com/itchenshi/dsh-ready-gui/releases) 与
-[GitCode](https://gitcode.com/itchenshi/dsh-ready-gui/releases) 的 Release 提供**源码包与更新说明**，
-安装包请从 GitHub 下载（Gitee 免费版限制附件单文件 100MB、单仓库共 1GB，而我们的安装包是 133–194MB）。
+- `DSH.Ready.GUI.Setup.<版本>.exe` —— 安装包，安装时可以自己选目录；
+- `DSH.Ready.GUI-<版本>-win.zip` —— 便携版，解压即用。
 
-**从源码跑**（只有开发需要；要 [Node.js](https://nodejs.org/) ≥ 23，打包产物自带便携 Node，终端用户无需安装任何运行时）：
+**macOS / Linux（CI 产出，没有在真机验证过）** —— 同一个页面有 `DSH.Ready.GUI-<版本>.dmg`（arm64 / x64）和 `DSH.Ready.GUI-<版本>.AppImage`。这些产物由 GitHub Actions 打包，我们没有在真机上跑过，**不保证能用**；macOS 包没有签名，Gatekeeper 可能会直接拦下。
+
+**安装包只在 GitHub 发**：[Gitee](https://gitee.com/itchenshi/dsh-ready-gui) 和 [GitCode](https://gitcode.com/itchenshi/dsh-ready-gui) 是代码镜像，它们的 Release 里只有源码包。
+
+**从源码跑**（只有开发需要）：装 [Node.js](https://nodejs.org/) ≥ 23，然后
 
 ```sh
-npm install    # electron / 构建依赖
-npm start      # 启动
+npm install
+npm start
 ```
 
-打开后**不用自己去翻设置**：如果内置插件还有没装的，设置窗口会自己弹出、最上方就是那张「一键开启」
-卡片（点一次装齐并自动重启一次引擎；点「不用了我自己选」则只记一句、一个插件都不动）。剩下要做的
-只有 **Harness 页面 → 设置** 里选语言和主题（外壳会实时跟随，不用重启）。
+打包产物自带便携 Node，终端用户不需要装任何运行时。
 
-## 设置窗口
+## 首次启动
 
-| 页 | 能改什么 | 默认 |
+1. 启动时先读引擎里的语言 / 主题，再打开窗口；装引擎期间状态页显示进度。
+2. 第一次运行要把引擎装下来：外壳用随包的便携 Node，从 npm registry 下载 `@deepseek-ai/dsh`，装进应用数据目录的 `dsh-engine/`（Windows 上是 `%APPDATA%\DSH Ready GUI\dsh-engine`），装完自动加载界面。
+3. 引擎的数据默认放在系统 `~/.dsh`（`$DSH_HOME`），也可以在设置里改成「应用目录」（Windows 上是 `%APPDATA%\DSH Ready GUI\dsh-home`）。切换时如果源目录里有数据，会问「迁移并切换 / 只切换，不迁移 / 取消」。
+4. 内置插件默认**不装**。引擎起来后如果发现该装的没装，外壳会自己打开设置窗口，最上方是「一键开启」卡片：点一次装齐，并自动重启一次引擎；点「不用了，我自己选」则一个都不装，之后不再主动弹。
+5. 外壳自己的偏好（关窗行为、数据目录、更新策略）存在 `%APPDATA%\DSH Ready GUI\settings.json`。
+
+## 内置插件
+
+| 插件 | 做什么 | 随包版本 |
 |---|---|---|
-| 引擎更新 | 更新策略 / 版本通道 / 是否自动检查 | **询问后再更新** · npm latest · 自动检查开 |
-| 第三方插件 | 每个插件的「安装」勾选框 + 「启用」开关（首次启动时顶部还有一张「一键开启」卡片） | 跟随实际状态；内置插件默认**不装** |
-| 数据与桌面 | 数据目录、关窗行为（隐藏到托盘 / 直接退出）、自动回到最近对话 | 跟随系统 `~/.dsh` · 隐藏到托盘 · 开 |
-| 语言与外观 | 不在这里改 —— 在 **Harness 页面 → 设置** 里改，外壳实时跟随 | — |
+| `dsh-model-surplus` | 会话标题右侧显示当前模型的用量 / 余额：OpenCode Go 套餐用量与选中模型的月上限、DeepSeek 账户余额 | 0.4.6 |
+| `dsh-gui-last-session` | 重启后回到上次那个对话 | 0.1.9 |
+| `dsh-gateway-models` | 声明 opencode-go / Command Code 的路由协议和接口地址，并补齐它们的模型清单 | 0.2.6 |
+| `dsh-keys-setting` | 在 DSH 设置「通用」页配置 Enter / Shift+Enter / Ctrl+Enter 是发送还是换行 | 0.2.6 |
 
-**首次启动卡片**：内置插件默认全部不装，所以引擎就绪后壳会检测一次并**主动打开这个窗口**，卡片
-列出现在缺的那几个，点「一键开启」= 装齐 + 自动重启一次引擎（装不装仍然由你说；点「不用了我自己选」
-就只记一句，一个插件都不动，之后不再主动出现）。
+每个插件同时也是独立仓库（[model-surplus](https://github.com/itchenshi/dsh-model-surplus)、[gui-last-session](https://github.com/itchenshi/dsh-gui-last-session)、[gateway-models](https://github.com/itchenshi/dsh-gateway-models)、[keys-setting](https://github.com/itchenshi/dsh-keys-setting)）；本仓库的 `plugins/` 是它们的随包副本，安装时用的是这份本地副本，不经过 npm。
 
-关于插件的两个开关：
+## 设置
 
-- **「安装」** = 装没装。勾上立即装、取消立即卸（与 Harness 页面的插件市场是同一套机制）。
-- **「启用」** = 引擎加不加载它。关掉**不卸载**，只是不加载；与插件市场双向实时同步。
-- **生效方式**：装卸要**重启引擎**（引擎只在启动时组装插件）；启用/禁用是热重载**即时**生效；
-  带页面部分的插件（模型余量、会话续接、按键设置）还需要**刷新 Harness 页面**——设置窗口会在那
-  一行显示「刷新页面」按钮。
+设置窗口（托盘菜单或应用菜单打开）里的真实选项：
 
-## 数据放在哪
-
-全部在 `$DSH_HOME`（默认 `~/.dsh`，可在设置里切到应用目录）：
-
-| 内容 | 路径 |
+| 选项 | 值 / 默认 |
 |---|---|
-| 模型 / 系统 / 插件设置 | `<DSH_HOME>/settings.yaml` |
-| 会话历史 | `<DSH_HOME>/sessions/…` |
-| 工作区记录 | `<DSH_HOME>/storages/`（工作区业务文件仍在你的真实目录里） |
-| profile 与插件 | `<DSH_HOME>/profiles/web/…` |
-| 凭证 | `<DSH_HOME>/.credentials.yaml` |
-
-GUI 自己的偏好（窗口行为、数据目录、更新策略）在 `<userData>/settings.json`。
-内嵌页面用内存会话，每次启动都是干净的；退出时连子进程一起清理。
+| 关闭窗口 | 隐藏到托盘（默认）/ 直接退出 |
+| 数据目录 | 跟随系统 `~/.dsh`（默认）/ 应用目录；切换时询问是否迁移 |
+| 引擎更新策略 | 静默更新 / **询问后再更新**（默认）/ 仅提示，不自动更新 |
+| 版本通道 | 跟随 npm latest 标签（默认）/ 跳过 alpha / 含 alpha、beta、rc 预发布 |
+| 自动检查引擎更新 | 开（默认；启动时和运行中每 30 分钟一次）/ 关 |
+| 立即检查引擎更新 | 按钮 |
+| 第三方插件 | 每个插件的「安装」勾选框、「启用」开关，随包有新版本时的「更新」，状态不一致时的「修复 / 重试」 |
+| 重启引擎 / 刷新页面 | 安装、卸载后要点「重启引擎」（旁边会显示「待重启引擎」标注）；带页面部分的插件还要点「刷新页面」 |
+| 语言 / 主题 | 不在这里改 —— 在 Harness 页面的设置里改，外壳实时跟随，不用重启 |
 
 ## 常见问题
 
-- **第一次启动卡在「正在下载并安装…」**：在装 DeepSeek Harness 引擎，仅首次，1–2 分钟。
-- **改了插件/引擎的东西没生效**：装卸插件要重启引擎（设置窗口有「重启引擎使生效」，环境不对时它
-  会告诉你）；语言/主题在 Harness 页面改，即时生效。
-- **切了数据目录，旧会话不见了**：切换时若源目录有数据会问你要不要搬；选「仅切换」的话数据留在
-  原位置。
-- **`npm run dist` 在 Windows 报 `mksquashfs ENOENT`**：AppImage 只能在 Linux/macOS（或 CI/Docker）构建。
-- **和官方 CLI 什么关系**：这个壳只是启动器，跑的还是官方 `@deepseek-ai/dsh`；Harness 本身的能力
-  问题请看 [官方文档](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)。
+- **我的数据在哪？** 引擎的会话、配置、插件都在 `$DSH_HOME`（默认 `~/.dsh`，或在设置里改成应用目录）；引擎本体在应用数据目录的 `dsh-engine/`；外壳自己的偏好在应用数据目录的 `settings.json`。
+- **怎么回到上次那个对话？** 靠内置的「会话续接」插件，默认开着（设置 → 会话 → 启动后自动回到最近一次对话）。关掉后每次启动都是空白会话；会话记录本身一直在 `$DSH_HOME` 里，不会因此消失。
+- **为什么说插件要重启才生效？** 引擎只在启动时组装插件清单，所以安装 / 卸载必须重启引擎（设置窗口会显示「待重启引擎」标注，点旁边的按钮即可）。「启用 / 禁用」是热重载，立即生效；带页面部分的插件还要刷新一下 Harness 页面。
+- **引擎起不来怎么办？** 会弹出「DeepSeek Harness 启动失败」对话框，显示引擎最后的输出，并把日志写到应用数据目录的 `logs/dsh-start-fail-<时间>.log`。如果输出里出现了某个插件的包名，对话框会问你要不要「禁用并重启」。
+- **关掉窗口以后应用还在跑吗？** 默认在，只是隐藏到托盘（右键托盘图标可以打开窗口、进设置或退出）。把「关闭窗口」改成「直接退出」就关窗即退出。
 
-## 开发者
-
-架构与数据流：
-
-```
-启动 → 单实例锁 → 读 settings.json + Harness 主题 → 建窗口（最大化，内存会话）
-   └─ boot()
-       ├─ 解析 Node：捆绑便携版 → $DSH_SHELL_NODE → 系统 PATH
-       ├─ 需要时检查/安装引擎（npm registry，按策略）
-       ├─ 启动前对账已装的目录插件（补拉捆绑插件更新；不动用户手动装的）
-       ├─ 清理已改名的旧插件（摘 bundle + dependencies，避免新旧两份同时加载）
-       ├─ spawn dsh web --no-open --port 0 → 解析 stdout 的 URL → 内嵌加载
-       └─ 退出：kill 进程树 + 销毁托盘
-```
-
-```
-├─ src/                 # 源码
-│  ├─ main.js           # 主进程：引擎更新、窗口、托盘、设置、数据迁移
-│  ├─ plugin-manager.js # 第三方插件（catalog + dsh plugin 安装对账）
-│  ├─ engine-patch.js   # 引擎页面兜底补丁（幂等）
-│  ├─ preload.js / workspace-preload.js  # 两条 IPC 桥（设置窗口 / 主窗口窄桥）
-│  ├─ settings.html / status.html / notice.html
-│  └─ home-migrate.js   # 数据目录检测与迁移（纯 Node，可单测）
-├─ plugins/             # 四个内置插件副本（**生成物**，由 plugin-repos/ 同步而来）
-├─ scripts/             # 构建、发布、同步、冒烟脚本
-├─ marketing/           # 推广物料（按版本分目录）
-├─ electron-builder.yml
-└─ dist/                # 构建产物（已 gitignore）
-```
-
-### 插件源码 → 内置副本
-
-插件在旁边的独立仓库里，本仓库的 `plugins/` 是它们的内置副本：
-
-```
-dsh-dev/
-├─ dsh-ready-gui/     # 本仓库
-└─ plugin-repos/      # 四个插件仓库
-```
+## 开发
 
 ```sh
-npm run sync:plugins                             # 插件仓库 → plugins/（全量镜像）
-node scripts/sync-bundled-plugins.mjs --check    # 只查漂移，不一致退出码 1（CI 用）
+npm start                 # 直接运行（Electron）
+npm test                  # 单测 + 设置页内联脚本、文档图片、PowerShell 编码等检查
+npm run test:e2e          # Windows 端到端冒烟（会真的启动应用，用隔离的 userData）
+npm run test:e2e:ui       # 关窗 / 托盘 / 模态框的界面冒烟（Windows）
+npm run verify:builtin    # 内置插件自愈验证（临时 DSH_HOME + 真引擎 + 真 pnpm）
+npm run sync:plugins      # 插件仓库 → plugins/（全量镜像）
+npm run dist:win          # Windows：安装包 + 便携 zip
+npm run dist:mac          # macOS dmg（要在 macOS 上跑）
+npm run dist:linux        # Linux AppImage
 ```
 
-- **改插件请改 `plugin-repos/<名字>/`**，然后 `npm run sync:plugins`；**不要手改 `plugins/`**（会被覆盖）。
-- 插件仓库位置自动查找（`dsh-dev/plugin-repos`、旁边的同名目录、本仓库内 `plugin-repos/`），也可用
-  `--repos <目录>` 或 `DSH_PLUGIN_REPOS` 指定。
-- **改了插件代码记得提 `version`**：GUI 只在「随包版本比已装的新」时才替换已装副本，同版本不重装
-  （为了不把用户更新过的副本无人值守降级）。
-- `npm run dist:*` 会先跑同步，所以发布产物不会带着旧插件。
-
-### 打包与测试
-
-```sh
-npm test              # 全部单测
-npm run test:e2e      # Windows 端到端（先关掉正在运行的实例）
-npm run verify:builtin # 内置插件自愈验证（临时 DSH_HOME，真引擎 + 真 pnpm）
-npm run dist:win      # Windows：安装包 + 便携 zip
-npm run dist:mac      # macOS（需在 macOS 上跑）
-npm run dist:linux    # Linux
-```
-
-可选环境变量：`DSH_SHELL_NODE`（指定引擎用的 node）、`DSH_SHELL_HOME`（隔离 `DSH_HOME`）、
-`DSH_SHELL_USERDATA`、`DSH_SHELL_REGISTRY_URL`、`DSH_NODE_VERSION` / `DSH_NODE_MIRROR`（打包用）。
+- 冒烟测试跑的是真实的应用和真实的引擎，不是 mock；跑之前先关掉正在运行的实例。
+- 改插件请改插件仓库（`plugin-repos/<名字>/`），再 `npm run sync:plugins`；`plugins/` 是生成物，手改会被下次同步覆盖。只查漂移用 `node scripts/sync-bundled-plugins.mjs --check`。
+- CI 见 [`.github/workflows/build-all.yml`](.github/workflows/build-all.yml)：先跑 `npm test`，再在 Windows / macOS / Linux 的 runner 上分别打包并挂到 Release。
 
 ## 许可
 
 [MIT](LICENSE) · 独立开源外壳，与 DeepSeek Harness 官方项目无隶属关系；
-DeepSeek Harness 本身为 [MIT](https://github.com/deepseek-ai/deepseek-harness) 许可。
+DeepSeek Harness 本身是 [MIT](https://github.com/deepseek-ai/deepseek-harness) 许可。

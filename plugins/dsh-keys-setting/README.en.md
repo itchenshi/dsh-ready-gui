@@ -3,181 +3,74 @@
 [![English](https://img.shields.io/badge/README-English-green)](README.en.md)
 [![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
 
-> One of the plugins bundled with **DSH Ready GUI** — the GUI ships all four, ready to tick.
-> Each one also installs standalone into any DSH host (see "Install and go" below).
-> GUI: https://github.com/itchenshi/dsh-ready-gui
+Decide in **DSH Settings → General** whether **Enter / Shift+Enter / Ctrl+Enter (⌘ on macOS) sends the message or inserts a line break**.
 
-Configure the composer's shortcut keys in **DSH Settings → General**: **Enter / Shift+Enter /
-Ctrl+Enter (⌘ on macOS) each set to "send message" or "newline"**.
+## What it does
 
-```
-Settings → General
-  ┌────────────────────────────────────────────────────────────┐
-  │ Key bindings                                               │
-  │ Set what Enter / Shift+Enter / Ctrl+Enter do               │
-  │                                  Enter        [Send    ▾]  │
-  │                                  Shift+Enter  [Newline ▾]  │
-  │                                  Ctrl+Enter   [Send    ▾]  │
-  └────────────────────────────────────────────────────────────┘
-```
+- Adds a "Key bindings" row to Settings → General, with one picker per gesture (Send / Line break).
+- Listens for `keydown` on the composer in the capture phase: it intercepts only when your choice differs from the engine's native behaviour, then re-dispatches the engine's other gesture.
+- Remaps the gesture only — it never touches the content; what "send" and "newline" mean stays the engine's decision.
+- Always passes IME events (`isComposing` / keyCode 229) and `Alt+Enter` through.
+- Defaults equal the engine's native behaviour, so with untouched settings it intervenes zero times.
 
-## Install and go
+## Install
 
-- **Using DSH Ready GUI (recommended)**: the plugin **ships inside the GUI**. Open the GUI → Settings
-  → Third-party plugins → tick **Key bindings**, then restart the engine and refresh the page as
-  prompted (it has a page half). The row then appears at the bottom of Settings → General.
+- **Using DSH Ready GUI (recommended)**: the plugin ships inside the GUI. Open the GUI → Settings → "Third-party plugins" and tick **Key bindings**, then refresh the page as prompted (it has a page half).
 - **Any other DSH host** (`dsh web`, the CLI) — either route works:
 
   ```sh
-  # Recommended: install straight from GitHub (recorded in your profile, updatable)
+  # Recommended: install straight from GitHub
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
-  # Fallback: install the release tarball (use this if github.com is unreachable for you)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.5/dsh-keys-setting-0.2.5.tgz
+  # Fallback: install this release's tarball
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.6/dsh-keys-setting-0.2.6.tgz
   ```
 
-  Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
-  is needed afterwards.
+  Both land the full repository contents (including `cordis.patch.yml`); no extra configuration is needed afterwards.
 
-> Not on npm yet: sign-up is unreachable (`www.npmjs.com` answers with a Cloudflare challenge), so
-> nothing can be published. Use one of the two routes above; publishing resumes once sign-up works.
+> Not on npm yet (`registry.npmjs.org` has no such package), so use one of the two routes above.
 
-**Doing nothing keeps the engine's native behaviour**, so installing it changes no habit:
+## Usage
 
-| Gesture | Engine native | Plugin default |
-|---|---|---|
-| `Enter` | send | send |
-| `Shift+Enter` | newline | newline |
-| `Ctrl/Cmd+Enter` | send | send |
+In Settings → General, the new "Key bindings" row is where you set them; changes apply immediately.
 
-It only intercepts when **your choice differs from the engine's native behaviour**, so with untouched
-defaults the plugin intervenes exactly **zero** times.
-(`Ctrl+Shift+Enter` folds into the Shift gesture — the engine's key map matches the Shift rule first.)
-
-## How it works (the essentials)
-
-- **Remaps only, never touches content**: it listens for `keydown` on the composer in the capture phase
-  and, on a match, calls `preventDefault` and re-dispatches **the engine's other gesture** (a synthetic
-  `Shift+Enter` or `Enter`). Whether that means newline or send stays the engine's decision.
-- **Composer detection uses the engine's semantic attribute** `data-composer-input="true"` (not hashed
-  class names, and not "any contenteditable"), so it cannot hit an editor owned by a sidebar plugin.
-- **Never interferes with IMEs**: events with `isComposing` or `keyCode === 229` pass straight through.
-- **`Alt+Enter` always passes through** (that is the engine's own accelerator).
-
-> Synthetic (`isTrusted: false`) keyboard events **really do drive the engine's composer** — verified
-> against a live page over CDP: a trusted Shift+Enter and a synthetic one produced identical DOM changes
-> (inserting `<br data-lexical-managed-linebreak="true">`), and a synthetic Enter actually submitted the
-> message.
+You can also hand-edit the row `id: composer-keys` in the profile's `cordis.patch.yml`: the host half **re-reads when the page window regains focus**, so switching back to the Harness window applies it without a page reload.
 
 ## Configuration
 
-The preference lives in the `composer-keys` section of `$DSH_HOME/settings.yaml` and can be **edited by
-hand**:
+The `config` of the row `id: composer-keys` in `cordis.patch.yml` (all three fields are declared by the plugin's `Config` schema):
 
-```yaml
-composer-keys:
-  enter: newline       # Enter inserts a newline
-  shiftEnter: newline  # Shift+Enter inserts a newline (default)
-  ctrlEnter: send      # Ctrl+Enter sends (default)
-```
-
-After a hand edit, **refocus the Harness window** and it applies (the plugin re-reads on window focus) —
-no page refresh needed. Changes made in the settings window apply immediately.
-
-The plugin row's switch (in the `cordis.patch.yml` row config):
-
-```yaml
-- insert:
-    - id: composer-keys        # the row id is decoupled from the package name, on purpose
-      name: dsh-keys-setting
-      config:
-        enabled: true          # false: nothing loads (no route, no settings row)
-```
-
-> The **package name changed** (`dsh-composer-keys` → `dsh-keys-setting`, because the old name is taken
-> on npm), but the **row id and settings namespace stay `composer-keys`** on purpose: the patch layer's
-> disabled row, the market's `state.json` switch and your saved key bindings in `settings.yaml` are all
-> recorded under that name, and a rename should not invalidate them.
-
-## Engine requirement
-
-**Requires DSH >= 0.2.0-rc.2.** Engine 0.2.0 replaced the `settings` service with
-`SettingsForms` (`get` / `section` / `register` are gone; `describe` / `update` /
-`replace` / `mutate` replace them). This plugin is written against the new API, so on
-0.1.x it cannot save. The manifest therefore **declares 0.2.0-rc.2 only** rather than
-claiming 0.1.x compatibility. DSH Ready GUI bundles this plugin and keeps the engine on
-the latest release, so there is usually nothing to do.
-
-## Permissions and boundaries (for marketplaces that scan statically)
-
-- **Runtime dependencies: none.** `dependencies` is empty — same as the other three bundled plugins.
-  The host half needs a schema library, and uses the **engine's own `@deepseek-ai/schemastery`** (the
-  package `dsh-settings` / `dsh-llm-pi-ai` themselves import) rather than the unscoped `schemastery` on
-  npm. The two are the same 3.18.x library with the same API, but only the former ships **with the
-  engine**: it lives under `profiles/node_modules/@deepseek-ai/`, resolves from wherever the plugin is
-  installed, and is the very same module instance the settings service holds.
-  (It used to depend on the unscoped package — a third-party supply-chain surface, and the only reason
-  this plugin carried a dependency at all. Removed in 0.2.1.)
-- **Files: the plugin reads and writes none directly.** The preference reaches
-  `$DSH_HOME/settings.yaml` through the engine's own settings service; there is no `node:fs` in the
-  source. A reported "files signal" comes from that **indirect** write (and from the comments mentioning
-  `settings.yaml`), not from direct disk I/O.
-- **Local routes: one.** The host registers `GET/POST /composer-keys` for the page half to read and write
-  the preference — the page cannot reach a plugin-private settings namespace (the settings RPC domain
-  serves fixed namespaces only), so this is the only channel. It goes through the engine's trust fence
-  (Host allow-list + browser session cookie) and **fails closed**; a bare `curl` gets `401`.
-- **Outbound network: none.** The page half's `fetch` only calls that same-origin route — a same-origin
-  request produces no external traffic and carries no credentials.
-- **Credentials / commands / native artifacts / lifecycle scripts: none.** `package.json` declares no
-  lifecycle hooks (only `test` / `prepublishOnly`).
-- **Failure boundary:** if the route or the settings service is unavailable the keyboard engine **still
-  works** (only persistence or the settings entry is lost) — a degradation, not a crash. Uninstalling
-  leaves the `composer-keys` section in `settings.yaml`, and reinstalling restores the old values.
-
-### Disposable-profile install / start / uninstall evidence
-
-The boundaries above are not just read off the source — they were exercised in throwaway profiles (temp
-data directories; your own data is never touched):
-
-| Step | How | Result |
+| Key | Default | Meaning |
 |---|---|---|
-| **Install** | stage the bundled source onto disk, then install it into a temp profile with the engine's own `dsh plugin --profile web add file:…` | installed, `node_modules/dsh-keys-setting/` materialised, registered in the profile's `dsh.profile.bundles` |
-| **Start** | boot the engine against that profile (`dsh web --no-open --port 0`) | engine prints its UI URL with all four plugins in the bundle list — i.e. the host half (schema library included) really was imported at assembly time |
-| **Uninstall** | the engine's own `dsh plugin remove` plus pruning the profile registration | removed cleanly, leaving no "registered but missing" entry behind |
+| `enter` | `send` | `send` = send the message, `newline` = insert a line break |
+| `shiftEnter` | `newline` | Same, for Shift+Enter |
+| `ctrlEnter` | `send` | Same, for Ctrl+Enter (⌘ on macOS) |
 
-These are the paths the repository's `verify:builtin` (GUI side) and the `plugin-enable` suite exercise;
-both were re-run after this change with **ALL CHECKS PASSED**.
+The row's `config` block is required: without it the row has no settings entry and the host can neither read nor write the preference. When `config.enabled === false` the host returns immediately — no route, no settings row.
 
-## Two halves
+## Compatibility
 
-| Half | File | Runs in | Responsibility |
-|---|---|---|---|
-| Host | `lib/index.js` | Node | Registers the `composer-keys` namespace through the engine's settings service (values land in `settings.yaml` and follow the data directory) and exposes `GET/POST /composer-keys` |
-| Page | `client/client.js` | Browser | Registers the Settings → General row and performs the capture-phase key remap |
+- Requires **DSH >= 0.2.0-rc.2** (engine 0.2.0 replaced the settings service API; on 0.1.x the preference cannot be saved).
+- Node >= 20.
+- Runtime dependencies: none; the schema library is the engine's own `@deepseek-ai/schemastery`.
 
-**Why the host half is needed**: the page is served from a random port that changes on every launch (the
-shell uses `dsh web --port 0`), so browser storage is a different origin each time and cannot persist
-anything — while the engine's **settings document** is exactly where persistence belongs, and it travels
-with the data directory. The page half cannot reach a plugin-owned settings namespace, so the host route
-relays it, the same way third-party sidebar plugins store their own preferences.
+## FAQ
 
-The settings row follows the General page's other rows declaration by declaration: typography, colours,
-spacing, and the **selector** (also a `<button>` pill + arrow SVG + popover rather than a native
-`<select>`). Every colour comes from engine theme variables, so light and dark follow automatically.
-Measured inside the real settings dialog, the pill's height / radius / background / padding / font size /
-line height / gap / colour are **all 8 equal** to the "conversation display" control's.
+**A change had no effect?** Changes made in the settings window apply immediately; after a hand edit, switch back to the Harness window to trigger the re-read. At startup the host logs `[composer-keys] route ready at /composer-keys (entry composer-keys)` — if that line is missing, the plugin did not load.
+
+**What if the engine is too old?** The manifest declares `>=0.2.0-rc.2` only; older engines expose the retired settings service (`register` / `get` / `section`), so the plugin cannot save the preference.
+
+**What does it store, and where?** Only those three values, in the plugin's own row config (the engine's settings document). The plugin reads and writes no files itself.
+
+**Can another local program read or change the preference?** The host exposes exactly one route, `GET/POST /composer-keys`, behind the engine's own trust fence (Host allow-list + browser session cookie) and it **fails closed** — a bare `curl` without the cookie gets 401. The plugin makes no outbound network requests.
 
 ## Development
 
 ```sh
 node --check lib/index.js
 node --check client/client.js
-npm test        # local behaviour tests (no network, no engine, no DOM)
+npm test        # node tests/test.mjs: gesture recognition, intervention, IME pass-through, defaults never intervene
 ```
-
-`tests/test.mjs` covers gesture recognition (including `Ctrl+Shift` folding and `Alt` pass-through), the
-intervention decision for three gestures × two actions, IME pass-through, malformed preference values
-never intervening, and the key property that **defaults never intervene**.
 
 ## License
 

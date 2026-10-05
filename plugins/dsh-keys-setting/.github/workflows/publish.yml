@@ -25,6 +25,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      # Exposed as an env var because `secrets` cannot be referenced from `if:`.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,7 +46,11 @@ jobs:
       - name: Test
         run: npm test
 
+      # Skipped when no token is configured: without it npm answers ENEEDAUTH and every tag
+      # shows a red X for no reason. Add the NPM_TOKEN secret to enable tag-driven publishing
+      # (the test step above still runs either way).
       - name: Publish
+        if: env.NPM_TOKEN != ''
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

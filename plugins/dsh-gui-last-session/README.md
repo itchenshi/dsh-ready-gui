@@ -1,139 +1,88 @@
 # dsh-gui-last-session
 
-[![English](https://img.shields.io/badge/README-English-green)](README.en.md)
-[![中文](https://img.shields.io/badge/README-中文-blue)](README.md)
+重启 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）之后，**自动回到你上一次
+待着的那个会话** —— 不用再一层层翻历史。
 
-> 这是 **DSH Ready GUI** 的组成部分之一 —— GUI 开箱内置四个插件，勾选即用。
-> 也可单独装到任何 DSH 宿主里（见下方「装上就能用」）。
-> GUI：https://github.com/itchenshi/dsh-ready-gui
+## 它做什么
 
-重启 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）之后，**自动回到你
-上一次待着的那个会话** —— 不用再一层层翻历史。
+- 页面半边记录你正在看的会话，重启后自动把它重新打开。
+- 引擎启动时那个**空白会话永远不会被记录**（两道防线），所以不会续接一个空对话。
+- 续接会等目标在会话列表里出现（每 150ms 轮询、约 30 秒），这样对未知 id 的 `open()` 不会失败。
+- 记住的会话已被删除时**安静放弃**，把引擎自己的启动行为留在原地。
+- 记录时不会写入子代理（subagent）会话。
 
-## 装上就能用
+## 安装
 
-- **用 DSH Ready GUI（推荐）**：插件**随 GUI 内置**，而且是默认开启的 —— 装好 GUI 就已经在用了。
-  要关掉就在设置窗口 → 第三方插件里取消勾选。
-- **其它 DSH 宿主**（`dsh web` / CLI）—— 两条路都行，任选一条：
+- **用 DSH Ready GUI（推荐）**：插件随 GUI 内置，安装后在设置窗口 →「第三方插件」里勾选/取消即可。
+  它是带页面半边的插件，装完按提示刷新页面。
+- **其它 DSH 宿主**（`dsh web` / CLI）—— 任选一条：
 
   ```sh
-  # 推荐：直接从 GitHub 装（记进 profile，之后可跟着更新）
+  # 推荐：直接从 GitHub 装
   dsh plugin --profile web add github:itchenshi/dsh-gui-last-session
 
-  # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.8/dsh-gui-last-session-0.1.8.tgz
+  # 备选：从本仓库 Release 的 tarball 装
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.9/dsh-gui-last-session-0.1.9.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
 
-> npm 上暂时没有这个包：注册账号那一环走不通（`www.npmjs.com` 返回 Cloudflare 托管挑战），包发不
-> 出去。所以现在只能按上面两种方式装。等注册通了会照常发布。
+> 本包还不在 npm 上（`registry.npmjs.org` 查无此包），只能用上面两种方式装。
 
-## 它替你解决什么
+## 使用
 
-原来的实现**直接改引擎文件**：重写 `node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`，
-靠匹配引擎源码文本找插入点，并用一个精确的引擎版本号做门禁。于是：
+装好、重启引擎、刷新页面后什么都不用做：页面加载时会尝试回到存下的那个会话，之后你每次切换会话都会
+更新指针。
 
-| 失效方式 | 原因 |
-|---|---|
-| 版本门禁 | 引擎版本不是它编写时针对的那一个，补丁就拒绝应用 |
-| 锚点漂移 | 插入点靠匹配字面源码行找到，重新构建 / 改名 / 重新格式化都会让它失效 |
-| 静默降级 | 失败时只记一行日志，功能就这么没了，界面上没有任何错误 |
-| 重装即丢失 | 重装引擎会把补丁整个抹掉 |
+从 DSH Ready GUI 迁移过来时，GUI 会把自己记的指针交给插件（插件已有指针时不覆盖），
+所以原来的「上一个会话」不会丢。
 
-现在它是一个**插件**：住在自己的包里，通过引擎公开的服务契约（`ctx.sessions`）对话，所以引擎更新
-不再会删掉这个功能；契约真的变了，引擎会**大声报错**，而不是悄悄关掉它。
+## 配置
 
-## 行为细节
+`cordis.patch.yml` 里 `id: gui-last-session` 这一行的 `config`，全部可选：
 
-有两处很关键，都有测试覆盖：
-
-1. **引擎启动时的空白会话永远不会被记录。** 页面加载时引擎自己会导航到一个工作区，并可能创建/选中
-   一个**空**会话；要是记下它，下次启动就会去续接一个空对话。两道防线：
-   - 记录在「续接尝试落定（或 4 秒兜底定时器触发）」之前一直**未启用**，所以引擎启动导航发生时
-     插件还没开始监听；
-   - 即便已启用，标记 `blank: true` 的行也永远不记。
-
-2. **续接会等目标变成可寻址的。** 会话列表是页面挂载之后才从网络到的；对未知 id 调 `open()` 会失败，
-   所以插件每 150ms 轮询一次列表快照（上限约 30 秒），等那一行出现再选中它。
-
-**尽力而为**：如果记住的会话已被删除，插件安静放弃，把引擎自己的启动行为留在原地。
-
-## 配置（`cordis.patch.yml` 的行 config，全部可选）
-
-```yaml
-- insert:
-    - id: gui-last-session
-      name: dsh-gui-last-session
-      config:
-        enabled: true   # 总开关
-        quiet: false    # true = 激活时不记任何日志
-```
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | `false` 时插件直接返回，不注册任何路由 |
+| `quiet` | `false` | `true` 时激活不记日志 |
 
 想在不改包的前提下覆盖某个 profile 的配置，就在**该 profile 自己的** `cordis.patch.yml` 里加一条 id
 相同的行（它会整体替换 `config`，所以每个键都要写全）。
 
-## 权限与边界（给会静态扫描的商城看的）
+## 兼容性
 
-- **运行依赖：无。** 只用 Node 内建模块（`node:fs/promises`、`node:crypto`、`node:path`、`node:os`）。
-- **文件：恰好一个。** 宿主半边在 `<DSH_HOME>/last-session.json` 维护一份很小的指针文档，**原子写入**
-  （唯一临时名 + rename），所以崩溃不会留下半个文件。它只记一个 session id，别的什么都不记。
-- **本机路由：一条。** 宿主注册唯一一条面向页面的路由，页面半边用它读写指针；它走引擎的信任围栏
-  （Host 白名单 + 浏览器会话 cookie），围栏拿不到时**失败即关闭**。
-- **对外网络：没有。** 唯一的 `fetch` 是发往上面那条本地路由的同源请求。
-- **凭据 / 命令 / 原生制品 / 生命周期脚本：无。**
-- **失败边界：** 指针缺失、读不出来或损坏，都按「没有可续接的东西」处理 —— 记一条日志，启动照常落在
-  普通界面上。绝不阻断引擎启动；卸载即恢复原生行为，除了那一个文件之外不留残留状态。
+- 清单声明 **DSH >= 0.1.5-rc.2**，并把 0.1.5-rc.2 与 0.2.0-rc.2 标为 compatible。
+- Node >= 20。
+- 插件本身**不做版本号门禁**，依赖的是公开服务契约（`ctx.sessions`）；契约变了引擎会大声报错，而不是
+  悄悄关掉功能。
+- 本仓库的测试不启动引擎；与真实引擎的端到端行为没有在这里自动化。
 
-## HTTP 接口
+## 常见问题
 
-```
-GET  /gui-last-session   -> { sessionId: string | null, updatedAt?: number }
-POST /gui-last-session   -> { ok: true, sessionId, updatedAt }
-     body: { "sessionId": "session-..." }
-```
+**重启后没回到原会话？** 看应用日志：记录成功会打 `[gui-last-session] pointer -> session-...`，启动时
+会打 `[gui-last-session] active (pointer: <DSH_HOME>/last-session.json)`。恢复路径的诊断也写进同一份
+日志（`[gui-last-session] reopen: no usable pointer`、`reopen: FAILED — ...`、`reopen: giving up ...`），
+所以「没有指针 / 目标一直没出现 / 这个引擎没有打开会话的接口」是可以区分开的。
 
-两个方向都用 `/^session-[A-Za-z0-9_-]{4,200}$/` 校验 id；`POST` 带了别的内容会被 `400` 拒绝，文件保持
-原样。这条路由受信任围栏保护，所以裸 `curl` 会得到 **401** —— 要手工调用，先用 `dsh web` 打印的 URL
-打开一次拿到会话 cookie，再带上：
+**它存了什么、存在哪？** 只有一个 session id 和时间戳，写在 `<DSH_HOME>/last-session.json`，**原子写入**
+（唯一临时名 + rename），崩溃不会留下半个文件。除此之外不留状态。
 
-```sh
-curl -X POST http://127.0.0.1:<port>/gui-last-session \
-     -H 'content-type: application/json' \
-     -H 'cookie: <引擎会话 cookie>' \
-     -d '{"sessionId":"session-..."}'
-```
+**为什么记下的不是我刚看的那个会话？** 空白（未使用）会话永不记录；插件取的是引擎主视图正在显示的
+那个（`retainedBy.mainView`），否则是最近提问过的那个。子代理会话会被跳过。
 
-## 两部分构成
-
-| 部分 | 文件 | 运行在 | 职责 |
-|---|---|---|---|
-| 宿主 | `lib/index.js` | Node | 把指针原子写进 `$DSH_HOME/last-session.json`，并提供一条很小的 JSON 路由 |
-| 页面 | `client/client.js` | 浏览器 | 记录当前会话；加载时重新打开已存下的那一个 |
-
-页面半边是**手写的、无依赖的 bundle**，没有构建步骤也没有打包器。引擎的客户端模块系统**不接受普通
-ESM**：bundle 必须注册一个惰性的 CJS 工厂（`window.__ModuleLoader__.load({ id, factory })`，`id` 必须
-等于包名），所有副作用都放在工厂闭包里、物化时才运行。**两套 inject 别搞混**：`package.json` 的
-`dsh.client.inject` 写的是**包名**（决定浏览器模块图的加载顺序），bundle 工厂导出的 `inject` 写的是
-**服务名**（如 `['sessions']`）。两者都必需 —— 漏掉导出的 `inject`，页面一加载 `apply()` 里取
-`ctx.sessions` 就会抛 `cannot get property "sessions" without inject`。
-
-`tests/test.mjs` 正是按这个契约加载 bundle 的，所以「退回普通 ESM」或「漏了导出的 inject」都会让测试
-失败，而不是留到浏览器里才炸。
+**别人能读到这个指针吗？** 宿主只开 `GET/POST/PUT /gui-last-session` 与一条只写日志的
+`POST /gui-last-session/report`，两者都走引擎自己的信任围栏（Host 白名单 + 浏览器会话 cookie），拿不到
+围栏时**失败即关闭** —— 不带 cookie 的裸 `curl` 得到 401。插件没有任何对外网络请求。
 
 ## 开发
 
 ```sh
 node --check lib/index.js
-npm test        # 本地行为测试（不联网、不需要引擎）
+npm test        # manifest-contract.cjs + test.mjs + handoff.cjs
 ```
 
-**兼容性**：插件依赖的是**公开服务契约**，不是引擎版本号，所以有意**不做版本门禁**（版本区间在这里
-也不合适：npm semver 会把预发布版排除在 `>=0.1.2-0 <0.2.0` 这类区间之外，反而误杀 `0.1.5-rc.1`）。
-已在 dsh 0.1.5-rc.1 上端到端验证：装上后引擎能启动、`GET /gui-last-session` 返回已存下的指针、
-`dsh-gui-last-session/client.js` 随启动载荷下发（HTTP 200）。
-
-本包是零依赖的普通 JavaScript。
+`node tests/test.mjs` 就是本地行为测试（不联网、不需要引擎），它按引擎的 `__ModuleLoader__` 契约加载
+页面 bundle；`tests/served-bundle-check.cjs` 需要跑着的 profile，不在 `npm test` 里。
 
 ## 许可
 
