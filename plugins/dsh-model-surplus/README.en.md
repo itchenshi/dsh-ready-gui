@@ -40,7 +40,7 @@ shows or hides it immediately, with no refresh.
   dsh plugin --profile web add github:itchenshi/dsh-model-surplus
 
   # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.4/dsh-model-surplus-0.4.4.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-model-surplus/releases/download/v0.4.5/dsh-model-surplus-0.4.5.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration

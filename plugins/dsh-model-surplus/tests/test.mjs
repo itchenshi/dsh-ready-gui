@@ -717,7 +717,7 @@ await check('usage store notifies subscribers and replaces state', () => {
 // difference between "only the engine page can reach it" and "any local process, or
 // a page that rebound a hostname to 127.0.0.1, can". The assertions pin the
 // fail-closed default and the status mapping.
-check('rejectUntrusted fails closed when the fence is unavailable', () => {
+await check('rejectUntrusted fails closed when the fence is unavailable', () => {
   const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
   for (const ctx of [{ get: () => undefined }, { get: () => ({}) }, { get: () => null }, {}]) {
     const res = mk()
@@ -727,7 +727,7 @@ check('rejectUntrusted fails closed when the fence is unavailable', () => {
   }
 })
 
-check('rejectUntrusted mirrors the engine fence and lets allowed requests through', () => {
+await check('rejectUntrusted mirrors the engine fence and lets allowed requests through', () => {
   const mk = () => ({ statusCode: 0, ended: 0, body: null, end(v) { this.ended += 1; this.body = v } })
   // allowed: the engine fence returns undefined
   let res = mk()

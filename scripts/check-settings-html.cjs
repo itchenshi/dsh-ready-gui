@@ -173,7 +173,20 @@ check("「待重启引擎」标注存在、默认隐藏，且安装与卸载都�
   if (!/function settleRestartBadge\(/.test(html)) throw new Error("settleRestartBadge helper missing");
   const marks = html.match(/markRestartNeeded\(true\)/g) || [];
   if (marks.length < 2) throw new Error("install AND uninstall must both mark the restart badge");
-  if (!/markRestartNeeded\(changed\)/.test(html)) throw new Error("the repair path must follow its own result");
+  // The repair path must MERGE its own result with any already-pending restart: `changed`
+  // means "this pass altered the installed set", not "the running engine has loaded it".
+  // Clearing the badge on a pass that changed nothing left a just-installed plugin silently
+  // unloaded until the app was restarted.
+  if (!/const needsRestart = changed \|\| pendingEngineRestart;/.test(html)) {
+    throw new Error("the repair path must merge its result with any pending restart");
+  }
+  if (!/markRestartNeeded\(needsRestart\);/.test(html)) {
+    throw new Error("the repair path must apply the merged restart state");
+  }
+  // …and a FAILED sync (no arrays to count, `ok:false`) must not be rendered as success.
+  if (!/res && res\.ok === false/.test(html)) {
+    throw new Error("a failed plugin sync must be reported as a failure");
+  }
   if (!/settleRestartBadge\(s\)/.test(html)) throw new Error("paint() must settle the badge when the engine restarted");
   if (!/\.plg-need-restart/.test(html)) throw new Error("the badge needs its stylesheet rule");
 });

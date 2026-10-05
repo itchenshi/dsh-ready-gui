@@ -127,13 +127,23 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * The engine-side defaults, as reported by the host. `FALLBACK_DEFAULTS` is only what we
+     * use before the first answer arrives — the host's value is authoritative, so a change on
+     * the engine side does not silently diverge from a hard-coded copy here.
+     */
+    function hostDefaults(body) {
+      const value = body?.defaults
+      return value && typeof value === 'object' ? { ...FALLBACK_DEFAULTS, ...value } : FALLBACK_DEFAULTS
+    }
+
     /** Read the host preference; a failure keeps the fallbacks (no remapping). */
     async function loadPrefs(store) {
       try {
         const res = await fetch(ROUTE_PATH, { headers: { accept: 'application/json' } })
         const body = await res.json().catch(() => null)
         if (body && body.ok === true && body.value) {
-          store.set({ value: { ...FALLBACK_DEFAULTS, ...body.value }, defaults: body.defaults ?? FALLBACK_DEFAULTS, status: 'ready' })
+          store.set({ value: { ...hostDefaults(body), ...body.value }, defaults: hostDefaults(body), status: 'ready' })
           return true
         }
         store.set({ status: 'error' })
@@ -156,7 +166,7 @@ window.__ModuleLoader__.load({
         })
         const body = await res.json().catch(() => null)
         if (body && body.ok === true && body.value) {
-          store.set({ value: { ...FALLBACK_DEFAULTS, ...body.value }, status: 'ready' })
+          store.set({ value: { ...hostDefaults(body), ...body.value }, status: 'ready' })
           return true
         }
       } catch {
@@ -265,16 +275,19 @@ window.__ModuleLoader__.load({
       '.dsh-ck-check{flex:none;color:var(--dsw-alias-label-primary)}',
     ].join('')
 
-    /** Inject the row stylesheet once; returns the disposer. */
+    /** Inject the row stylesheet once for the page's lifetime (no disposer — see below). */
     function installStyles() {
-      if (document.getElementById(STYLE_ID) !== null) return () => {}
+      // Injected once for the page's lifetime, exactly like the engine's own bundles do it
+      // (dsh-client-ui-settings-general appends under a data-plugin-css marker and never
+      // removes it). Returning a disposer was a hazard rather than cleanup: the guard makes a
+      // SECOND instance a no-op while the FIRST instance's disposer still removes the shared
+      // tag — so a mount/dispose sequence that starts the new instance first left the row
+      // unstyled until the page was reloaded again.
+      if (document.getElementById(STYLE_ID) !== null) return
       const style = document.createElement('style')
       style.id = STYLE_ID
       style.textContent = ROW_CSS
       document.head.appendChild(style)
-      return () => {
-        style.remove()
-      }
     }
 
     /** The engine's 14px chevron, drawn with the same visual weight. */
@@ -481,9 +494,9 @@ window.__ModuleLoader__.load({
       void loadPrefs(store).then(() => {
         ctx.effect(() => {
           const disposeKeymap = installKeyRemap(store)
-          // settings.yaml is editable by hand (and the documented config path),
-          // so re-read when the window regains focus — the file edit then takes
-          // effect on the next click into the page, with no reload.
+          // The row's config in the profile patch is editable by hand (settings.yaml was
+          // retired in engine 0.2.0), so re-read when the window regains focus — a hand edit
+          // then takes effect on the next click into the page, with no reload.
           const onFocus = () => {
             void loadPrefs(store)
           }

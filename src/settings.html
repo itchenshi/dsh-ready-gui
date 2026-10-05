@@ -1161,25 +1161,39 @@
           const res = await api.syncPlugins();
           const fresh = await api.get();
           paint(fresh);
+          // A FAILED sync has no installed/removed/errors arrays to count, so deriving
+          // everything from those arrays rendered `{ok:false, error:"busy"|"unauthorized"}` as
+          // "插件状态一致 —— 无需重启引擎" — a failure shown as success. Check `ok` first.
+          if (res && res.ok === false) {
+            pluginMsg.textContent = t("settings.plugins.failed", String(res.error || "?"));
+            // Do not touch the restart badge: this run told us nothing about it. The `finally`
+            // below still releases the busy lock and restores the labels.
+            return;
+          }
           const failN = (res && Array.isArray(res.errors) ? res.errors.length : 0) || 0;
           const okN = (res && Array.isArray(res.installed) ? res.installed.length : 0) || 0;
           const remN = (res && Array.isArray(res.removed) ? res.removed.length : 0) || 0;
           const skipN = (res && Array.isArray(res.skipped) ? res.skipped.length : 0) || 0;
-          // 安装/捆绑更新真的发生才提示重启引擎；否则明确告知无需重启。
+          // `changed` means "this pass altered the installed set", which is NOT the same as
+          // "the running engine still needs a restart". A previously installed plugin that
+          // this pass reconciled to the same shape reports changed=false while the engine
+          // still has not loaded it — clearing the badge there made the plugin silently never
+          // load until the app was restarted. Keep any pending restart.
           const changed = Boolean(res && res.changed) || okN + remN > 0;
+          const needsRestart = changed || pendingEngineRestart;
           const head =
             okN + remN + skipN + failN > 0
               ? t("settings.plugins.done", String(okN), String(remN), String(failN + skipN))
               : t("settings.plugins.inSync");
-          const tail = changed
+          const tail = needsRestart
             ? t("settings.plugins.needRestartSuffix")
             : t("settings.plugins.noRestartSuffix");
           pluginMsg.textContent = head + tail;
           if (failN > 0 && Array.isArray(res.errors) && res.errors[0]) {
             pluginMsg.textContent += t("settings.plugins.firstError", String(res.errors[0]));
           }
-          // 有实际变动（新装/卸载/捆绑更新）：标注「待重启引擎」；没有变动则撤掉旧标注。
-          markRestartNeeded(changed);
+          // 有实际变动（新装/卸载/捆绑更新）或本来就有待重启：标注「待重启引擎」。
+          markRestartNeeded(needsRestart);
         } catch (error) {
           pluginMsg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
         } finally {
@@ -1236,9 +1250,21 @@
           restore(orig, 800);
         }
       });
+    }).catch((error) => {
+      // The whole wiring lives inside this callback, so an unhandled rejection here left an
+      // empty, inert window with no explanation — and `paint(null)` inside would have thrown
+      // anyway. Say what happened instead (main.js can resolve `settings:get` as null, and it
+      // rejects if the payload build fails).
+      try {
+        const msg = document.getElementById("pluginMsg");
+        if (msg) msg.textContent = t("settings.plugins.failed", String((error && error.message) || error));
+      } catch {
+        /* nothing left to report into */
+      }
+      console.error("[settings] boot failed:", error);
     });
 
-    // Follow the theme the host resolved from DeepSeek Harness settings.yaml.
+    // Follow the theme the host resolved from the engine's appearance preference.
     const theme = new URLSearchParams(location.search).get("theme");
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   </script>

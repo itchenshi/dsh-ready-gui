@@ -14,7 +14,7 @@
 //
 // Deliberately dependency-free and synchronous-free (async fs only) so it is testable
 // with temp dirs and adds no new runtime dependency to an Electron app.
-import { mkdir, open, rm, stat, readFile, writeFile, utimes } from "node:fs/promises";
+import { mkdir, open, rm, stat, readFile, utimes } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -171,8 +171,4 @@ export async function readInstallLock(lockFile) {
   }
 }
 
-/** Write a marker file (used by tests to prove the lock is held). */
-export async function writeMarker(file, text) {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, text, "utf8");
-}
+

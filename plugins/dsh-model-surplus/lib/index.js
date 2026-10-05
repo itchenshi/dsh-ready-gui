@@ -688,8 +688,12 @@ function toIsoOrNull(value) {
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString()
   }
   const n = Number(value)
-  if (Number.isFinite(n) && n > 0) return new Date(n).toISOString()
-  return null
+  if (!Number.isFinite(n) || n <= 0) return null
+  // The doc promises epoch-seconds too. Without this branch a seconds value is read as
+  // milliseconds, so every reset time renders as 1970 with no error anywhere to notice it.
+  // (Below 1e12 cannot be a plausible millisecond timestamp: that is 2001-09-09.)
+  const ms = n < 1e12 ? n * 1000 : n
+  return new Date(ms).toISOString()
 }
 
 /** A non-negative finite amount, or null. */
@@ -802,7 +806,9 @@ export async function fetchDocsLimits({ url = DOCS_URL, fetchImpl = fetch, timeo
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetchImpl(url, {
-      headers: { accept: 'text/html', 'user-agent': 'dsh-model-surplus/0.3.1' },
+      // No version in the UA: a hard-coded one silently goes stale (it read 0.3.1 while the
+      // package was 0.4.x), and nothing here depends on the version anyway.
+      headers: { accept: 'text/html', 'user-agent': 'dsh-model-surplus' },
       signal: controller.signal,
     })
     if (!res.ok) {
@@ -942,6 +948,9 @@ export function apply(ctx, config = {}) {
       return value
     })()
 
+    // While the shared call is in flight, concurrent callers are handed that same promise
+    // (below), so this placeholder is only ever observed by a direct cache read — it exists
+    // so such a reader sees "not ready yet" rather than a stale previous answer.
     caches.set(key, { at: now, value: cached?.value ?? { ok: false, reason: 'pending' }, inflight: run })
     return run
   }

@@ -565,7 +565,6 @@ let startupDiagnosisDone = false;
 // “重启引擎”请求/进行中的标记（页面或设置窗口触发 → 主进程杀掉并重拉 dsh）。
 let engineRestartInFlight = false;
 // 非退出场景下引擎意外退出 → 自动重拉一次（dsh 页面自己没法重启 GUI 的 dsh）。
-let engineReady = false;
 // 有意停止引擎（切换数据目录 / 更新流程等）时置位，避免被当成“意外退出”自动重拉。
 let intentionalEngineStop = false;
 // 就绪后连续意外退出的计数（>3 停止自动重拉并提示）。
@@ -1564,7 +1563,6 @@ function restartEngineNow(reason) {
     return { ok: true };
   }
   engineRestartInFlight = true;
-  engineReady = false;
   intentionalEngineStop = true;
   log("restarting engine...", reason ?? "");
   const child = dshChild;
@@ -1585,7 +1583,6 @@ function restartEngineNow(reason) {
       .catch((error) => {
         err("engine restart failed:", error);
         engineRestartInFlight = false;
-        engineReady = false;
         intentionalEngineStop = false;
         fatalUi(error, L("engine.startFailed"));
       });
@@ -3882,7 +3879,6 @@ async function startEngine(nodeExec) {
       clearWatchdog();
       uiSettled = true;
       engineStarted = true;
-      engineReady = true;
       engineRestartInFlight = false;
       intentionalEngineStop = false;
       engineReadyAt = Date.now();
@@ -3945,7 +3941,6 @@ async function startEngine(nodeExec) {
     onExit: (code, signal) => {
       log("dsh exited code=", code, "signal=", signal ?? "");
       engineStarted = false;
-      engineReady = false;
       lastEngineUrl = null;
       engineOrigin = null;
       // 有意停止（切换数据目录 / 更新引擎 / 正在重启 / 退出）**不是失败**，而且这个判断
@@ -3995,7 +3990,6 @@ async function startEngine(nodeExec) {
       settled = true;
       clearWatchdog();
       engineStarted = false;
-      engineReady = false;
       if (!pluginFailureRecoveryDone && pluginsInstalledThisLaunch.length > 0) {
         recoverFromPluginFailure(String((error && error.message) || error)).catch((e2) =>
           err("plugin recovery failed:", e2.message),

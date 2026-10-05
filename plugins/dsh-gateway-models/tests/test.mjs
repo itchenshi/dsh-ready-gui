@@ -228,8 +228,18 @@ check('planRouteUpdate seeds a full list when the user configured none', () => {
   // our entry keeps its own limits; the detected ones stay catalog-shaped
   assert.equal(patch.models[0].contextWindow, V4_1_MODELS[0].contextWindow)
   assert.deepEqual(patch.models[1], { id: 'minimax-m3', name: 'MiniMax-M3' })
-  // a catalog-unknown model is listed -> the route needs an endpoint, or the
-  // engine refuses the very write that adds it ("needs a baseURL").
+  // A catalog-unknown model is listed -> the route needs an endpoint, or the engine
+  // refuses the very write that adds it ("needs a baseURL"). Our V4.1 entries carry no
+  // endpoint of their own (see withV41Defaults), and the engine only resolves one from the
+  // CATALOG entry — which an unknown model does not have.
+  assert.equal(patch.baseURL, 'https://opencode.ai/zen/go/v1')
+})
+
+check('planRouteUpdate supplies the endpoint for a route the catalog does not describe', () => {
+  // Empty catalog: the whole list is plugin-described, so the endpoint is mandatory.
+  const patch = planRouteUpdate(undefined, {}, [])
+  assert.ok(patch, 'the V4.1 entries make this a write')
+  assert.deepEqual(patch.models.map((m) => m.id), V4_1_MODELS.map((m) => m.id))
   assert.equal(patch.baseURL, 'https://opencode.ai/zen/go/v1')
 })
 

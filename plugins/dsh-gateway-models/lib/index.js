@@ -43,7 +43,8 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFile } from 'node:fs/promises'
 import { statSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
+import { isAbsolute, join, resolve, sep } from 'node:path'
+import { homedir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 export const name = 'opencode-go'
@@ -87,15 +88,20 @@ function resolveConfig(config = {}) {
 
 /**
  * Resolve an optional debugFile under a constrained allow-list of directories.
- * Only a path inside `$DSH_HOME/logs` (preferred) or inside the OS temp dir is
+ * Only a path inside the harness home's `logs` (preferred) or inside the OS temp dir is
  * accepted; anything else fails closed to `undefined` rather than writing to an
- * arbitrary location. A relative path is anchored to `$DSH_HOME/logs`.
+ * arbitrary location. A relative path is anchored to the harness home's `logs`.
+ *
+ * The home is resolved the way the engine resolves it (`dsh-home-paths`): a non-blank
+ * `$DSH_HOME` wins, otherwise `~/.dsh`. Reading the env var alone was wrong in both
+ * directions — the engine never assigns `process.env.DSH_HOME`, so on a default install the
+ * documented `<home>/logs/...` was REJECTED while `<cwd>/logs/...` was accepted, the exact
+ * opposite of the policy above.
  */
 function resolveSafeDebugFile(value) {
   if (typeof value !== 'string' || value.length === 0) return undefined
-  const home = (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0)
-    ? process.env.DSH_HOME
-    : process.cwd()
+  const fromEnv = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : ''
+  const home = fromEnv.length > 0 ? fromEnv : join(homedir(), '.dsh')
   const homeLogs = resolve(home, 'logs')
   const tempRoot = resolve(tempDir())
   let absolute
@@ -196,10 +202,20 @@ export function withStore(iterable, store, als) {
   }
 }
 
+/**
+ * The headers a fetch call carries, mirroring native precedence: `init.headers` wins,
+ * otherwise a `Request`'s own headers are the base. One expression, used by both the
+ * "already present?" check and the patch itself — these were duplicated before, so a change
+ * to one silently diverged from the other.
+ */
+function headerSource(input, init) {
+  return init?.headers
+    ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined)
+}
+
 /** True when the outgoing request already carries the session header. */
 function hasSessionHeader(input, init) {
-  const source = init?.headers
-    ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined)
+  const source = headerSource(input, init)
   if (source === undefined) return false
   try {
     return new Headers(source).has(SESSION_HEADER)
@@ -217,10 +233,7 @@ export function patchFetch(original, als) {
   return function patchedFetch(input, init) {
     const state = als.getStore()
     if (state && !hasSessionHeader(input, init) && targetsOpenCode(input, state.hosts)) {
-      const headers = new Headers(
-        init?.headers
-          ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined),
-      )
+      const headers = new Headers(headerSource(input, init))
       headers.set(SESSION_HEADER, state.value)
       return original.call(this, input, { ...init, headers })
     }
@@ -561,8 +574,16 @@ export function planRouteUpdate(userProfile, resolvedRoute, catalog) {
   //    write), each with our models in front. `merged === null` means it already
   //    has that shape, so there is nothing to write for it.
   const listed = userConfigured ? stored : detected.map((model) => (
-    // Only id + name: the remaining fields (limits, modalities, api) stay the
-    // catalog's, so a later catalog update still reaches this entry.
+    // Only id + name. For a CATALOG model the rest (limits, modalities, api, baseUrl) is the
+    // catalog's, so a later catalog update still reaches this entry — with one caveat that is
+    // worth stating plainly because the route-level patch in this package relies on it:
+    // the engine resolves `api = request.api ?? base?.api ?? routeApi` (and likewise
+    // `baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl`), where `request` is the
+    // ROUTE profile. A route-level `api`/`baseURL` therefore wins over every catalog model's
+    // own value. `cordis.patch.yml` sets `providers.opencode-go.api`, so that route is
+    // dispatched as one protocol for all its models, including the catalog's anthropic-messages
+    // entries. That is a deliberate convenience patch, not something this function can fix:
+    // the engine offers no per-model api lever.
     typeof model.name === 'string' && model.name.length > 0
       ? { id: model.id, name: model.name }
       : { id: model.id }
@@ -575,7 +596,16 @@ export function planRouteUpdate(userProfile, resolvedRoute, catalog) {
   // list the user layer (or the catalog) already has, which is what keeps a
   // catalog-authoritative route authoritative.
   if (merged !== null) patch.models = models
-  // 2. an endpoint is required exactly when a listed model is not in the catalog.
+  // 2. An endpoint is required exactly when a listed model is not in the catalog. Our own
+  //    V4.1 entries carry no `baseUrl` of their own — the engine resolves
+  //    `baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl` from the CATALOG entry
+  //    for that model, and a catalog-unknown model has none — so the route-level value is the
+  //    only endpoint available to it, and without it the engine drops the model silently.
+  //
+  //    Known trade-off: a route-level `baseURL` (like a route-level `api`) outranks every
+  //    catalog model's own value, so on a mixed route this re-points the catalog-backed models
+  //    too. That is unavoidable while the engine offers no per-model lever for
+  //    catalog-unknown models; the alternative — not writing it — loses the model entirely.
   if ((resolvedRoute?.baseURL ?? '') === '' && models.some((model) => !catalogIds.has(model?.id))) {
     patch.baseURL = DEFAULT_BASE_URL
   }

@@ -873,7 +873,18 @@ function declaredPatchPackages(dshHome) {
       scoped = [];
     }
     for (const sub of scoped) {
-      if (sub.isDirectory()) consider(path.join(dir, sub.name), `${entry.name}/${sub.name}`);
+      // Same symlink/junction handling as the top-level loop: `isDirectory()` is false for a
+      // link, so a scoped package linked into the profile would stay invisible to the
+      // ownership map and its row id could then be disabled by the GUI.
+      let isDir = sub.isDirectory();
+      if (!isDir && sub.isSymbolicLink()) {
+        try {
+          isDir = fs.statSync(path.join(dir, sub.name)).isDirectory();
+        } catch {
+          isDir = false;
+        }
+      }
+      if (isDir) consider(path.join(dir, sub.name), `${entry.name}/${sub.name}`);
     }
   }
   return names;
@@ -1247,6 +1258,30 @@ function escapeRegExp(value) {
 }
 
 /**
+ * Write a shared JSON file atomically: unique temp name in the same directory, then rename.
+ *
+ * The market state file is written by the market running inside the engine AND by other GUI
+ * instances. A plain truncate+write lets a concurrent reader see a half-written file — which
+ * `readMarketDisabled` then treats as "nothing disabled", so the GUI's view silently drifts —
+ * and a lost update drops the other keys that live in that file (groups, groupOrder, region).
+ * Every other shared-file write in this module already goes through temp+rename.
+ */
+function writeFileAtomic(file, text) {
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmp, text);
+  try {
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* best effort */
+    }
+    throw error;
+  }
+}
+
+/**
  * 把市场 state.json 的 disabled 列表改写为 nextDisabled（保留其余键）。
  * 返回是否真的写入了（内容没变就不写，避免触发无意义的 watch 事件）。
  */
@@ -1264,8 +1299,8 @@ function writeMarketDisabled(dshHome, nextDisabled) {
   if (current.length === next.length && current.every((n) => next.includes(n))) return false;
   raw.disabled = next;
   // 紧凑 JSON、不加尾随换行：与市场 writeMarketState 的序列化逐字节一致，
-  // 避免同一份文件在两种格式之间来回翻转。
-  fs.writeFileSync(file, JSON.stringify(raw));
+  // 避免同一份文件在两种格式之间来回翻转。原子写见 writeFileAtomic。
+  writeFileAtomic(file, JSON.stringify(raw));
   return true;
 }
 
@@ -1989,10 +2024,8 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
   let changed = false;
 
   const rawReload = profile.patchReload;
-  if (rawReload !== undefined && rawReload !== "live" && rawReload !== "startup") {
-    profile.patchReload = "live";
-    changed = true;
-    result.repaired.push("<patchReload>");
+  const fixPatchReload = rawReload !== undefined && rawReload !== "live" && rawReload !== "startup";
+  if (fixPatchReload) {
     log("reset invalid dsh.profile.patchReload:", JSON.stringify(rawReload), "->", '"live"');
   }
 
@@ -2035,7 +2068,18 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
   }
   const repairedSet = new Set(result.repaired);
   const stillUnresolvable = unresolvable.filter((name) => !repairedSet.has(name));
-  const pruneList = [...new Set([...stillUnresolvable, ...noBundle])];
+  // Only prune a registration whose DEPENDENCY is gone as well.
+  //
+  // In engine 0.2.0 an unresolvable bundle no longer blocks startup — the loader catches each
+  // failure and only prints "skipping profile bundle" — so a package that is merely unhealthy
+  // (node_modules momentarily absent, unreadable, or no longer declaring dsh.bundle) does not
+  // need its registration destroyed. Dropping it is permanent: nothing re-adds it, because the
+  // engine re-registers packages only during a package-manager operation. The "dependency is
+  // gone too" case still prunes, which is what unblocks a genuinely broken install.
+  const declaredDependencies = manifest.dependencies ?? {};
+  const pruneList = [...new Set([...stillUnresolvable, ...noBundle])].filter(
+    (name) => !Object.prototype.hasOwnProperty.call(declaredDependencies, name),
+  );
 
   if (pruneList.length > 0) {
     profile.bundles = bundles.filter((name) => !pruneList.includes(name));
@@ -2049,12 +2093,14 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
     }
   }
 
-  if (changed) {
+  if (changed || fixPatchReload) {
     try {
       // 写之前**重读**：这份 manifest 是在若干次 `await`（pnpm 自举、`dsh plugin install`）
       // 之前读的，而启动维护与「修复 / 重试」是两条独立的异步路径，各自都持有旧快照 ——
       // 直接写回会把对方刚写进去的 bundles/dependencies 覆盖掉（刚装/刚卸的插件被悄悄还原）。
-      // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖）应用到**最新**的清单上。
+      // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖 / 那个补丁字段）应用到**最新**
+      // 的清单上。此前 patchReload 是改在旧快照上的：写的是 fresh，于是「已修复」只出现在
+      // 返回值里，磁盘上什么都没变 —— 报了一次并不存在的修复。
       const fresh = readProfileManifest(dshHome);
       // 重读失败（null）时**绝不**退回写那份旧快照：readProfileManifest 对任何读/解析
       // 失败都返回 null（pnpm 正在原子替换、EACCES…），而此时写回旧快照就会把另一个写者
@@ -2068,6 +2114,10 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
         fresh.dsh = fresh.dsh ?? {};
         fresh.dsh.profile = fresh.dsh.profile ?? {};
         fresh.dsh.profile.bundles = currentBundles.filter((name) => !pruneList.includes(name));
+        if (fixPatchReload && fresh.dsh.profile.patchReload !== "live") {
+          fresh.dsh.profile.patchReload = "live";
+          result.repaired.push("<patchReload>");
+        }
         writeProfileManifest(dshHome, fresh);
         result.changed = true;
       }
@@ -2413,7 +2463,6 @@ module.exports = {
   planBundledPluginUpdate,
   bundledStagedSpec,
   isBundledStagedSpec,
-  stageBundledPlugin,
   catalogStatus,
   pluginHasClientHalf,
   setPluginEnabled,

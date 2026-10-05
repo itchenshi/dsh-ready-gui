@@ -64,8 +64,19 @@
     // 指针可能**一开始就在**这个窗口上（提示弹在鼠标底下）：那时不会收到 mouseenter，
     // 计时器会照常把用户正在看的提示关掉。所以悬停状态要显式记着，arm() 悬停时直接不排程。
     let hovering = false;
+    /**
+     * Is the pointer over the window right now?
+     *
+     * `hovering` only tracks `mouseenter`/`mouseleave`, and a window that appears UNDER a
+     * stationary cursor never receives `mouseenter` — so the flag stayed false exactly in the
+     * case this comment is about, and the notice closed after 5s while the user was reading
+     * it. Hit-test the live hover state as well; this is what makes the intent real.
+     */
+    function pointerOverWindow() {
+      return hovering || document.body.matches(":hover");
+    }
     function arm() {
-      if (hovering) return;
+      if (pointerOverWindow()) return;
       clearTimeout(closeTimer);
       closeTimer = setTimeout(() => window.close(), AUTO_CLOSE_MS);
     }
