@@ -53,6 +53,7 @@ const { acceptableEngineUrl, sameOrigin } = require("./engine-url");
 const { preferredOrder, fetchLatestRelease, likelyMainland } = require("./update-sources");
 const { defaultDshHome, hasHomeData, moveHomeData } = require("./home-migrate");
 const { createRecoveryPolicy, PAGE_UP_TIMEOUT_MS, HEALTHY_AFTER_MS } = require("./renderer-recovery.js");
+const { withInstallLock } = require("./install-lock.js");
 const { migrateLegacyUserData } = require("./userdata-migrate");
 const { ensureEnginePatches } = require("./engine-patch");
 const {
@@ -1276,7 +1277,28 @@ function npmInstall(version, onProgress) {
     // （cordis-plugin-loader 等）原样留下 → 引擎在根 import 不到 nested 的
     // client-ui 包，ERR_MODULE_NOT_FOUND 挡死整个启动。级联安装必须从空目录
     // 开始（产物全部 hoist 到根），再整体换入；失败时旧引擎原样保留可回滚。
-    const stage = `${ENGINE_DIR}.stage`;
+    // 每进程唯一的 stage 目录：固定名在「两个实例同时安装/更新引擎」时会互撞。
+    const stage = `${ENGINE_DIR}.stage-${process.pid}`;
+    // …而唯一名字的代价是崩溃会留下垃圾（每个几十到上百 MB），所以在安装前顺手清掉
+    // 别人的陈旧 stage（超过 1 小时、且不是本进程的）。正在安装的另一个实例不受影响。
+    try {
+      const parent = path.dirname(ENGINE_DIR);
+      const prefix = `${path.basename(ENGINE_DIR)}.stage-`;
+      for (const name of fs.readdirSync(parent)) {
+        if (!name.startsWith(prefix) || name === path.basename(stage)) continue;
+        const full = path.join(parent, name);
+        try {
+          if (Date.now() - fs.statSync(full).mtimeMs > 60 * 60 * 1000) {
+            fs.rmSync(full, { recursive: true, force: true });
+            log("pruned stale engine stage dir:", name);
+          }
+        } catch {
+          /* busy/unreadable: leave it */
+        }
+      }
+    } catch {
+      /* parent unreadable: nothing to prune */
+    }
     try {
       fs.rmSync(stage, { recursive: true, force: true });
     } catch {
@@ -3550,16 +3572,24 @@ async function startEngine(nodeExec) {
   const previouslyInstalled = new Set([...installedBeforeSync, ...legacyPlugins.replaced]);
   if (installedCatalogIds.length > 0) {
     try {
-      const syncResult = await syncEnabledPlugins({
-        enabledIds: installedCatalogIds,
-        engineDir: ENGINE_DIR,
-        dshHome: effectiveHomePath(),
-        nodeExec,
-        pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
-        stagingRoot: pluginBundledPluginsDir(),
-        mode: "install",
-        log,
-      });
+      // 跨进程锁：这一步会重建 staging 目录并跑 pnpm，两个实例同时做就会踩坏对方
+      // （staging 目录是「先删后拷」，另一个实例正读它时 pnpm 直接
+      // ERR_PNPM_DIRECTORY_FETCHER_IO）。锁超时后会退化为「照常进行」而不是拒绝启动。
+      const syncResult = await withInstallLock(
+        installLockFile(),
+        () =>
+          syncEnabledPlugins({
+            enabledIds: installedCatalogIds,
+            engineDir: ENGINE_DIR,
+            dshHome: effectiveHomePath(),
+            nodeExec,
+            pnpmInstallDir: path.join(userDataDir(), "pnpm-tools"),
+            stagingRoot: pluginBundledPluginsDir(),
+            mode: "install",
+            log,
+          }),
+        { log },
+      );
       if (syncResult.installed.length > 0) {
         pluginsInstalledThisLaunch = syncResult.installed;
         // 只有「本来就有、这次换成了随包的新版本」才值得提示；首装不提示。
@@ -4206,6 +4236,15 @@ async function enableRecommendedPlugins() {
   }
 }
 
+/**
+ * The cross-process install lock (see src/install-lock.js). One file for all the shared,
+ * destructively-written paths: the engine tree, the bundled-plugin staging root and the
+ * profile. Concurrent instances then take turns instead of corrupting each other.
+ */
+function installLockFile() {
+  return path.join(userDataDir(), ".locks", "install.lock");
+}
+
 function registerIpc() {
   ipcMain.handle("settings:get", (event) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "settings:get")) return null;
@@ -4248,14 +4287,16 @@ function registerIpc() {
   // { ok, skipped, error, changed, status } —— ok=false 且 skipped=true 表示
   // 引擎不兼容未装；error 为安装/卸载失败信息。
   //
-  // 主进程侧的互斥：渲染层虽然有自己的 busy 态（安装勾选框），但启用开关那条路径不走它，
-  // 而且「修复 / 重试」是独立入口 —— 两个并发操作会对同一个 profile 的 package.json 与
-  // 补丁层做「读—改—写」，互相覆盖。这里统一挡在入口（返回 busy，不排队）。
+  // 主进程侧的互斥（两层）：
+  //   1. 进程内 `pluginOpInFlight`：同一实例里逐次执行，第二个请求直接返回 busy（不排队）；
+  //   2. 跨进程文件锁：GUI 现在允许开多个实例，而 profile / staging 目录 / 引擎树是**共享**的
+  //      （staging 目录每次安装都会先删后拷）—— 两个实例同时进来就会踩坏对方，实测到
+  //      ERR_PNPM_DIRECTORY_FETCHER_IO 与半更新的 profile。
   const gatePluginOp = async (run) => {
     if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
     pluginOpInFlight = true;
     try {
-      return await run();
+      return await withInstallLock(installLockFile(), () => run(), { log });
     } finally {
       pluginOpInFlight = false;
     }
@@ -4485,13 +4526,19 @@ async function handOffLastSessionToPlugin() {
 // app lifecycle
 // ---------------------------------------------------------------------------
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  app.on("second-instance", () => {
-    showMainWindow();
-  });
-
+// Multiple instances are allowed on purpose (the user asked for it): each one gets its own
+// window and its own `dsh web` engine, so several workspaces/sessions can be open at once.
+//
+// Several things are SHARED between instances and are written destructively, so they are
+// serialized with a cross-process lock rather than by refusing to start a second instance
+// (see src/install-lock.js and `gatePluginOp`):
+//   - the engine tree `<userData>/dsh-engine` (installed via a per-pid stage dir now),
+//   - the bundled-plugin staging root `~/.dsh-gui/bundled-plugins` (wiped + re-copied per
+//     install — concurrent readers made pnpm fail with ERR_PNPM_DIRECTORY_FETCHER_IO),
+//   - the profile itself (pnpm add/remove + the patch layer).
+// What is intentionally NOT locked stays last-write-wins, which is the right behaviour for
+// it: settings.json, the tray/UI preferences and the last-session pointer.
+{
   app.whenReady().then(async () => {
     await loadSettings();
     // Read DeepSeek Harness' own appearance/locale first, then show windows
