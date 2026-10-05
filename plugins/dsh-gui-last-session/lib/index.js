@@ -193,6 +193,11 @@ export function apply(ctx, config = {}) {
               return sendJson(res, 400, { ok: false, error: 'invalid session id' })
             }
             const result = await writeLastSession(body.sessionId, home)
+            // Log every pointer move on the HOST side, not only in the browser: this line
+            // lands in the app's own log (the shell merges the engine's stdout), which is
+            // what makes "is it recording?" answerable without a debugger. A frozen pointer
+            // with no trace at all is exactly how this feature failed unnoticed before.
+            ctx.logger?.info?.('[gui-last-session] pointer -> %s', body.sessionId)
             return sendJson(res, 200, result)
           }
           res.setHeader('allow', 'GET, POST, PUT')

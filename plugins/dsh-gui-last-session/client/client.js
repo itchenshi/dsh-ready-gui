@@ -150,26 +150,76 @@ window.__ModuleLoader__.load({
       let settled = false
       let lastRecorded = ''
 
+      /** The session projection metadata for one row (see the note below on the two places). */
+      const metadataFor = (state, id) =>
+        state?.byId?.[id]?.projectionValues?.sessionListMetadata ??
+        state?.projectionsBySession?.[id]?.values?.sessionListMetadata ??
+        null
+
+      const isSubagentRow = (row) => Boolean(row) && (row.origin === 'subagent' || row.parentId !== undefined)
+
       /**
        * Has this session actually been used?
        *
-       * Engine 0.2.0's `blank` is a PRESENTATION bit ("an unused New-Session slot, safe to
-       * reuse"), and the client keeps it conservatively `true` until the host's
-       * `sessionListMetadata.blank === false` reaches it — that projection only flips on
-       * the first `turn/start`. Relying on it alone is how this plugin went quiet while
-       * the pointer stayed frozen: the row reads blank even for a session the user has
-       * been typing in. The projection also carries `lastPromptAt` (set on the first
-       * committed `user/message`), which is a direct "the user used this" signal and does
-       * not depend on that bit ever being reconciled.
+       * `blank` is a PRESENTATION bit ("an unused New-Session slot, safe to reuse") and the
+       * client keeps it conservatively `true` until the host's
+       * `sessionListMetadata.blank === false` arrives. The same projection carries
+       * `lastPromptAt` (set on the first committed `user/message`), which is a direct "the
+       * user used this" signal and does not depend on that bit ever being reconciled.
        *
-       * So: used = the host says not-blank, OR the session has a recorded user prompt.
-       * A genuinely untouched bootstrap session satisfies neither and is still skipped.
+       * The projection reaches the list state in TWO places — the state's
+       * `projectionsBySession[id].values`, and a copy on the row as `projectionValues`
+       * (only when the manager had attached one) — so both are consulted.
        */
-      const rowLooksUsed = (row) => {
-        if (!row) return false
-        if (row.blank === false) return true
-        const metadata = row.projectionValues?.sessionListMetadata
-        return metadata !== null && metadata !== undefined && metadata.lastPromptAt !== null && metadata.lastPromptAt !== undefined
+      const rowLooksUsed = (state, id) => {
+        const row = state?.byId?.[id]
+        if (row && row.blank === false) return true
+        return typeof metadataFor(state, id)?.lastPromptAt === 'number'
+      }
+
+      /** Newest user prompt first, then newest activity. */
+      const mostRecentlyUsedFirst = (state) => {
+        const rows = state?.byId ?? {}
+        const ids = Array.isArray(state?.ids) && state.ids.length > 0 ? state.ids : Object.keys(rows)
+        const promptAt = (id) => {
+          const value = metadataFor(state, id)?.lastPromptAt
+          return typeof value === 'number' ? value : -1
+        }
+        const updatedAt = (id) => (typeof rows[id]?.updatedAt === 'number' ? rows[id].updatedAt : 0)
+        return [...ids].sort((a, b) => promptAt(b) - promptAt(a) || updatedAt(b) - updatedAt(a))
+      }
+
+      /**
+       * Which session is "the last conversation"?
+       *
+       * `state.current` is used when present, but **engine 0.2.0 does not publish it**: the
+       * session controller's list store is `{ ids, byId, phase, projectionsBySession }`
+       * (see its `projectList()` → `this.list.set({ ids, byId, phase, projectionsBySession })`),
+       * so `current` is always `undefined` and the previous implementation returned on its
+       * very first line — silently, forever. That is exactly why the pointer stopped
+       * moving while everything looked healthy: the plugin loaded, its route answered, and
+       * nothing was ever written.
+       *
+       * Without that field, the honest definition of "the last conversation" is the one the
+       * user most recently prompted in (then the most recently active), skipping untouched
+       * bootstrap sessions and subagent rows.
+       */
+      const pickLastSession = (state) => {
+        const explicit = state?.current
+        if (isSessionId(explicit) && !isSubagentRow(state?.byId?.[explicit])) {
+          // A session with no row yet simply means the list has not caught up — trust it,
+          // as before. But a row that says "untouched" must never be recorded: that is the
+          // blank-bootstrap bug this plugin already shipped once.
+          const row = state?.byId?.[explicit]
+          if (!row || rowLooksUsed(state, explicit)) return explicit
+        }
+        for (const id of mostRecentlyUsedFirst(state)) {
+          if (!isSessionId(id)) continue
+          if (isSubagentRow(state?.byId?.[id])) continue
+          if (!rowLooksUsed(state, id)) continue
+          return id
+        }
+        return null
       }
 
       const recordCurrent = () => {
@@ -180,16 +230,8 @@ window.__ModuleLoader__.load({
         } catch {
           return
         }
-        const current = state?.current
+        const current = pickLastSession(state)
         if (!isSessionId(current)) return
-        // Guard 2: an untouched bootstrap session is never worth remembering. A session
-        // with NO row yet is a different case — the list simply has not caught up — and
-        // is still recorded, exactly as before.
-        const row = state?.byId?.[current]
-        if (row && !rowLooksUsed(row)) return
-        // 子会话（subagent）不是「上次所在会话」：它只在当前 lineage 链上才会被投影出来，
-        // 下次启动按 id 找不到 → 恢复静默失效（还会空转约 30s）。跳过它。
-        if (row && (row.origin === 'subagent' || row.parentId !== undefined)) return
         // 只在**指针真的变了**时写：订阅源是会话列表投影，会话进行中它会持续变化
         // （running/title/updatedAt…），按 1.5s 节流重写等于同一份指针被反复 POST，
         // 宿主每次都要 mkdir + writeFile + rename —— 而客户端根本不读 updatedAt。

@@ -170,6 +170,91 @@ function fakeSessions(initial) {
   }
 }
 
+await check('records the most recently prompted session when the state has NO `current`', async () => {
+  // Engine 0.2.0's list store is `{ ids, byId, phase, projectionsBySession }` — there is no
+  // `current` field at all (session controller's projectList()). Reading it returned on the
+  // very first line, silently and forever: that is what froze the pointer while every other
+  // signal looked healthy. This test uses that exact shape.
+  const sessions = fakeSessions({
+    ids: ['session-old1', 'session-new2'],
+    byId: {
+      'session-old1': { id: 'session-old1', blank: false, updatedAt: 1, projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 1000 } } },
+      'session-new2': { id: 'session-new2', blank: false, updatedAt: 2, projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 2000 } } },
+    },
+    projectionsBySession: {},
+  })
+  delete sessions.list.getSnapshot().current
+  const stored = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => null, storeLast: async (id) => stored.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await handle.reopen()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(stored, ['session-new2'], 'the one with the newest prompt wins')
+  handle.dispose()
+})
+
+await check('reads the projection metadata from projectionsBySession as well as the row', async () => {
+  // projectList() copies the projections onto the row only when the manager attached them;
+  // otherwise they live on the list state. Both places must be understood.
+  const sessions = fakeSessions({
+    ids: ['session-xyz1'],
+    byId: { 'session-xyz1': { id: 'session-xyz1', blank: true, updatedAt: 5 } },
+    projectionsBySession: { 'session-xyz1': { values: { sessionListMetadata: { blank: true, lastPromptAt: 4321 } } } },
+  })
+  delete sessions.list.getSnapshot().current
+  const stored = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => null, storeLast: async (id) => stored.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await handle.reopen()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(stored, ['session-xyz1'], 'found through the state-level projection')
+  handle.dispose()
+})
+
+await check('skips subagent rows; an explicit `current` still wins when present', async () => {
+  const base = {
+    ids: ['session-main1', 'session-sub1'],
+    byId: {
+      'session-main1': { id: 'session-main1', blank: false, updatedAt: 1, projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 100 } } },
+      'session-sub1': { id: 'session-sub1', blank: false, updatedAt: 9, origin: 'subagent', parentId: 'session-main1', projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 999 } } },
+    },
+  }
+  const noCurrent = fakeSessions({ ...base, projectionsBySession: {} })
+  delete noCurrent.list.getSnapshot().current
+  const storedA = []
+  const hA = installLastSession(noCurrent, {
+    io: { fetchLast: async () => null, storeLast: async (id) => storedA.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await hA.reopen()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(storedA, ['session-main1'], 'a subagent is not "the last conversation"')
+  hA.dispose()
+
+  const withCurrent = fakeSessions({ ...base, current: 'session-main1', projectionsBySession: {} })
+  const storedB = []
+  const hB = installLastSession(withCurrent, {
+    io: { fetchLast: async () => null, storeLast: async (id) => storedB.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await hB.reopen()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(storedB, ['session-main1'])
+  hB.dispose()
+})
+
 await check('records a session the host says has been prompted (blank bit still conservative)', async () => {
   // Engine 0.2.0's row `blank` is a presentation bit that the client keeps conservative
   // until the host's sessionListMetadata.blank === false arrives; `lastPromptAt` is set
