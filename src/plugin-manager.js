@@ -801,9 +801,8 @@ function insertRowIdsInText(text) {
  *     加载的文件认领任意 row id（实测能拿到引擎的 `session`）。所以声明了什么就读什么，
  *     只有在**没有声明**时才退回约定文件名 —— 那正是引擎自己的规则。
  */
-function packageRowIds(dshHome, pkg) {
+function rowIdsInPackageDir(pkgDir) {
   const ids = new Set();
-  const pkgDir = path.join(profileDir(dshHome), "node_modules", pkg);
   const collect = (patchFile) => {
     if (patchFile === null) return;
     for (const id of insertRowIdsInText(readPatchText(patchFile))) ids.add(id);
@@ -829,6 +828,68 @@ function packageRowIds(dshHome, pkg) {
   }
   collect(path.join(pkgDir, "cordis.patch.yml"));
   return [...ids];
+}
+
+/**
+ * Row ids declared by a package **installed in the profile** (thin wrapper over
+ * `rowIdsInPackageDir`, which the engine-side scan below also uses).
+ */
+function packageRowIds(dshHome, pkg) {
+  return rowIdsInPackageDir(path.join(profileDir(dshHome), "node_modules", pkg));
+}
+
+/**
+ * Row ids declared by the ENGINE's own installed bundles, as `rowId -> owning packages`.
+ *
+ * The engine's bundles resolve from the installation anchor (`dsh-app-boot`), NOT from the
+ * profile's `node_modules` — that directory does not even contain `@deepseek-ai`. So a scan
+ * limited to the profile cannot see that ids like `session` or `webserver` are already taken,
+ * and `PROTECTED_ROW_IDS` only hard-codes two of the ~221 ids those bundles declare. A
+ * catalog package (e.g. an updated marketplace plugin) whose `insert:` reuses one of the other
+ * engine ids would then be disabled without any refusal — taking the engine's row with it.
+ *
+ * Read-only and best-effort: a missing/unreadable engine tree simply yields no owners.
+ */
+function enginePatchRowIds(engineDir) {
+  const map = new Map();
+  if (typeof engineDir !== "string" || engineDir === "") return map;
+  const modulesRoot = path.join(engineDir, "node_modules");
+  let entries = [];
+  try {
+    entries = fs.readdirSync(modulesRoot, { withFileTypes: true });
+  } catch {
+    return map;
+  }
+  const consider = (dir, name) => {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+      if (typeof manifest?.dsh?.bundle?.patch !== "string" || manifest.dsh.bundle.patch === "") return;
+    } catch {
+      return; // not a package
+    }
+    for (const id of rowIdsInPackageDir(dir)) {
+      if (!map.has(id)) map.set(id, new Set());
+      map.get(id).add(name);
+    }
+  };
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const dir = path.join(modulesRoot, entry.name);
+    if (entry.name.startsWith("@")) {
+      let scoped = [];
+      try {
+        scoped = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        scoped = [];
+      }
+      for (const sub of scoped) {
+        if (sub.isDirectory()) consider(path.join(dir, sub.name), `${entry.name}/${sub.name}`);
+      }
+      continue;
+    }
+    if (entry.isDirectory()) consider(dir, entry.name);
+  }
+  return map;
 }
 
 /**
@@ -916,11 +977,14 @@ function declaredPatchPackages(dshHome) {
  * 一遍 node_modules、再对每个候选包重读它的 package.json 与补丁文件（O(rowIds × packages)）。
  * 映射算一次即可，语义与逐次查询一致：只要**除自己以外**还有别的包占用该 id 就算冲突。
  */
-function rowIdOwners(dshHome) {
+function rowIdOwners(dshHome, engineDir) {
   const bundles = new Set(installedBundles(dshHome));
   const candidates = new Set(declaredPatchPackages(dshHome));
   for (const entry of CATALOG) if (bundles.has(entry.pkg)) candidates.add(entry.pkg);
   const owners = new Map();
+  // The engine's own bundles count as owners too: an id they declare is not the GUI's to
+  // disable, no matter which catalog package claims it (see enginePatchRowIds).
+  for (const [id, names] of enginePatchRowIds(engineDir)) owners.set(id, new Set(names));
   for (const name of candidates) {
     for (const id of packageRowIds(dshHome, name)) {
       if (!owners.has(id)) owners.set(id, new Set());
@@ -1326,12 +1390,13 @@ function writeMarketDisabled(dshHome, nextDisabled) {
  * @returns {{ok:boolean, changed:boolean, patchOk:boolean, reason:(string|null)}}
  *   ok:false 表示被拒绝 / 写入失败，reason 是人类可读的原因。
  */
-function setPluginEnabled({ dshHome, pkg, rowIds, enabled }) {
+function setPluginEnabled({ dshHome, pkg, rowIds, enabled, engineDir }) {
   const patchPath = userPatchPath(dshHome);
   const ids = Array.isArray(rowIds) && rowIds.length ? rowIds : [];
   if (!enabled) {
     // 归属映射算一次：下面按 rowId 循环，逐个 id 重算会把同一批文件反复解析。
-    const owners = ids.length > 0 ? rowIdOwners(dshHome) : null;
+    // engineDir 让这份映射也能看见引擎自身 bundle 声明的 row id（见 enginePatchRowIds）。
+    const owners = ids.length > 0 ? rowIdOwners(dshHome, engineDir) : null;
     for (const rowId of ids) {
       const refusal = disableRefusalReason(dshHome, pkg, rowId, owners);
       if (refusal) return { ok: false, changed: false, patchOk: false, reason: refusal };

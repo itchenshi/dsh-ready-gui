@@ -4247,7 +4247,7 @@ async function runPluginSetEnabled(entry, enabled) {
       "market toggle unavailable" + (market.reason ? ` (${market.reason})` : "") + "; writing the profile patch layer",
     );
     const rowIds = packageRowIds(dshHome, entry.pkg);
-    const res = setPluginEnabled({ dshHome, pkg: entry.pkg, rowIds, enabled });
+    const res = setPluginEnabled({ dshHome, pkg: entry.pkg, rowIds, enabled, engineDir: ENGINE_DIR });
     broadcastSettings();
     sendSettingsProgress(enabled ? "enable done (patch layer)" : "disable done (patch layer)");
     return {
