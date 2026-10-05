@@ -1579,11 +1579,22 @@ async function installPlugin({ engineDir, dshHome, pnpmBinDir, pkg, name, nodeEx
     // 会让调用方拿到「什么都没装、也没有错误」→ 界面显示 `失败：?`，点多少次都不修复（只有
     // 下次引擎启动的 heal 才会补）。这里要求落地文件确实存在，否则继续走安装。
     const materialised = fs.existsSync(path.join(profileDir(dshHome), "node_modules", target, "package.json"));
-    if (materialised) {
+    // …而且记下来的依赖必须**就是**这次要求装的那个 spec。少了这一条，早退会对一个「登记在册、
+    // 文件也在盘上，但来源是别处」的包报成功（旧 staging 路径、开发 checkout、registry spec…）：
+    // 调用方于是把它记进 result.installed 并置 changed=true，界面说「更新完成」，而请求的那个
+    // spec 从来没被安装过。这条路径是可达的：前置的 remove / prune 只把失败写进日志（见
+    // syncEnabledPlugins 的预清理），随后就走到了这个早退。
+    const recordedSpec = profileDependencySpec(dshHome, target);
+    const sameSpec = recordedSpec !== null && recordedSpec === pkg;
+    if (materialised && sameSpec) {
       log("plugin already installed:", target);
       return { ok: true, already: true };
     }
-    log("plugin is registered but missing on disk; reinstalling:", target);
+    if (materialised) {
+      log("plugin present but the recorded spec differs; reinstalling:", target, recordedSpec ?? "(none)", "->", pkg);
+    } else {
+      log("plugin is registered but missing on disk; reinstalling:", target);
+    }
   }
   const res = await runDshPlugin({ engineDir, dshHome, pnpmBinDir, args: ["add", pkg], nodeExec, log });
   if (!res.ok) log("plugin install failed:", pkg, res.output);
