@@ -4403,6 +4403,19 @@ function installLockFile() {
   return path.join(userDataDir(), ".locks", "install.lock");
 }
 
+/**
+ * The ENGINE's own writer lock for the profile manifest
+ * (`dsh-atomic-write`'s `withFileLock(<profile>/package.json)`).
+ *
+ * The GUI reads and writes that manifest too, and it does so while the engine is running —
+ * `healProfileBundles`, the prune passes and the plugin install/uninstall paths all do
+ * read-modify-write on it. Without this lock the engine could activate a bundle (or drop
+ * one) between our read and our write, and our stale snapshot would silently undo it.
+ */
+function profileWriteLockFile() {
+  return path.join(effectiveHomePath(), "profiles", "web", "package.json.lock");
+}
+
 function registerIpc() {
   ipcMain.handle("settings:get", (event) => {
     if (rejectForeignSender(event, isFromSettingsWindow, "settings:get")) return null;
@@ -4454,7 +4467,20 @@ function registerIpc() {
     if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
     pluginOpInFlight = true;
     try {
-      return await withInstallLock(installLockFile(), () => run(), { log });
+      // GUI install lock first, then the ENGINE's profile write lock — the same fixed order
+      // as the settings-window sync path, so the two can never deadlock. Every one of these
+      // operations rewrites the profile manifest while the engine is up, and the engine
+      // serializes its own writes on that same lock file.
+      return await withInstallLock(
+        installLockFile(),
+        () =>
+          withInstallLock(
+            profileWriteLockFile(),
+            () => run(),
+            { recordFormat: "pid", timeoutMs: 15_000, log },
+          ),
+        { log },
+      );
     } finally {
       pluginOpInFlight = false;
     }
@@ -4524,6 +4550,41 @@ function registerIpc() {
     if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
     pluginOpInFlight = true;
     try {
+      // Two cross-process locks, always in this order (GUI install lock, then the ENGINE's
+      // profile write lock) so no two paths can deadlock against each other.
+      //
+      // The second one matters because these operations run while the engine is up, and the
+      // engine serializes its own profile writes on `<profile>/package.json.lock` via
+      // dsh-atomic-write's `withFileLock` — which the GUI ignored entirely. Without it, a
+      // bundle the engine had just activated could be erased by this process writing back a
+      // snapshot it had read before the engine's write. `recordFormat: "pid"` is required:
+      // the engine only recognises a holder whose record is exactly `<pid>\n`.
+      return await withInstallLock(
+        installLockFile(),
+        () =>
+          withInstallLock(
+            profileWriteLockFile(),
+            () => runPluginSyncOp(progressLog),
+            { recordFormat: "pid", timeoutMs: 15_000, log },
+          ),
+        { log },
+      );
+    } catch (error) {
+      err("plugin sync failed:", error);
+      sendSettingsProgress("failed: " + ((error && error.message) || error));
+      return {
+        installed: [],
+        removed: [],
+        skipped: [],
+        changed: false,
+        errors: [String((error && error.message) || error)],
+      };
+    } finally {
+      pluginOpInFlight = false;
+    }
+
+    /** The reconcile itself; hoisted so the locked call above can reach it. */
+    async function runPluginSyncOp(progressLog) {
       // 先自愈：清掉不可解析/失效的 bundle 登记（坏安装留下的 stale 条目会让
       // 引擎启动失败），再对账目录插件。
       let healed;
@@ -4589,18 +4650,6 @@ function registerIpc() {
       broadcastSettings();
       sendSettingsProgress("repair done");
       return { ...result, healed, enabledSync, legacy, status: pluginStatusNow() };
-    } catch (error) {
-      err("plugin sync failed:", error);
-      sendSettingsProgress("failed: " + ((error && error.message) || error));
-      return {
-        installed: [],
-        removed: [],
-        skipped: [],
-        changed: false,
-        errors: [String((error && error.message) || error)],
-      };
-    } finally {
-      pluginOpInFlight = false;
     }
   });
 
