@@ -4407,10 +4407,16 @@ function installLockFile() {
  * The ENGINE's own writer lock for the profile manifest
  * (`dsh-atomic-write`'s `withFileLock(<profile>/package.json)`).
  *
- * The GUI reads and writes that manifest too, and it does so while the engine is running —
- * `healProfileBundles`, the prune passes and the plugin install/uninstall paths all do
- * read-modify-write on it. Without this lock the engine could activate a bundle (or drop
- * one) between our read and our write, and our stale snapshot would silently undo it.
+ * NOT WIRED UP YET, deliberately. Taking it around the GUI's plugin operations self-deadlocks:
+ * those operations spawn `dsh plugin …`, the child takes this same lock for its own manifest
+ * write, and the parent is waiting for the child — the engine then reports
+ * "atomic-write: timed out waiting for the writer lock" and the install fails (observed with
+ * `smoke-first-run`).
+ *
+ * The lock is still worth having, but only around manifest writes the GUI performs ITSELF
+ * (the prune/self-heal paths), never around anything that spawns the engine's CLI. Wiring it
+ * that way — and giving those direct read-modify-write sequences the lock as a whole, so the
+ * read cannot go stale — is the remaining piece of M3.
  */
 function profileWriteLockFile() {
   return path.join(effectiveHomePath(), "profiles", "web", "package.json.lock");
@@ -4467,20 +4473,14 @@ function registerIpc() {
     if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
     pluginOpInFlight = true;
     try {
-      // GUI install lock first, then the ENGINE's profile write lock — the same fixed order
-      // as the settings-window sync path, so the two can never deadlock. Every one of these
-      // operations rewrites the profile manifest while the engine is up, and the engine
-      // serializes its own writes on that same lock file.
-      return await withInstallLock(
-        installLockFile(),
-        () =>
-          withInstallLock(
-            profileWriteLockFile(),
-            () => run(),
-            { recordFormat: "pid", timeoutMs: 15_000, log },
-          ),
-        { log },
-      );
+      // NOTE: these operations must NOT hold the engine's profile write lock
+      // (`profileWriteLockFile()`): they spawn `dsh plugin …`, whose own writer takes that
+      // lock in the child process while this process waits for the child — a cross-process
+      // self-deadlock that the engine then reports as
+      // "atomic-write: timed out waiting for the writer lock" and the install fails.
+      // The engine already serializes its own manifest writes; the GUI only needs that lock
+      // around the manifest writes it performs ITSELF (see the note on profileWriteLockFile).
+      return await withInstallLock(installLockFile(), () => run(), { log });
     } finally {
       pluginOpInFlight = false;
     }
@@ -4550,25 +4550,11 @@ function registerIpc() {
     if (pluginOpInFlight) return { ok: false, changed: false, error: "busy" };
     pluginOpInFlight = true;
     try {
-      // Two cross-process locks, always in this order (GUI install lock, then the ENGINE's
-      // profile write lock) so no two paths can deadlock against each other.
-      //
-      // The second one matters because these operations run while the engine is up, and the
-      // engine serializes its own profile writes on `<profile>/package.json.lock` via
-      // dsh-atomic-write's `withFileLock` — which the GUI ignored entirely. Without it, a
-      // bundle the engine had just activated could be erased by this process writing back a
-      // snapshot it had read before the engine's write. `recordFormat: "pid"` is required:
-      // the engine only recognises a holder whose record is exactly `<pid>\n`.
-      return await withInstallLock(
-        installLockFile(),
-        () =>
-          withInstallLock(
-            profileWriteLockFile(),
-            () => runPluginSyncOp(progressLog),
-            { recordFormat: "pid", timeoutMs: 15_000, log },
-          ),
-        { log },
-      );
+      // Same rule as gatePluginOp: do NOT take the engine's profile write lock here. This
+      // path also spawns `dsh plugin …`, whose child takes that lock itself — holding it here
+      // while waiting for the child is a cross-process self-deadlock, and the engine reports
+      // it as "atomic-write: timed out waiting for the writer lock" (observed).
+      return await withInstallLock(installLockFile(), () => runPluginSyncOp(progressLog), { log });
     } catch (error) {
       err("plugin sync failed:", error);
       sendSettingsProgress("failed: " + ((error && error.message) || error));
