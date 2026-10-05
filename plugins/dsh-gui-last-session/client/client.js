@@ -50,6 +50,8 @@ window.__ModuleLoader__.load({
     const WAIT_ATTEMPTS = 200 // ~30s — covers a slow cold start
     /** Grace period before recording arms when there is nothing to reopen. */
     const ARM_FALLBACK_MS = 4000
+    /** How often the safety net re-reads the snapshot (see installLastSession). */
+    const RECORD_RECHECK_MS = 15000
 
     /** Conservative session id shape; mirrors the host half's validation. */
     const SESSION_ID_RE = /^session-[A-Za-z0-9_-]{4,200}$/u
@@ -134,13 +136,41 @@ window.__ModuleLoader__.load({
       const io = {
         fetchLast: opts.io?.fetchLast ?? fetchLastSession,
         storeLast: opts.io?.storeLast ?? storeLastSession,
+        // Called after a pointer actually moves. Without it this half is completely
+        // silent: "never recorded" and "recorded but ineffective" look identical when
+        // the user reports the feature not working (which is exactly how this bug
+        // reached a user). apply() wires it to ctx.logger.
+        onRecord: opts.io?.onRecord ?? null,
       }
       const wait = opts.wait ?? sleep
       const armFallbackMs = opts.armFallbackMs ?? ARM_FALLBACK_MS
+      const recheckMs = opts.recheckMs ?? RECORD_RECHECK_MS
 
       let armed = false
       let settled = false
       let lastRecorded = ''
+
+      /**
+       * Has this session actually been used?
+       *
+       * Engine 0.2.0's `blank` is a PRESENTATION bit ("an unused New-Session slot, safe to
+       * reuse"), and the client keeps it conservatively `true` until the host's
+       * `sessionListMetadata.blank === false` reaches it — that projection only flips on
+       * the first `turn/start`. Relying on it alone is how this plugin went quiet while
+       * the pointer stayed frozen: the row reads blank even for a session the user has
+       * been typing in. The projection also carries `lastPromptAt` (set on the first
+       * committed `user/message`), which is a direct "the user used this" signal and does
+       * not depend on that bit ever being reconciled.
+       *
+       * So: used = the host says not-blank, OR the session has a recorded user prompt.
+       * A genuinely untouched bootstrap session satisfies neither and is still skipped.
+       */
+      const rowLooksUsed = (row) => {
+        if (!row) return false
+        if (row.blank === false) return true
+        const metadata = row.projectionValues?.sessionListMetadata
+        return metadata !== null && metadata !== undefined && metadata.lastPromptAt !== null && metadata.lastPromptAt !== undefined
+      }
 
       const recordCurrent = () => {
         if (!armed) return
@@ -152,9 +182,11 @@ window.__ModuleLoader__.load({
         }
         const current = state?.current
         if (!isSessionId(current)) return
-        // Guard 2: a blank bootstrap session is never worth remembering.
+        // Guard 2: an untouched bootstrap session is never worth remembering. A session
+        // with NO row yet is a different case — the list simply has not caught up — and
+        // is still recorded, exactly as before.
         const row = state?.byId?.[current]
-        if (row && row.blank === true) return
+        if (row && !rowLooksUsed(row)) return
         // 子会话（subagent）不是「上次所在会话」：它只在当前 lineage 链上才会被投影出来，
         // 下次启动按 id 找不到 → 恢复静默失效（还会空转约 30s）。跳过它。
         if (row && (row.origin === 'subagent' || row.parentId !== undefined)) return
@@ -163,7 +195,11 @@ window.__ModuleLoader__.load({
         // 宿主每次都要 mkdir + writeFile + rename —— 而客户端根本不读 updatedAt。
         if (current === lastRecorded) return
         lastRecorded = current
-        Promise.resolve(io.storeLast(current)).catch(() => {})
+        Promise.resolve(io.storeLast(current))
+          .then(() => {
+            if (typeof io.onRecord === 'function') io.onRecord(current)
+          })
+          .catch(() => {})
       }
 
       const armRecording = () => {
@@ -202,10 +238,24 @@ window.__ModuleLoader__.load({
       // navigation onward.
       const timer = setTimeout(armRecording, armFallbackMs)
 
+      // Safety net: the subscription is the primary trigger, but a frozen pointer is a
+      // SILENT failure — the feature just quietly stops remembering the session and
+      // nobody notices until a restart lands somewhere unexpected (observed: the pointer
+      // sat unchanged for six days of active use). Re-reading the snapshot on a slow
+      // timer cannot miss a state change the way a single missed notification can, and
+      // it costs one snapshot read: recordCurrent() returns immediately when the current
+      // session is unchanged.
+      const recheck = setInterval(recordCurrent, recheckMs)
+      // In Node (the unit tests import this bundle) an interval keeps the event loop
+      // alive, so the suite would hang instead of exiting. `unref` is a no-op guard in
+      // the browser, where setInterval returns a number.
+      if (typeof recheck?.unref === 'function') recheck.unref()
+
       return {
         reopen,
         dispose: () => {
           clearTimeout(timer)
+          clearInterval(recheck)
           if (typeof dispose === 'function') dispose()
         },
       }
@@ -237,7 +287,11 @@ window.__ModuleLoader__.load({
         ctx.logger?.warn?.('[gui-last-session] sessions service unavailable; auto-restore disabled')
         return
       }
-      const handle = installLastSession(sessions)
+      const handle = installLastSession(sessions, {
+        // One line per pointer move (a session switch), so support can tell "it never
+        // recorded" from "it recorded and something else went wrong".
+        io: { onRecord: (id) => ctx.logger?.info?.(`[gui-last-session] remembered ${id}`) },
+      })
       if (typeof ctx.effect === 'function') {
         ctx.effect(() => () => handle.dispose(), 'gui-last-session')
       }

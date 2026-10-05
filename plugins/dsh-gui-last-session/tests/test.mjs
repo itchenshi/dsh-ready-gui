@@ -162,9 +162,70 @@ function fakeSessions(initial) {
       state = { ...state, ...next }
       for (const fn of listeners) fn()
     },
+    /** Test helper: mutate WITHOUT notifying (models a missed list notification). */
+    _setSilently(next) {
+      state = { ...state, ...next }
+    },
     _listeners: listeners,
   }
 }
+
+await check('records a session the host says has been prompted (blank bit still conservative)', async () => {
+  // Engine 0.2.0's row `blank` is a presentation bit that the client keeps conservative
+  // until the host's sessionListMetadata.blank === false arrives; `lastPromptAt` is set
+  // on the first committed user/message. A session the user has typed in must be
+  // recorded even while the presentation bit still reads blank — that staleness is what
+  // left the pointer frozen for days.
+  const sessions = fakeSessions({
+    current: 'session-used1',
+    byId: {
+      'session-used1': {
+        id: 'session-used1',
+        blank: true,
+        projectionValues: { sessionListMetadata: { blank: true, lastPromptAt: 1790000000000 } },
+      },
+    },
+  })
+  const stored = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => null, storeLast: async (id) => stored.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await handle.reopen()
+  sessions._set({})
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(stored, ['session-used1'], 'a prompted session is remembered')
+  handle.dispose()
+})
+
+await check('the safety net records a change the subscription never announced', async () => {
+  // The subscription is the primary trigger, but a missed notification used to mean the
+  // pointer stayed frozen indefinitely — a silent failure nobody notices until a restart
+  // lands somewhere unexpected. The slow re-check must catch it.
+  const sessions = fakeSessions({
+    current: 'session-bootstrap',
+    byId: { 'session-bootstrap': { id: 'session-bootstrap', blank: true } },
+  })
+  const stored = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => null, storeLast: async (id) => stored.push(id) },
+    armFallbackMs: 5,
+    recheckMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await handle.reopen()
+  // Silent mutation: no subscriber is called.
+  sessions._setSilently({
+    current: 'session-silent1',
+    byId: { 'session-silent1': { id: 'session-silent1', blank: false } },
+  })
+  await new Promise((r) => setTimeout(r, 40))
+  assert.deepEqual(stored, ['session-silent1'], 'the re-check picked it up')
+  handle.dispose()
+})
 
 await check('does NOT record the blank bootstrap session (the v2 bug)', async () => {
   const sessions = fakeSessions({
