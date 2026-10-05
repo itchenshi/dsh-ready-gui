@@ -1437,7 +1437,14 @@ function catalogStatus(dshHome, options = {}) {
         manifest = null; // 读不出/解析失败：版本按 null 处理，页面半边回退目录声明
       }
     }
-    const installed = bundles.has(bundleName) && fs.existsSync(pkgJson);
+    // 「装着」= 包确实落在 profile 里，而且用户确实装过它（**依赖声明或 bundle 登记任一**）。
+    //
+    // 不能只看 `dsh.profile.bundles`：禁用一个内置插件会把它从那份列表里摘掉（那是引擎的加载
+    // 列表，不是「装了没有」的记录）。只看登记时，「只是被禁用」的插件会被报成未安装 —— 设置
+    // 窗口于是显示「未安装（勾选即装）」并**收掉启用开关**，用户再也无法把它启用回来。
+    // smoke-plugin-enable 的 STEP6 记录的正是这一幕（它自己的断言是「禁用不得改变安装状态」）。
+    const dependencySpec = profileDependencySpec(dshHome, bundleName);
+    const installed = fs.existsSync(pkgJson) && (typeof dependencySpec === "string" || bundles.has(bundleName));
     const version = installed ? (manifest?.version ?? null) : null;
     // 有效启用状态 = 市场没禁 且 补丁层没禁（与市场 verifyActivation 的 off 判定一致）。
     const rowIds = packageRowIds(dshHome, bundleName);

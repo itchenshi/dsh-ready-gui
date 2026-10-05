@@ -517,24 +517,17 @@ console.log("seeded pre-rename install:", oldPkg);
   $act = Wait-Activation $origin $PLUGIN "disabled" 120 "boot reconcile must actually disable the plugin in the engine"
   Write-Host "STEP5 PASS: engine reports activation '$act' (not merely a file change)"
 
-  # STEP6 is currently RED, and it is NOT a flaky harness issue. Verified by git-stash A/B:
-  # it fails identically with and without the pending main.js change, and the driver's own
-  # dump pinpoints it:
+  # STEP6 used to be RED, and it was NOT a flaky harness issue. Verified by git-stash A/B it
+  # failed identically with and without the pending main.js change; the driver's dump showed
+  # that after ENABLE succeeded the row flipped to
+  #     installChecked=false, enablePresent=false, text="... not installed ..."
+  # so "disable" could no longer be clicked.
   #
-  #   enable succeeds, then the row flips to
-  #     installChecked=false, enablePresent=false
-  #     text="... not installed (tick to install) ..."
-  #   so the driver can no longer click "disable" and times out.
-  #
-  # Cause: disabling a bundled plugin removes it from dsh.profile.bundles, and the GUI derives
-  # its `installed` flag from that registration (status also carries `bundle` and `present`).
-  # So a plugin that is merely DISABLED is presented as "not installed" and loses its enable
-  # toggle -- the user cannot re-enable it from the settings window, and this test (whose own
-  # expectation is "install state untouched") cannot drive it.
-  #
-  # Next step: decide `installed` semantics in the status builder (registration vs. on-disk
-  # presence/dependency) and, in settings.html `stateText`, show a disabled-but-present plugin
-  # as disabled (keeping the toggle) instead of not-installed.
+  # Cause (fixed): disabling a bundled plugin removes it from dsh.profile.bundles, and the GUI
+  # derived its `installed` flag from that registration alone -- so a plugin that was merely
+  # DISABLED was reported as not installed, lost its enable toggle, and could not be re-enabled
+  # from the settings window. `installed` now also accepts a declared dependency (see
+  # catalogStatus in plugin-manager.js), which is what "the user installed this" actually means.
   Write-Host "STEP6: driving the settings-window enable toggle over CDP..."
   & node $driverFile $dbgPort $PLUGIN
   if ($LASTEXITCODE -ne 0) { Dump-Log; throw "CDP enable-toggle drive failed (exit $LASTEXITCODE)" }
