@@ -30,6 +30,8 @@
  */
 
 const fs = require("node:fs");
+// 跨进程安装锁（ESM，本 Node 支持 require(esm)；renderer-recovery.js 同样如此）。
+const { withInstallLock } = require("./install-lock.js");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -1494,6 +1496,26 @@ function catalogStatus(dshHome, options = {}) {
 }
 
 /**
+ * Serialize one of the GUI's OWN profile-manifest read-modify-write cycles against the
+ * engine's writer, using the engine's own lock file (`<profile>/package.json.lock`,
+ * `dsh-atomic-write`'s `withFileLock`). `recordFormat: "pid"` is required: the engine only
+ * recognises a holder whose record is exactly `<pid>\n`.
+ *
+ * NEVER wrap anything that spawns `dsh plugin …`. The child takes this same lock for its own
+ * manifest write, so holding it across the spawn deadlocks parent against child — the engine
+ * reports it as "atomic-write: timed out waiting for the writer lock" and the operation fails
+ * (observed with smoke-first-run). Only the GUI's own direct writes belong in here, and the
+ * whole read-modify-write must be inside so the read cannot go stale.
+ */
+function withProfileManifestLock(dshHome, run) {
+  return withInstallLock(path.join(profileDir(dshHome), "package.json.lock"), run, {
+    recordFormat: "pid",
+    timeoutMs: 15_000,
+    log: () => {}, // contention here is normal and short-lived; do not narrate every wait
+  });
+}
+
+/**
  * 运行一次 `dsh plugin --profile web <args...>`（引擎会转发给 pnpm 并 reconcile bundles）。
  * @param {object} o
  * @returns {Promise<{ok:boolean, code:number, output:string}>}
@@ -2106,32 +2128,43 @@ async function healProfileBundles({ engineDir, dshHome, nodeExec, pnpmInstallDir
 
   if (changed || fixPatchReload) {
     try {
-      // 写之前**重读**：这份 manifest 是在若干次 `await`（pnpm 自举、`dsh plugin install`）
-      // 之前读的，而启动维护与「修复 / 重试」是两条独立的异步路径，各自都持有旧快照 ——
-      // 直接写回会把对方刚写进去的 bundles/dependencies 覆盖掉（刚装/刚卸的插件被悄悄还原）。
-      // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖 / 那个补丁字段）应用到**最新**
-      // 的清单上。此前 patchReload 是改在旧快照上的：写的是 fresh，于是「已修复」只出现在
-      // 返回值里，磁盘上什么都没变 —— 报了一次并不存在的修复。
-      const fresh = readProfileManifest(dshHome);
-      // 重读失败（null）时**绝不**退回写那份旧快照：readProfileManifest 对任何读/解析
-      // 失败都返回 null（pnpm 正在原子替换、EACCES…），而此时写回旧快照就会把另一个写者
-      // 刚落地的 bundles/dependencies 覆盖掉 —— 正是这段重读要防的「刚装的插件被悄悄还原」。
-      // 宁可这次不摘（下次启动/点修复再来），也不能制造数据丢失。
-      if (!fresh) {
-        result.errors.push("profile manifest changed underneath and could not be re-read; prune skipped");
-        log("profile prune skipped: manifest could not be re-read after the write window");
-      } else {
-        const currentBundles = Array.isArray(fresh.dsh?.profile?.bundles) ? fresh.dsh.profile.bundles : [];
-        fresh.dsh = fresh.dsh ?? {};
-        fresh.dsh.profile = fresh.dsh.profile ?? {};
-        fresh.dsh.profile.bundles = currentBundles.filter((name) => !pruneList.includes(name));
-        if (fixPatchReload && fresh.dsh.profile.patchReload !== "live") {
-          fresh.dsh.profile.patchReload = "live";
-          result.repaired.push("<patchReload>");
+      // The read-modify-write below is done under the ENGINE's own profile write lock, so a
+      // write the engine lands between our re-read and our write can no longer be lost.
+      //
+      // Critically, this wrapper is applied HERE and not around the whole function: everything
+      // above may spawn `dsh plugin …` (pnpm bootstrap, install/remove), and that child takes
+      // this same lock for its own manifest write — holding it across the spawn deadlocks
+      // parent against child, which the engine reports as
+      // "atomic-write: timed out waiting for the writer lock" (observed with smoke-first-run).
+      await withProfileManifestLock(dshHome, async () => {
+        // 写之前**重读**：这份 manifest 是在若干次 `await`（pnpm 自举、`dsh plugin install`）
+        // 之前读的，而启动维护与「修复 / 重试」是两条独立的异步路径，各自都持有旧快照 ——
+        // 直接写回会把对方刚写进去的 bundles/dependencies 覆盖掉（刚装/刚卸的插件被悄悄还原）。
+        // 这里只把本次真正决定的东西（要摘掉的 bundles / 依赖 / 那个补丁字段）应用到**最新**
+        // 的清单上。此前 patchReload 是改在旧快照上的：写的是 fresh，于是「已修复」只出现在
+        // 返回值里，磁盘上什么都没变 —— 报了一次并不存在的修复。
+        const fresh = readProfileManifest(dshHome);
+        // 重读失败（null）时**绝不**退回写那份旧快照：readProfileManifest 对任何读/解析
+        // 失败都返回 null（pnpm 正在原子替换、EACCES…），而此时写回旧快照就会把另一个写者
+        // 刚落地的 bundles/dependencies 覆盖掉 —— 正是这段重读要防的「刚装的插件被悄悄还原」。
+        // 宁可这次不摘（下次启动/点修复再来），也不能制造数据丢失。锁内重读，保证这段
+        // 「读—改—写」整体是原子的。
+        if (!fresh) {
+          result.errors.push("profile manifest changed underneath and could not be re-read; prune skipped");
+          log("profile prune skipped: manifest could not be re-read after the write window");
+        } else {
+          const currentBundles = Array.isArray(fresh.dsh?.profile?.bundles) ? fresh.dsh.profile.bundles : [];
+          fresh.dsh = fresh.dsh ?? {};
+          fresh.dsh.profile = fresh.dsh.profile ?? {};
+          fresh.dsh.profile.bundles = currentBundles.filter((name) => !pruneList.includes(name));
+          if (fixPatchReload && fresh.dsh.profile.patchReload !== "live") {
+            fresh.dsh.profile.patchReload = "live";
+            result.repaired.push("<patchReload>");
+          }
+          writeProfileManifest(dshHome, fresh);
+          result.changed = true;
         }
-        writeProfileManifest(dshHome, fresh);
-        result.changed = true;
-      }
+      });
     } catch (error) {
       result.errors.push(`write profile manifest: ${(error && error.message) || error}`);
     }
