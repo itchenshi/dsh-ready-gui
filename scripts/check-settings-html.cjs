@@ -226,6 +226,24 @@ check("首次使用卡片存在、默认隐藏，且完全跟随主进程 payloa
   }
 });
 
+// A cancelled data-directory switch must restore the radio to the value that is actually in
+// effect. main returns the settings it kept (`{...settings, applied:false}`) and does not
+// broadcast, so the answer itself — or the last broadcast payload — is the source of truth.
+// The page-load snapshot is stale after any successful switch, and restoring a radio that is
+// no longer true is unrecoverable: a radio only fires `change` when the selection moves, so
+// the user cannot click the wrongly restored one again to retry.
+check("the cancelled home-mode switch restores the effective value, not the page-load snapshot", () => {
+  if (!/res\.dshHomeMode/.test(html)) {
+    throw new Error("the rollback must read res.dshHomeMode from the cancelled api.set answer");
+  }
+  if (!/__lastPayload && window\.__lastPayload\.dshHomeMode/.test(html)) {
+    throw new Error("the rollback must fall back to the last broadcast payload");
+  }
+  if (/other\.value === s\.dshHomeMode/.test(html)) {
+    throw new Error("the rollback must not rely on the page-load snapshot alone");
+  }
+});
+
 if (failures > 0) {
   console.log("\nsettings.html: " + failures + " check(s) FAILED");
   process.exit(1);

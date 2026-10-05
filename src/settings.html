@@ -971,11 +971,24 @@
           // 而且单选框还停留在新值上，直到下一次 broadcast 才被改回去。
           api.set({ dshHomeMode: el.value }).then((res) => {
             if (res && res.applied === false) {
-              if (s && s.dshHomeMode) {
+              // Which value is actually in effect now? main returns the settings it kept
+              // (`{...settings, applied:false}`, and it does not broadcast), `__lastPayload`
+              // tracks the last broadcast, and `s` is only the page-load snapshot.
+              //
+              // Using `s` alone was wrong as soon as one switch had succeeded: it re-checked a
+              // radio that is no longer true, and because a radio only fires `change` when the
+              // selection actually moves, the wrongly restored one could not even be clicked
+              // again to retry.
+              const effective =
+                (res && res.dshHomeMode) ||
+                (window.__lastPayload && window.__lastPayload.dshHomeMode) ||
+                (s && s.dshHomeMode);
+              if (effective) {
                 document.querySelectorAll('input[name="homeMode"]').forEach((other) => {
-                  other.checked = other.value === s.dshHomeMode;
+                  other.checked = other.value === effective;
                 });
               }
+              // Nothing known: leave the radios alone rather than assert a value we cannot back.
               return;
             }
             flashSaved();
