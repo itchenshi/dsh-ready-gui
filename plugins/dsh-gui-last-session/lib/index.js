@@ -36,7 +36,10 @@ const SESSION_ID_RE = /^session-[A-Za-z0-9_-]{4,200}$/u
 /** Resolve $DSH_HOME the same way the engine does. */
 export function dshHome() {
   const fromEnv = process.env.DSH_HOME
-  if (typeof fromEnv === 'string' && fromEnv.length > 0) return resolve(fromEnv)
+  // Whitespace-only must count as unset, exactly like the engine (dsh-home-paths uses
+  // `trim().length > 0`). Otherwise `DSH_HOME='   '` resolves the home to a literal
+  // "   " directory under the cwd and the pointer is written there.
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) return resolve(fromEnv.trim())
   return resolve(homedir(), '.dsh')
 }
 

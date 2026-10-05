@@ -283,6 +283,14 @@ window.__ModuleLoader__.load({
           const row = state?.byId?.[explicit]
           if (!row || rowLooksUsed(state, explicit)) return explicit
         }
+        // The row the ENGINE's main view is currently showing. `retainedBy.mainView` is the
+        // engine's own "which session is displayed" signal — the UI retains what it shows
+        // (`replaceMain` → `retain(id, { source: "mainView" })`) and dsh-client-ui-session
+        // answers `isMain()` from exactly this. Recency alone is a poor substitute: switch
+        // to an older conversation, read it, restart — and the newest-prompted session is
+        // the wrong one to reopen, which is the complaint this plugin exists to fix.
+        const shown = Object.entries(state?.byId ?? {}).find(([, row]) => (row?.retainedBy?.mainView ?? 0) > 0)
+        if (shown !== undefined && isSessionId(shown[0]) && !isSubagentRow(shown[1])) return shown[0]
         for (const id of mostRecentlyUsedFirst(state)) {
           if (!isSessionId(id)) continue
           if (isSubagentRow(state?.byId?.[id])) continue
@@ -306,12 +314,17 @@ window.__ModuleLoader__.load({
         // （running/title/updatedAt…），按 1.5s 节流重写等于同一份指针被反复 POST，
         // 宿主每次都要 mkdir + writeFile + rename —— 而客户端根本不读 updatedAt。
         if (current === lastRecorded) return
-        lastRecorded = current
+        // Only remember it once the host accepted it: assigning optimistically meant a
+        // failed write was never retried (the safety net returns early on an unchanged
+        // pointer), so a switch made while the host was restarting was lost silently.
         Promise.resolve(io.storeLast(current))
           .then(() => {
+            lastRecorded = current
             if (typeof io.onRecord === 'function') io.onRecord(current)
           })
-          .catch(() => {})
+          .catch(() => {
+            lastRecorded = ''
+          })
       }
 
       const armRecording = () => {

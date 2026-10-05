@@ -32,13 +32,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
 
-const LAST_MARKER = "/* dsh-gui-last-session-patch v3 */";
+const LAST_MARKER = "/* dsh-gui-last-session-patch v4 */";
 /**
  * Engines this fallback patch is known to apply to cleanly. NOTE: this is now
  * only a *hint* — the plugin `dsh-gui-last-session` is the primary
  * implementation and does not need this patch at all. See below.
  */
-const SUPPORTED_ENGINE = "0.1.2-rc.1";
+const SUPPORTED_ENGINE = "0.2.0-rc.2";
 const LAST_PKG = "@deepseek-ai/dsh-client-ui-conversation";
 const LAST_CLIENT_REL = path.join("node_modules", LAST_PKG, "lib", "client.js");
 const LAST_PKG_REL = path.join("node_modules", LAST_PKG, "package.json");
@@ -216,17 +216,60 @@ function applyLastSession(engineDir, log = () => {}) {
   const block = [
     "",
     "// dsh-gui: 记住“最近一次对话”并在重启后自动打开（原 dsh-undo 页内逻辑，现由引擎补丁承载）。",
+    "// v4：改用引擎 0.2.0 的真实 API —— 列表快照里没有 `current` 字段（会话控制器只发布",
+    "// { ids, byId, phase, projectionsBySession }），`sessions.open()` 也已被移除（现在的入口是",
+    "// ctx.uiWorkspace.openSession）。旧写法两处都是死代码：既不记录，也打不开。",
     "if (typeof window !== \"undefined\") {",
     "\tconst guiBridge = window.__dshGui;",
     "\tif (guiBridge && typeof guiBridge.setLastSession === \"function\") {",
+    "\t\t// 投影元数据在列表状态里有两处（行上的 projectionValues，以及 state 级",
+    "\t\t// projectionsBySession[id].values），行上那份只在 manager 附带时才有。",
+    "\t\tconst metaOf = (st, id) => {",
+    "\t\t\tconst row = st && st.byId ? st.byId[id] : void 0;",
+    "\t\t\tconst onRow = row && row.projectionValues ? row.projectionValues.sessionListMetadata : void 0;",
+    "\t\t\tif (onRow) return onRow;",
+    "\t\t\tconst per = st && st.projectionsBySession ? st.projectionsBySession[id] : void 0;",
+    "\t\t\treturn per && per.values ? per.values.sessionListMetadata : void 0;",
+    "\t\t};",
+    "\t\t// 0.2.0 的 `blank` 是展示位（保守为 true），所以“用过没有”还要看 lastPromptAt。",
+    "\t\tconst usedRow = (st, id) => {",
+    "\t\t\tconst row = st && st.byId ? st.byId[id] : void 0;",
+    "\t\t\tif (row && row.blank === false) return true;",
+    "\t\t\tconst meta = metaOf(st, id);",
+    "\t\t\treturn !!meta && typeof meta.lastPromptAt === \"number\";",
+    "\t\t};",
+    "\t\tconst isSubagent = (st, id) => {",
+    "\t\t\tconst row = st && st.byId ? st.byId[id] : void 0;",
+    "\t\t\treturn !!row && (row.origin === \"subagent\" || row.parentId !== void 0);",
+    "\t\t};",
+    "\t\t// “最近一次对话”：优先快照里的 current（老引擎会发布），否则取最近被提问的那个。",
+    "\t\tconst pickLast = () => {",
+    "\t\t\tlet st = null;",
+    "\t\t\ttry { st = sessions.list.getSnapshot(); } catch { return \"\"; }",
+    "\t\t\tif (!st) return \"\";",
+    "\t\t\tconst explicit = st.current;",
+    "\t\t\tif (typeof explicit === \"string\" && explicit.indexOf(\"session-\") === 0 && !isSubagent(st, explicit)) return explicit;",
+    "\t\t\tconst ids = Array.isArray(st.ids) && st.ids.length > 0 ? st.ids : Object.keys(st.byId || {});",
+    "\t\t\tlet best = \"\";",
+    "\t\t\tlet bestAt = -1;",
+    "\t\t\tfor (const id of ids) {",
+    "\t\t\t\tif (typeof id !== \"string\" || id.indexOf(\"session-\") !== 0) continue;",
+    "\t\t\t\tif (isSubagent(st, id) || !usedRow(st, id)) continue;",
+    "\t\t\t\tconst meta = metaOf(st, id);",
+    "\t\t\t\tconst row = st.byId ? st.byId[id] : void 0;",
+    "\t\t\t\tconst at = meta && typeof meta.lastPromptAt === \"number\" ? meta.lastPromptAt : (row && typeof row.updatedAt === \"number\" ? row.updatedAt : 0);",
+    "\t\t\t\tif (at > bestAt) { bestAt = at; best = id; }",
+    "\t\t\t}",
+    "\t\t\treturn best;",
+    "\t\t};",
     "\t\tlet lastRec = \"\";",
     "\t\tlet lastAt = 0;",
     "\t\tlet recordArmed = false;",
     "\t\tconst recordCurrent = () => {",
     "\t\t\tif (!recordArmed) return;",
     "\t\t\ttry {",
-    "\t\t\t\tconst cur = sessions.list.getSnapshot().current;",
-    "\t\t\t\tif (cur === void 0) return;",
+    "\t\t\t\tconst cur = pickLast();",
+    "\t\t\t\tif (!cur) return;",
     "\t\t\t\tconst now = Date.now();",
     "\t\t\t\tif (cur === lastRec && now - lastAt < 1500) return;",
     "\t\t\t\tlastRec = cur;",
@@ -255,11 +298,16 @@ function applyLastSession(engineDir, log = () => {}) {
     "\t\t\tclearTimeout(armTimer);",
     "\t\t\tarmRecording();",
     "\t\t};",
+    "\t\t// 打开某个会话：0.2.0 用 workspace API（惰性解析 —— 它由另一个客户端插件提供，",
+    "\t\t// 这段代码跑起来时未必已挂载），老引擎才回退到 sessions.open。",
+    "\t\tconst openSession = (id) => {",
+    "\t\t\tconst ws = (typeof ctx.get === \"function\" ? ctx.get(\"uiWorkspace\") : void 0) || ctx.uiWorkspace;",
+    "\t\t\tif (ws && typeof ws.openSession === \"function\") return ws.openSession(String(id));",
+    "\t\t\tif (typeof sessions.open === \"function\") return sessions.open(String(id));",
+    "\t\t\tthrow new Error(\"no session-opening API on this engine\");",
+    "\t\t};",
     "\t\tif (typeof guiBridge.getLastSession === \"function\" && window.__dshOpenLast === void 0) {",
-    "\t\t\tlet openLastAttempted = false;",
     "\t\t\twindow.__dshOpenLast = () => {",
-    "\t\t\t\tif (openLastAttempted) return;",
-    "\t\t\t\topenLastAttempted = true;",
     "\t\t\t\t(async () => {",
     "\t\t\t\t\ttry {",
     "\t\t\t\t\t\tconst g = typeof window !== \"undefined\" ? window.__dshGui : void 0;",
@@ -268,18 +316,21 @@ function applyLastSession(engineDir, log = () => {}) {
     "\t\t\t\t\t\tconst sid = last && last.sessionId;",
     "\t\t\t\t\t\tif (!sid) return settleOpen();",
     "\t\t\t\t\t\tconst wait = (ms) => new Promise((r) => setTimeout(r, ms));",
-    "\t\t\t\t\t\t// 会话列表与引擎自身引导都在启动后不久完成；轮询直到目标绑定可用。",
+    "\t\t\t\t\t\t// 会话列表与引擎自身引导都在启动后不久完成；轮询直到目标进入列表。",
     "\t\t\t\t\t\tfor (let i = 0; i < 200; i += 1) {",
+    "\t\t\t\t\t\t\tlet listed = false;",
     "\t\t\t\t\t\t\ttry {",
-    "\t\t\t\t\t\t\t\tif (typeof sessions.binding === \"function\" && sessions.binding(String(sid)) !== void 0) {",
-    "\t\t\t\t\t\t\t\t\tsessions.open(String(sid));",
-    "\t\t\t\t\t\t\t\t\tawait wait(60);",
-    "\t\t\t\t\t\t\t\t\treturn settleOpen();",
-    "\t\t\t\t\t\t\t\t}",
+    "\t\t\t\t\t\t\t\tconst st = sessions.list.getSnapshot();",
+    "\t\t\t\t\t\t\t\tlisted = !!(st && st.byId && Object.prototype.hasOwnProperty.call(st.byId, String(sid)));",
     "\t\t\t\t\t\t\t} catch {}",
+    "\t\t\t\t\t\t\tif (listed) {",
+    "\t\t\t\t\t\t\t\ttry { openSession(String(sid)); } catch {}",
+    "\t\t\t\t\t\t\t\tawait wait(60);",
+    "\t\t\t\t\t\t\t\treturn settleOpen();",
+    "\t\t\t\t\t\t\t}",
     "\t\t\t\t\t\t\tawait wait(150);",
     "\t\t\t\t\t\t}",
-    "\t\t\t\t\t\ttry { sessions.open(String(sid)); } catch {}",
+    "\t\t\t\t\t\ttry { openSession(String(sid)); } catch {}",
     "\t\t\t\t\t\tawait wait(60);",
     "\t\t\t\t\t\treturn settleOpen();",
     "\t\t\t\t\t} catch {",
@@ -336,7 +387,7 @@ function applyLastSession(engineDir, log = () => {}) {
     log(`last-session patch: writing the patched file failed (${error.message}), engine file left unchanged`);
     return { ok: false, reason: `patched write failed: ${error.message}` };
   }
-  log("last-session patch: applied v3 (auto reopen last conversation)");
+  log("last-session patch: applied v4 (auto reopen last conversation)");
   return { ok: true };
 }
 
@@ -360,6 +411,9 @@ module.exports = {
   versionOf,
   injectedState,
   stripInjectedBlocks,
+  applyLastSession,
   LAST_MARKER,
+  LAST_PKG_REL,
+  LAST_CLIENT_REL,
   SUPPORTED_ENGINE,
 };

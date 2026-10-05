@@ -56,6 +56,7 @@
 // dependency tree is not on the resolution path.
 
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 export const name = 'model-usage'
@@ -949,9 +950,15 @@ export function apply(ctx, config = {}) {
   // it has its own source (the public docs page), its own cache and its own
   // refresh schedule. `currentLimits` is always a valid map once bootstrapped
   // (built-in -> cache -> docs), so the widget always has something to show.
-  const dshHome = (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0)
-    ? process.env.DSH_HOME
-    : process.cwd()
+  // Mirror the engine's own resolution (dsh-home-paths): a non-blank $DSH_HOME wins,
+  // otherwise ~/.dsh. Falling back to process.cwd() put the cache in `<cwd>/logs/…` on any
+  // deployment without that variable — outside the harness home, lost whenever the cwd
+  // changed, and it dropped a `logs/` directory into whatever directory the engine happened
+  // to be started from (typically a user project).
+  const envHome = process.env.DSH_HOME
+  const dshHome = typeof envHome === 'string' && envHome.trim().length > 0
+    ? envHome.trim()
+    : join(homedir(), '.dsh')
   let currentLimits = deriveLimits(BUILTIN_MODEL_LIMITS)
   let currentLimitsMeta = { source: 'builtin', updatedAt: null }
 

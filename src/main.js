@@ -704,6 +704,11 @@ async function loadSettings() {
     if (typeof parsed.engineNode === "string") settings.engineNode = parsed.engineNode;
     if (typeof parsed.lastNotifiedVersion === "string") settings.lastNotifiedVersion = parsed.lastNotifiedVersion;
     if (typeof parsed.lastCheckedAt === "number") settings.lastCheckedAt = parsed.lastCheckedAt;
+    // The engine-repair cooldown must survive a restart. It is written by
+    // saveSettings({ lastEngineRepairAt }) but was never restored, so `repairCooled` was
+    // true on every launch and an install matching the "hybrid tree" heuristic reinstalled
+    // the whole engine tree (minutes of network) on every single start.
+    if (typeof parsed.lastEngineRepairAt === "number") settings.lastEngineRepairAt = parsed.lastEngineRepairAt;
   } catch {
     /* first run: keep defaults */
   }
@@ -1375,7 +1380,9 @@ function npmInstall(version, onProgress) {
       }
       try {
         // 原子换入：旧树挪走 -> stage 换入 -> 删旧树。任一步失败都尽量还原。
-        const old = `${ENGINE_DIR}.old`;
+        // `.old` 也按进程唯一：两个实例同时更新引擎时，固定名会让一方删掉另一方正在用的
+        // 旧树（stage 目录早就改成每进程唯一了，这里当初漏了）。
+        const old = `${ENGINE_DIR}.old-${process.pid}`;
         try {
           fs.rmSync(old, { recursive: true, force: true });
         } catch {
@@ -1463,7 +1470,18 @@ function spawnDsh(nodeExec, { onUrl, onExit, onError }) {
     pushTail(chunk);
   });
   child.on("error", onError);
-  child.on("exit", (code, signal) => onExit(code, signal));
+  // Only the CURRENT engine child may drive lifecycle state. A superseded child (killed
+  // for a restart or an engine update) can emit `exit` after its replacement is already
+  // installed and running; without this check that stale event would look like the new
+  // engine dying — resetting its state, and potentially triggering plugin-exclusion or an
+  // auto-restart on top of a healthy process.
+  child.on("exit", (code, signal) => {
+    if (child !== dshChild) {
+      log("ignoring exit of a superseded engine process", { code, signal: signal ?? null });
+      return;
+    }
+    onExit(code, signal);
+  });
   // 供启动失败诊断读取最近的引擎输出。
   child.__dshTail = () => tail.join("\n");
   return child;
@@ -1527,7 +1545,24 @@ function killProcessTree(child, done) {
  */
 function restartEngineNow(reason) {
   if (engineRestartInFlight) return { ok: false, reason: "already restarting" };
-  if (!dshChild) return { ok: false, reason: "engine not running" };
+  if (!dshChild) {
+    // The engine is already down. This happens for real: after a manual engine update the
+    // user can answer "restart later", which kills the engine and leaves the window inert —
+    // and refusing here meant the "重启引擎" button (and the page bridge) could not bring it
+    // back either, so the only way out was quitting the whole app.
+    log("restarting engine: none is running, starting one", reason ?? "");
+    engineRestartInFlight = true;
+    engineStarted = false;
+    lastEngineUrl = null;
+    engineOrigin = null;
+    startEngine(resolveNodeExecutable()).catch((error) => {
+      err("engine start failed:", error);
+      engineRestartInFlight = false;
+      intentionalEngineStop = false;
+      fatalUi(error, L("engine.startFailed"));
+    });
+    return { ok: true };
+  }
   engineRestartInFlight = true;
   engineReady = false;
   intentionalEngineStop = true;
@@ -1538,6 +1573,13 @@ function restartEngineNow(reason) {
     engineStarted = false;
     lastEngineUrl = null;
     engineOrigin = null;
+    // The old child is already dead at this point, so its exit cannot be mistaken for the
+    // new attempt's; clearing these before spawning (instead of only on success in onUrl)
+    // is what lets a replacement that dies before printing its URL reach the exit handler
+    // — reported, diagnosed — instead of being swallowed while every further restart is
+    // refused as "already restarting" for the next 90 seconds.
+    engineRestartInFlight = false;
+    intentionalEngineStop = false;
     const nodeExec = resolveNodeExecutable();
     startEngine(nodeExec)
       .catch((error) => {
@@ -3278,7 +3320,11 @@ async function runManualEngineUpdate() {
     const engineWasUp = Boolean(dshChild) || engineStarted;
     await killEngineForSwitch();
     try {
-      await npmInstall(latest, () => {});
+      // The engine tree is shared (`<userData>/dsh-engine`) and an update replaces it whole,
+      // while a plugin install is rebuilding the staging dir and running pnpm against that
+      // same tree. Serialize them: this path had no lock at all, even though this file's own
+      // lifecycle comment claims the engine tree is covered by it.
+      await withInstallLock(installLockFile(), () => npmInstall(latest, () => {}), { log });
     } catch (error) {
       // 更新失败也别把用户留在「没有引擎」的状态里。
       if (engineWasUp) {
@@ -3435,7 +3481,16 @@ async function boot() {
       log("no engine and update checks disabled -> one-time install of latest");
       setStatus(L("update.status.first"), L("update.checksOff"));
       try {
-        await npmInstall(null, (line) => setStatus(L("update.firstInstall"), String(line).slice(0, 120) || L("update.installProgress")));
+        // First install writes the shared engine tree too; another instance may be doing the
+        // same (or a plugin install may be running against it).
+        await withInstallLock(
+          installLockFile(),
+          () =>
+            npmInstall(null, (line) =>
+              setStatus(L("update.firstInstall"), String(line).slice(0, 120) || L("update.installProgress")),
+            ),
+          { log },
+        );
         const installedNow = await readInstalledVersion();
         await saveSettings({ engineNode: nodeVersion ?? settings.engineNode, lastNotifiedVersion: undefined });
         log("engine installed:", installedNow);
@@ -3932,14 +3987,19 @@ async function startEngine(nodeExec) {
     if (!startupDiagnosisDone) {
       // 无本次新装插件时引擎仍挂起 → 终止后诊断。
       intentionalEngineStop = true;
+      // Capture the tail BEFORE clearing dshChild: engineOutputTail() reads from that very
+      // variable, so passing it after the null gave the dialog, the saved failure log and
+      // the "which plugin broke startup" attribution an empty tail — i.e. the watchdog
+      // could never diagnose the hang it exists for.
+      const tail = engineOutputTail();
       if (dshChild) {
         const child = dshChild;
         dshChild = null;
         killProcessTree(child, () => {
-          handleStartupFailure({ tail: engineOutputTail(), code: "timeout" });
+          handleStartupFailure({ tail, code: "timeout" });
         });
       } else {
-        handleStartupFailure({ tail: engineOutputTail(), code: "timeout" });
+        handleStartupFailure({ tail, code: "timeout" });
       }
     }
   }, 90000);

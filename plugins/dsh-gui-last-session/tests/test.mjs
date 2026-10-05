@@ -346,6 +346,45 @@ await check('a reopen whose target is not listed yet is retried when it appears'
   handle.dispose()
 })
 
+await check('prefers the session the engine main view is showing (retainedBy.mainView)', async () => {
+  // The engine marks the displayed session by retaining it with { source: "mainView" }, and
+  // its own UI answers `isMain()` from exactly that. Recency is a poor substitute: open an
+  // OLDER conversation, read it, restart — the newest-prompted session is then the wrong one
+  // to reopen, which is the complaint this plugin exists to fix.
+  const sessions = fakeSessions({
+    ids: ['session-old999', 'session-new999'],
+    byId: {
+      'session-old999': {
+        id: 'session-old999',
+        blank: false,
+        updatedAt: 1,
+        retainedBy: { mainView: 1 },
+        projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 1000 } },
+      },
+      'session-new999': {
+        id: 'session-new999',
+        blank: false,
+        updatedAt: 2,
+        retainedBy: {},
+        projectionValues: { sessionListMetadata: { blank: false, lastPromptAt: 2000 } },
+      },
+    },
+    projectionsBySession: {},
+  })
+  delete sessions.list.getSnapshot().current
+  const stored = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => null, storeLast: async (id) => stored.push(id) },
+    armFallbackMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 1,
+  })
+  await handle.reopen()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(stored, ['session-old999'], 'the displayed session wins over the most recent prompt')
+  handle.dispose()
+})
+
 await check('records a session the host says has been prompted (blank bit still conservative)', async () => {
   // Engine 0.2.0's row `blank` is a presentation bit that the client keeps conservative
   // until the host's sessionListMetadata.blank === false arrives; `lastPromptAt` is set

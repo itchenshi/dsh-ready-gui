@@ -14,42 +14,81 @@
 //
 // Deliberately dependency-free and synchronous-free (async fs only) so it is testable
 // with temp dirs and adds no new runtime dependency to an Electron app.
-import { mkdir, open, rm, stat, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, rm, stat, readFile, writeFile, utimes } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 /** How long to keep waiting for another instance before giving up. */
 export const LOCK_TIMEOUT_MS = 120_000;
-/** A lock file older than this is treated as abandoned (a crashed instance). */
+/** A lock file whose owner is gone and that is older than this is taken over. */
 export const LOCK_STALE_MS = 180_000;
+/** How often the held lock's mtime is refreshed (see withInstallLock). */
+export const LOCK_HEARTBEAT_MS = 30_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Is a process with this pid still alive? `EPERM` means it exists but belongs to someone
+ * else — still alive, and definitely not ours to take the lock from.
+ */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+/** Parse `<token>\n<pid>\n<iso>`; anything else reads as { token: null, pid: null }. */
+function parseLock(raw) {
+  const [token = "", pidText = ""] = String(raw ?? "").split("\n");
+  const pid = Number.parseInt(pidText, 10);
+  return { token: token.trim() || null, pid: Number.isInteger(pid) ? pid : null };
+}
+
+/**
  * Acquire an exclusive lock file, run `fn`, release it.
+ *
+ * Ownership is the whole point, so it is tracked explicitly:
+ *  - the file starts with a unique token, and only the owner whose token is still there
+ *    removes it (an unconditional `rm` in `finally` would delete a lock someone else had
+ *    legitimately taken over after declaring ours stale — silently breaking mutual
+ *    exclusion for everyone after that);
+ *  - a lock is only treated as abandoned when its owner is *gone*. The previous version
+ *    used age alone, but the work under this lock routinely outlives any fixed threshold
+ *    (`dsh plugin` gets a 600 s timeout), so a live installer was regularly declared dead
+ *    and had its staging directory wiped underneath it.
+ *  - the mtime is refreshed while held, so other tooling that only looks at timestamps
+ *    (and humans reading the file) still see a live lock.
  *
  * @param lockFile - absolute path of the lock file (its directory is created).
  * @param fn - work to run while holding the lock.
  * @param options.timeoutMs - give up after this long (the work still runs, unlocked —
  *   refusing to work at all would be worse than proceeding carefully).
- * @param options.staleMs - abandon a lock whose file is older than this.
+ * @param options.staleMs - how long an owner-less lock file may linger before takeover.
+ * @param options.heartbeatMs - mtime refresh interval while held.
  * @param options.log - diagnostics sink.
- * @returns whatever `fn` returns, plus `{ locked: boolean, waitedMs: number }` semantics
- *   through the second parameter of `fn`.
+ * @returns whatever `fn` returns; `fn` also receives `{ locked, waitedMs }`.
  */
 export async function withInstallLock(lockFile, fn, options = {}) {
   const timeoutMs = options.timeoutMs ?? LOCK_TIMEOUT_MS;
   const staleMs = options.staleMs ?? LOCK_STALE_MS;
+  const heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
   const log = options.log ?? (() => {});
   const started = Date.now();
+  const token = `${process.pid}-${randomUUID()}`;
   let handle = null;
   let waitedMs = 0;
+  let heartbeat = null;
 
   await mkdir(path.dirname(lockFile), { recursive: true });
   for (;;) {
     try {
       // 'wx' = create exclusively: the whole point of the lock.
       handle = await open(lockFile, "wx");
-      await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+      await handle.writeFile(`${token}\n${process.pid}\n${new Date().toISOString()}\n`, "utf8");
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") {
@@ -58,15 +97,30 @@ export async function withInstallLock(lockFile, fn, options = {}) {
         log("install lock unavailable, proceeding unlocked:", error?.message ?? String(error));
         return fn({ locked: false, waitedMs: 0 });
       }
-      // Someone holds it. If it looks abandoned, clear it and retry immediately.
+      // Someone holds it. Only take it over if that someone is gone (or the file is
+      // unreadable AND old) — never merely because it has been held for a while.
       let ageMs = 0;
+      let raw = null;
       try {
-        ageMs = Date.now() - (await stat(lockFile)).mtimeMs;
+        const info = await stat(lockFile);
+        ageMs = Date.now() - info.mtimeMs;
+        raw = await readFile(lockFile, "utf8").catch(() => null);
       } catch {
-        continue; // it disappeared: retry at once
+        // The lock file vanished (or became unreadable) between the failed `open` and this
+        // stat. Retry — but still respect the deadline and still yield: a persistent
+        // EPERM/EBUSY here would otherwise spin this loop forever with no sleep, hanging
+        // the caller (and, for plugin ops, leaving the in-process gate closed).
+        if (Date.now() - started > timeoutMs) {
+          log(`install lock unreadable after ${Math.round(timeoutMs / 1000)}s; proceeding unlocked`);
+          return fn({ locked: false, waitedMs: Date.now() - started });
+        }
+        await sleep(50);
+        continue;
       }
-      if (ageMs > staleMs) {
-        log(`install lock looks abandoned (${Math.round(ageMs / 1000)}s old); taking it over`);
+      const { pid } = parseLock(raw);
+      const ownerGone = pid === null || !pidAlive(pid);
+      if (ownerGone && ageMs > staleMs) {
+        log(`install lock owner is gone (pid ${pid ?? "?"}, ${Math.round(ageMs / 1000)}s old); taking it over`);
         await rm(lockFile, { force: true }).catch(() => {});
         continue;
       }
@@ -80,15 +134,31 @@ export async function withInstallLock(lockFile, fn, options = {}) {
     }
   }
 
+  // Keep the mtime fresh while we work, so no other tool (or person) reads a long install
+  // as an abandoned lock.
+  heartbeat = setInterval(() => {
+    const now = new Date();
+    utimes(lockFile, now, now).catch(() => {});
+  }, heartbeatMs);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
+
   try {
     return await fn({ locked: true, waitedMs });
   } finally {
+    if (heartbeat !== null) clearInterval(heartbeat);
     try {
       await handle.close();
     } catch {
       /* already closed */
     }
-    await rm(lockFile, { force: true }).catch(() => {});
+    // Only remove the lock if it is still OURS. If someone took it over while we worked,
+    // deleting it would hand the critical section to a third process.
+    const current = await readFile(lockFile, "utf8").catch(() => null);
+    if (current !== null && parseLock(current).token === token) {
+      await rm(lockFile, { force: true }).catch(() => {});
+    } else if (current !== null) {
+      log("install lock was taken over while held; leaving the new owner's lock alone");
+    }
   }
 }
 

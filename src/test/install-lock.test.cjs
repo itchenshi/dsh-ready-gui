@@ -66,10 +66,11 @@ function clearLock() {
     assert.deepStrictEqual(order, ["first:start", "first:end", "second"], "no interleaving");
   });
 
-  await check("takes over a lock whose owner died (stale file)", async () => {
-    // Simulate a crash: the lock file exists but is old, so nobody will ever release it.
+  await check("takes over a lock whose owner is gone (owner pid not alive, file old)", async () => {
+    // Simulate a crash: the lock file is old AND its owner no longer exists, so nobody will
+    // ever release it. Format is `<token>\n<pid>\n<iso>` (see withInstallLock).
     fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-    fs.writeFileSync(lockFile, "99999\n2000-01-01T00:00:00.000Z\n");
+    fs.writeFileSync(lockFile, "dead-owner\n999999\n2000-01-01T00:00:00.000Z\n");
     const old = new Date(Date.now() - 10 * 60 * 1000);
     fs.utimesSync(lockFile, old, old);
     const out = await withInstallLock(lockFile, ({ locked }) => locked, { staleMs: 60_000 });
@@ -77,9 +78,33 @@ function clearLock() {
     assert.strictEqual(fs.existsSync(lockFile), false, "and it must be cleaned up");
   });
 
+  await check("NEVER takes over a lock whose owner is still alive, however old it looks", async () => {
+    // The regression this pins: ownership used to be decided by file age alone, but the work
+    // under this lock routinely outlives any fixed threshold (`dsh plugin` gets a 600 s
+    // timeout) — so a live installer got declared dead, had its staging directory wiped from
+    // underneath it (ERR_PNPM_DIRECTORY_FETCHER_IO), and then had its lock deleted by the
+    // very process that took it over.
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, `alive-owner\n${process.pid}\n2000-01-01T00:00:00.000Z\n`);
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(lockFile, old, old); // an hour old, far past staleMs
+    const out = await withInstallLock(lockFile, ({ locked }) => locked, { timeoutMs: 300, staleMs: 1000 });
+    assert.strictEqual(out, false, "a live owner must not be evicted");
+    assert.ok(fs.existsSync(lockFile), "their lock must survive");
+  });
+
+  await check("does not delete a lock that was taken over while we held it", async () => {
+    await withInstallLock(lockFile, async () => {
+      // Someone took it over (their token is different) while we were working.
+      fs.writeFileSync(lockFile, "someone-else\n12345\n2020-01-01T00:00:00.000Z\n");
+    });
+    assert.ok(fs.existsSync(lockFile), "releasing must not hand the critical section to a third process");
+    assert.ok(fs.readFileSync(lockFile, "utf8").startsWith("someone-else"), "and must not touch their lock");
+  });
+
   await check("proceeds (unlocked) instead of hanging when the lock never frees", async () => {
     fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-    fs.writeFileSync(lockFile, "another-instance\n");
+    fs.writeFileSync(lockFile, `another-instance\n${process.pid}\n2020-01-01T00:00:00.000Z\n`);
     const started = Date.now();
     const out = await withInstallLock(lockFile, ({ locked, waitedMs }) => ({ locked, waitedMs }), {
       timeoutMs: 400,

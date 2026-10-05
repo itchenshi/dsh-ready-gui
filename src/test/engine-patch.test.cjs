@@ -1,6 +1,9 @@
 /* engine-patch.test.cjs — engine-patch 内部工具纯单测（不依赖已装引擎）。 */
 "use strict";
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   findBlock,
   insertAfter,
@@ -8,7 +11,10 @@ const {
   versionOf,
   stripInjectedBlocks,
   injectedState,
+  applyLastSession,
   LAST_MARKER,
+  LAST_PKG_REL,
+  LAST_CLIENT_REL,
   SUPPORTED_ENGINE,
 } = require("../engine-patch.js");
 
@@ -39,7 +45,10 @@ check("indentOf 提取行首空白", indentOf("\t\tabc") === "\t\t" && indentOf(
   check("insertAfter 插入并继承缩进", lines[2].trim() === "NEW()" && lines[2].startsWith("\t\t") && lines[3].trim() === "OTHER()");
 }
 
-check("常量 LAST_MARKER/版本", typeof LAST_MARKER === "string" && LAST_MARKER.length > 0 && SUPPORTED_ENGINE === "0.1.2-rc.1");
+// The pinned value documents which engine build this patch was verified against; it moves
+// when the patch is re-verified (v4 = engine 0.2.0-rc.2, whose list state has no `current`
+// and whose sessions service has no `open`).
+check("常量 LAST_MARKER/版本", typeof LAST_MARKER === "string" && LAST_MARKER.length > 0 && SUPPORTED_ENGINE === "0.2.0-rc.2");
 
 {
   const os = require("node:os");
@@ -180,6 +189,69 @@ check("常量 LAST_MARKER/版本", typeof LAST_MARKER === "string" && LAST_MARKE
   stripInjectedBlocks(cleaned, anchor);
   const after = injectedState(cleaned);
   check("injectedState 在 strip 之后归零", after.blocks === 0 && after.markers === 0, JSON.stringify(after));
+}
+
+// ---------------------------------------------------------------------------
+// The injected block must use the CURRENT engine's APIs.
+//
+// v3 called `sessions.list.getSnapshot().current` and `sessions.open(id)`. Engine 0.2.0
+// publishes the list state as `{ ids, byId, phase, projectionsBySession }` (no `current`)
+// and removed `sessions.open` — so after the engine upgrade the whole fallback was dead:
+// it recorded nothing and could not open anything, silently, on every launch. These
+// assertions pin the v4 block against exactly that regression.
+// ---------------------------------------------------------------------------
+{
+  const fake = [
+    "function apply(ctx) {",
+    "const sessions = ctx.sessions;",
+    "const slots = ctx.slots;",
+    "}",
+  ].join("\n");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-patch-"));
+  const pkgDir = path.join(dir, path.dirname(LAST_PKG_REL));
+  const clientFile = path.join(dir, LAST_CLIENT_REL);
+  fs.mkdirSync(path.dirname(clientFile), { recursive: true });
+  fs.writeFileSync(path.join(dir, LAST_PKG_REL), JSON.stringify({ name: "x", version: "0.2.0-rc.2" }));
+  fs.writeFileSync(clientFile, fake);
+  void pkgDir;
+
+  const result = applyLastSession(dir, () => {});
+  const patched = fs.readFileSync(clientFile, "utf8");
+  check("applyLastSession 在真实夹具上成功", result.ok === true, JSON.stringify(result));
+  check("注入块带当前版本标记", patched.includes(LAST_MARKER), "marker missing");
+  check(
+    "注入块不再读列表快照里不存在的 `current`",
+    !patched.includes("getSnapshot().current"),
+    "still reading the removed field",
+  );
+  check(
+    "注入块用 workspace API 打开会话（带旧 API 守卫回退）",
+    patched.includes('ctx.get("uiWorkspace")') &&
+      patched.includes("ws.openSession(") &&
+      /typeof sessions\.open === "function"/.test(patched),
+    "workspace opener missing",
+  );
+  check(
+    "注入块从投影元数据推导“用过没有”（blank 保守为真）",
+    patched.includes("lastPromptAt") && patched.includes("projectionsBySession"),
+    "list-derived recording missing",
+  );
+  check("注入后文件仍是合法 JS", (() => {
+    try {
+      new Function(patched.replace(/\bexport\s+/g, "")); // the real file is ESM; just check it parses
+      return true;
+    } catch (error) {
+      return `parse failed: ${error.message}`;
+    }
+  })() === true);
+  // Second run must be a no-op (the self-healing strip + marker make it idempotent).
+  const again = applyLastSession(dir, () => {});
+  check("重复打补丁是幂等的", again.ok === true && again.already === true, JSON.stringify(again));
+  check(
+    "幂等之后仍只有一份注入块",
+    injectedState(fs.readFileSync(clientFile, "utf8").split(/\r?\n/)).markers === 1,
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${failed === 0 ? "all" : failed + " failed"}`);

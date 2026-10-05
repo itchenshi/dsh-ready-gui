@@ -235,6 +235,11 @@ export function patchFetch(original, als) {
  * 或 MCP/SDK 等调用链上的**跨主机**请求。那既不必要（对方不认这个头，还会把简单请求变成
  * 需要预检的跨域请求）又有泄露风险（`session-id` 模式下的值就是内部会话 id）。
  * 拿不到主机信息时保持旧行为，避免把功能关掉。
+ *
+ * 但「有主机白名单、却认不出这次请求的目标」不是同一回事：那说明我们**知道**目标不是
+ * OpenCode，或者无法判断 —— 两种都不该加头。以前这里连同 `catch` 一起失败开放（fail open），
+ * 于是 `URL`/Request 形态的入参（拿不到 `.url`）和无法解析的 URL 都会把内部会话 id 发给
+ * 任意第三方，而 README 明确承诺「绝不给第三方」。现在只在**完全没有主机信息**时保留旧行为。
  */
 function openCodeHosts(options) {
   const hosts = new Set()
@@ -254,10 +259,15 @@ function targetsOpenCode(input, hosts) {
   if (!Array.isArray(hosts) || hosts.length === 0) return true
   try {
     const raw = typeof input === 'string' ? input : input?.url
-    if (typeof raw !== 'string') return true
+    // An input we cannot name a host for is NOT "unknown, so allow": `URL` objects and
+    // Request-like wrappers reach here with `input.url` undefined, and an unparseable URL
+    // has no host at all. Both used to fall through to `true`, which handed the raw DSH
+    // session id to whatever host was fetched inside the stream window — the exact thing
+    // the README promises never happens in `session-id` mode.
+    if (typeof raw !== 'string') return false
     return hosts.includes(new URL(raw).host)
   } catch {
-    return true
+    return false
   }
 }
 
@@ -606,9 +616,13 @@ async function detectCatalogModels(ctx) {
   }
 }
 
-async function waitForNamespace(settings) {
+async function waitForNamespace(settings, isCancelled = () => false) {
   const deadline = Date.now() + NS_WAIT_TIMEOUT_MS
   while (Date.now() < deadline) {
+    // Cancellable: the plugin may be unloaded while this polls, and cordis AWAITS async
+    // disposers — an uncancellable 10 s wait stalls the unload, and a late success would
+    // let an already-disposed plugin write settings.
+    if (isCancelled()) return false
     try {
       const desc = settings.describe?.()
       if (Array.isArray(desc) && desc.some((d) => d.ns === NS)) return true
@@ -674,10 +688,21 @@ async function ensureV41Models(ctx, settings) {
 
   const entry = settingsEntry(settings)
   if (entry === null) return
-  const route = entry.resolved?.providers?.[PROVIDER]
-  if (!route) return // no opencode-go route configured
+  // The guard must be the USER layer, not the resolved one.
+  //
+  // This package's own patch layer declares `opencode-go` for EVERY user (that is what
+  // supplies the endpoint — cordis.patch.yml), and `describe().value` is the fully
+  // resolved value (base + patch + user), so `entry.resolved.providers[PROVIDER]` is
+  // always truthy and the "no route configured" guard could never fire. The V4.1 half
+  // therefore wrote a model list into the settings of users who never configured OpenCode
+  // Go at all — and because a non-empty configured list replaces the served catalog, that
+  // snapshot then froze their route against later catalog updates. The Command Code half
+  // below documents this exact principle and guards on the user layer; this half now does
+  // the same.
+  const userRoute = entry.user?.providers?.[PROVIDER]
+  if (userRoute === null || typeof userRoute !== 'object') return // the user has not configured this route
 
-  const patch = planRouteUpdate(entry.user?.providers?.[PROVIDER], route, catalog)
+  const patch = planRouteUpdate(userRoute, entry.resolved?.providers?.[PROVIDER], catalog)
   if (patch === null) return // already in the shape we maintain
 
   ctx.logger.info(
@@ -1056,7 +1081,8 @@ async function ensureCommandCodeModels(ctx, settings, config = {}) {
   if (entry === null) return
 
   const userProviders = entry.user?.providers
-  const ids = commandCodeRouteIds(userProviders, entry.resolved?.providers, config.commandcodeProviders)
+  const resolvedProviders = entry.resolved?.providers
+  const ids = commandCodeRouteIds(userProviders, resolvedProviders, config.commandcodeProviders)
   if (ids.length === 0) return // no Command Code route is in use
 
   // One catalog serves every route, so it is resolved once and shared. The memo
@@ -1076,7 +1102,13 @@ async function ensureCommandCodeModels(ctx, settings, config = {}) {
   for (const id of ids) {
     const userRoute = userProviders?.[id]
     if (userRoute === null || typeof userRoute !== 'object') continue
-    const patch = planCommandCodeUpdate(userRoute, resolvedSection?.providers?.[id], catalog.models)
+    // `resolvedSection` used to be referenced here without ever being defined: reading an
+    // undeclared identifier throws a ReferenceError on the first iteration, the rejection
+    // was swallowed by the caller's `.catch` (one warning line), and so this entire
+    // Command Code half was dead — no model list was ever filled from the catalog, and
+    // `api`/`baseURL` were never written for a differently-named route. Take the resolved
+    // providers from the entry already in hand.
+    const patch = planCommandCodeUpdate(userRoute, resolvedProviders?.[id], catalog.models)
     if (patch === null) continue // already complete
     const before = Array.isArray(userRoute.models) ? userRoute.models.length : 0
     const after = Array.isArray(patch.models) ? patch.models.length : before
@@ -1097,14 +1129,19 @@ async function ensureCommandCodeModels(ctx, settings, config = {}) {
 function installAutoModels(ctx, config = {}) {
   const settings = ctx.settings
   let ensureChain = Promise.resolve()
+  // Set by the disposer. Without it the namespace poll below could not be cancelled, so a
+  // plugin unload/engine shutdown stalled for up to NS_WAIT_TIMEOUT_MS waiting on it — and
+  // if the namespace showed up late, the already-disposed plugin went on to WRITE settings.
+  let disposed = false
 
   // Two independent provisioning passes over the SAME settings namespace. They
   // are chained rather than run in parallel so the second never reads a section
   // the first is halfway through writing.
   const ensure = () => {
+    if (disposed) return
     ensureChain = ensureChain
-      .then(() => ensureV41Models(ctx, settings))
-      .then(() => ensureCommandCodeModels(ctx, settings, config))
+      .then(() => (disposed ? undefined : ensureV41Models(ctx, settings)))
+      .then(() => (disposed ? undefined : ensureCommandCodeModels(ctx, settings, config)))
       .catch((error) => {
         ctx.logger?.warn('[gateway-models] auto-add failed: %s', error?.message ?? String(error))
       })
@@ -1112,7 +1149,8 @@ function installAutoModels(ctx, config = {}) {
 
   ctx.effect(() => {
     const started = (async () => {
-      const ready = await waitForNamespace(settings)
+      const ready = await waitForNamespace(settings, () => disposed)
+      if (disposed) return
       if (!ready) {
         ctx.logger?.warn('[gateway-models] llm-pi-ai settings namespace not seen within %dms; skipping auto-add', NS_WAIT_TIMEOUT_MS)
         return
@@ -1128,7 +1166,10 @@ function installAutoModels(ctx, config = {}) {
     })
 
     return async () => {
+      disposed = true
       off()
+      // `started` now returns promptly (its poll checks `disposed`), so unloading does not
+      // stall on the namespace wait, and nothing new is written after this point.
       await started
       await ensureChain
     }

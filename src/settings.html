@@ -771,6 +771,11 @@
       const syncBtn = document.getElementById("btnSyncPlugins");
       const restartBtn = document.getElementById("btnRestartEngine");
       const reloadBtn = document.getElementById("btnReloadPage");
+      // 更新检查会 kill 引擎并整体换掉 dsh-engine 目录；数据目录切换会移动/删除 harness home。
+      // 两者都与插件的安装/卸载争用同一批文件（引擎树、profile），所以必须在 busy 锁里 ——
+      // 否则一次确认过的引擎更新可以在插件安装跑到一半时把引擎目录换走。
+      const checkBtn = document.getElementById("btnCheckUpdate");
+      const homeRadios = Array.from(document.querySelectorAll('input[name="homeMode"]'));
       // 首次启动卡片的两颗按钮也算插件操作入口（一键开启会跑 pnpm），一样纳入 busy 锁。
       const frEnableBtn = document.getElementById("btnFirstRunEnable");
       const frLaterBtn = document.getElementById("btnFirstRunLater");
@@ -779,6 +784,9 @@
         if (syncBtn) { window.__syncWasDisabled = syncBtn.disabled; syncBtn.disabled = true; }
         if (restartBtn) { window.__restartWasDisabled = restartBtn.disabled; restartBtn.disabled = true; }
         if (reloadBtn) { window.__reloadWasDisabled = reloadBtn.disabled; reloadBtn.disabled = true; }
+        if (checkBtn) { window.__checkWasDisabled = checkBtn.disabled; checkBtn.disabled = true; }
+        window.__homeWasDisabled = homeRadios.map((r) => r.disabled);
+        homeRadios.forEach((r) => { r.disabled = true; });
         if (frEnableBtn) { window.__frEnableWasDisabled = frEnableBtn.disabled; frEnableBtn.disabled = true; }
         if (frLaterBtn) { window.__frLaterWasDisabled = frLaterBtn.disabled; frLaterBtn.disabled = true; }
       } else {
@@ -786,6 +794,10 @@
         if (syncBtn) syncBtn.disabled = window.__syncWasDisabled === true;
         if (restartBtn) restartBtn.disabled = window.__restartWasDisabled === true;
         if (reloadBtn) reloadBtn.disabled = window.__reloadWasDisabled === true;
+        if (checkBtn) checkBtn.disabled = window.__checkWasDisabled === true;
+        if (Array.isArray(window.__homeWasDisabled)) {
+          homeRadios.forEach((r, i) => { r.disabled = window.__homeWasDisabled[i] === true; });
+        }
         if (frEnableBtn) frEnableBtn.disabled = window.__frEnableWasDisabled === true;
         if (frLaterBtn) frLaterBtn.disabled = window.__frLaterWasDisabled === true;
         // busy 期间按钮是禁用的，markRestartNeeded 那时加不上高亮；这里按当前状态补一次。
