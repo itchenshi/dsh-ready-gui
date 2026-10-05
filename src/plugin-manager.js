@@ -230,7 +230,11 @@ function engineSatisfies(entry, engineVersion) {
   if (!entry.engineRange) return true;
   if (!engineVersion) return true;
   try {
-    return semver.satisfies(engineVersion, entry.engineRange);
+    // includePrerelease mirrors the engine's own check (dsh-app-boot): engine versions
+    // here are prereleases (0.2.0-rc.2), and without it a range like >=0.2.0 would reject the
+    // very build we are running. Note this gate is currently inert — no catalog entry declares
+    // engineRange — so it is a no-op that must at least agree with the engine if one is added.
+    return semver.satisfies(engineVersion, entry.engineRange, { includePrerelease: true });
   } catch {
     return true;
   }

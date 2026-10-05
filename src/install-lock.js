@@ -41,11 +41,22 @@ function pidAlive(pid) {
   }
 }
 
-/** Parse `<token>\n<pid>\n<iso>`; anything else reads as { token: null, pid: null }. */
+/**
+ * Parse a lock record. Two shapes exist around here:
+ *   - ours: `<token>\n<pid>\n<iso>` — the token lets us verify ownership on release;
+ *   - the engine's `dsh-atomic-write`: exactly `<pid>\n`. It requires `/^\d+\n$/` and
+ *     otherwise treats the lock as unreadable and waits for it, so a lock file shared with
+ *     the engine (the profile's own `package.json.lock`) must be understood in both shapes —
+ *     and, when we take it, written in the shape its other users can read.
+ */
 function parseLock(raw) {
-  const [token = "", pidText = ""] = String(raw ?? "").split("\n");
+  const text = String(raw ?? "");
+  if (/^\d+\n$/.test(text)) {
+    return { token: null, pid: Number.parseInt(text.trim(), 10), engineFormat: true };
+  }
+  const [token = "", pidText = ""] = text.split("\n");
   const pid = Number.parseInt(pidText, 10);
-  return { token: token.trim() || null, pid: Number.isInteger(pid) ? pid : null };
+  return { token: token.trim() || null, pid: Number.isInteger(pid) ? pid : null, engineFormat: false };
 }
 
 /**
@@ -77,6 +88,13 @@ export async function withInstallLock(lockFile, fn, options = {}) {
   const staleMs = options.staleMs ?? LOCK_STALE_MS;
   const heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
   const log = options.log ?? (() => {});
+  // `engineFormat` writes exactly `<pid>\n`, which is what the engine's own `withFileLock`
+  // (dsh-atomic-write) requires to recognise a holder; anything else it treats as an
+  // unreadable lock and waits for. Use it whenever the lock file is shared with the engine
+  // (e.g. `<profile>/package.json.lock`). Ownership is then proved by liveness alone —
+  // which is also why the engine's own unconditional release is safe there: a takeover only
+  // happens once the holder's process is gone, so the dead holder cannot release anything.
+  const engineFormat = options.recordFormat === "pid";
   const started = Date.now();
   const token = `${process.pid}-${randomUUID()}`;
   let handle = null;
@@ -88,7 +106,10 @@ export async function withInstallLock(lockFile, fn, options = {}) {
     try {
       // 'wx' = create exclusively: the whole point of the lock.
       handle = await open(lockFile, "wx");
-      await handle.writeFile(`${token}\n${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+      await handle.writeFile(
+        engineFormat ? `${process.pid}\n` : `${token}\n${process.pid}\n${new Date().toISOString()}\n`,
+        "utf8",
+      );
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") {
@@ -152,9 +173,13 @@ export async function withInstallLock(lockFile, fn, options = {}) {
       /* already closed */
     }
     // Only remove the lock if it is still OURS. If someone took it over while we worked,
-    // deleting it would hand the critical section to a third process.
+    // deleting it would hand the critical section to a third process. In `engineFormat` there
+    // is no token to compare, but a takeover requires our process to be gone — so if we are
+    // still here, the record is necessarily still ours.
     const current = await readFile(lockFile, "utf8").catch(() => null);
-    if (current !== null && parseLock(current).token === token) {
+    if (engineFormat) {
+      await rm(lockFile, { force: true }).catch(() => {});
+    } else if (current !== null && parseLock(current).token === token) {
       await rm(lockFile, { force: true }).catch(() => {});
     } else if (current !== null) {
       log("install lock was taken over while held; leaving the new owner's lock alone");
