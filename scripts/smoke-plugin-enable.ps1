@@ -1,4 +1,4 @@
-﻿# smoke-plugin-enable.ps1 - E2E test: install state + enable state, both synced,
+# smoke-plugin-enable.ps1 - E2E test: install state + enable state, both synced,
 # with the enable toggle ACTUALLY taking effect in the engine.
 #
 # A plugin has TWO orthogonal states and the settings window must show both:
@@ -517,6 +517,24 @@ console.log("seeded pre-rename install:", oldPkg);
   $act = Wait-Activation $origin $PLUGIN "disabled" 120 "boot reconcile must actually disable the plugin in the engine"
   Write-Host "STEP5 PASS: engine reports activation '$act' (not merely a file change)"
 
+  # STEP6 is currently RED, and it is NOT a flaky harness issue. Verified by git-stash A/B:
+  # it fails identically with and without the pending main.js change, and the driver's own
+  # dump pinpoints it:
+  #
+  #   enable succeeds, then the row flips to
+  #     installChecked=false, enablePresent=false
+  #     text="... not installed (tick to install) ..."
+  #   so the driver can no longer click "disable" and times out.
+  #
+  # Cause: disabling a bundled plugin removes it from dsh.profile.bundles, and the GUI derives
+  # its `installed` flag from that registration (status also carries `bundle` and `present`).
+  # So a plugin that is merely DISABLED is presented as "not installed" and loses its enable
+  # toggle -- the user cannot re-enable it from the settings window, and this test (whose own
+  # expectation is "install state untouched") cannot drive it.
+  #
+  # Next step: decide `installed` semantics in the status builder (registration vs. on-disk
+  # presence/dependency) and, in settings.html `stateText`, show a disabled-but-present plugin
+  # as disabled (keeping the toggle) instead of not-installed.
   Write-Host "STEP6: driving the settings-window enable toggle over CDP..."
   & node $driverFile $dbgPort $PLUGIN
   if ($LASTEXITCODE -ne 0) { Dump-Log; throw "CDP enable-toggle drive failed (exit $LASTEXITCODE)" }
