@@ -542,18 +542,41 @@ function isBundledStagedSpec(spec, entry, stagingRoot) {
  * previousSpec 取自 profile 的 dependencies —— 那个文件可以被插件市场、甚至引擎进程里的
  * 第三方插件改写，所以不能无条件喂给 pnpm：
  *   - 以 `-` 开头会被 pnpm 当成命令行选项解析（argv 注入）；
- *   - 带 `:` 前缀的（file: / git: / github: / https: / npm:）会把安装指向任意本地目录或
- *     远程仓库 —— 恢复动作等于替别人装一份代码。
- * 内置条目只认我们自己 staging 出来的那一份；目录外的条目（如 dshmarket）允许普通的包名
- * 或版本范围。其它形状一律拒绝：宁可报错，也不装来路不明的东西。
+ *   - 带 scheme 的（git: / github: / https: / ssh: / 无 scheme 的 `user/repo` GitHub 简写）
+ *     会把安装指向任意远程仓库 —— 恢复动作等于替别人装一份代码。
+ *
+ * 但旧判据对**内置条目**过严：它只肯恢复「我们当前那一条 staging 路径」。于是**旧版 GUI 留下的
+ * staging 路径**（同一台机器、同一个 `~/.dsh-gui/bundled-plugins/<pkg>`，只是前缀变了）也被算作
+ * 来路不明 —— 而那正是真正会踩到这个坑的人群（他们的插件本来就是应用自己装的）。一旦重装失败，
+ * 恢复分支被跳过、插件被摘掉，用户得自己发现并重新勾选安装。
+ *
+ * 现在允许两类：
+ *   1. `file:` 指向**我们自己 staging 根目录内**的任意路径（当前或旧版都可以），且没有逃逸出该根；
+ *   2. 纯 registry 形状（`name` / `@scope/name`，可带 `@版本`），与 GUI 自己安装时同一信任级别。
+ * 仍然拒绝：`-` 开头、任何带 scheme 的 spec、无 scheme 的 `user/repo` 远程简写、以及逃逸出
+ * staging 根的 `file:` 路径。
  */
 function isRestorableSpec(spec, entry, stagingRoot) {
   if (typeof spec !== "string") return false;
   const value = spec.trim();
   if (value === "" || value.startsWith("-")) return false;
-  if (entry.localSource) return isBundledStagedSpec(value, entry, stagingRoot);
-  return !value.includes(":");
+
+  const staged = /^file:(.*)$/iu.exec(value);
+  if (staged !== null) {
+    // 指向我们自己的 staging 根目录才行（旧版路径也是我们的目录）。
+    if (typeof stagingRoot !== "string" || stagingRoot === "") return false;
+    const target = path.resolve(staged[1].replace(/[/\\]+/gu, path.sep));
+    const rel = path.relative(path.resolve(stagingRoot), target);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  }
+
+  // 纯 registry 形状：不带 scheme、不带路径（`user/repo` 是 GitHub 简写，不是包名）。
+  if (/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*(@[^:@/\s]+)?$/iu.test(value)) return true;
+  if (/^[a-z0-9][a-z0-9._-]*(@[^:@/\s]+)?$/iu.test(value)) return true;
+  return false;
 }
+// NOTE: `entry` is accepted for call-site stability but no longer consulted — the staging-root
+// test above covers both bundled and catalog entries, and the shape rules are the same for both.
 
 /**
  * 把内置插件 staging 成 <stagingRoot>/<pkg> 的真实目录并返回该目录。
@@ -2583,6 +2606,7 @@ module.exports = {
   planBundledPluginUpdate,
   bundledStagedSpec,
   isBundledStagedSpec,
+  isRestorableSpec,
   catalogStatus,
   pluginHasClientHalf,
   setPluginEnabled,

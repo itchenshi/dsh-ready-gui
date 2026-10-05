@@ -9,8 +9,7 @@ const path = require("node:path");
 const pm = require("../plugin-manager.js");
 
 function writeJson(file, obj) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(obj, null, 2) + "\n");
+  fs.mkdirSync(path.dirname(file), { recursive: true });  fs.writeFileSync(file, JSON.stringify(obj, null, 2) + "\n");
 }
 
 function makeTree() {
@@ -584,6 +583,7 @@ run()
   .then(checkAtomicPatchWrite)
   .then(checkBuiltInInstallSource)
   .then(checkCatalogStatusUpdateInfo)
+  .then(checkIsRestorableSpec)
   .then(
     () => console.log("plugin-manager: all checks passed"),
     (e) => {
@@ -591,3 +591,31 @@ run()
       process.exit(1);
     },
   );
+
+// isRestorableSpec gates the "put the previous install back" path. It reads a spec out of the
+// profile's package.json -- a file the marketplace and third-party plugins can write -- so the
+// shapes it accepts are a security boundary, not cosmetics. Two things must hold at once:
+// a plain registry spec stays restorable (the real recovery case: the plugin came from the
+// registry and the routine reinstall failed), and nothing may point at an arbitrary remote
+// source or be parsed as a CLI option.
+function checkIsRestorableSpec() {
+  const root = path.join(os.tmpdir(), "pm-restore-root", "bundled-plugins");
+  const entry = { pkg: "dsh-keys-setting", localSource: true };
+  const cases = [
+    ["file:" + root.replace(/\\/gu, "/") + "/dsh-keys-setting", true, "our own staged path"],
+    ["file:C:/someone/else/dsh-keys-setting", false, "file: outside our staging root"],
+    ["file:C:/x/.dsh-gui/bundled-plugins/../../../evil", false, "file: escaping our staging root"],
+    ["dsh-keys-setting", true, "plain package name"],
+    ["@scope/name@1.2.3", true, "scoped name with a version"],
+    ["-Dsome-flag", false, "option-shaped value (argv injection)"],
+    ["git:https://example.invalid/x", false, "git: remote"],
+    ["https://example.invalid/x.tgz", false, "https: remote"],
+    ["user/repo", false, "GitHub shorthand without a scheme"],
+    ["", false, "empty"],
+  ];
+  for (const [spec, want, why] of cases) {
+    assert.strictEqual(pm.isRestorableSpec(spec, entry, root), want, why + ": " + JSON.stringify(spec));
+  }
+  // With no staging root there is nothing to compare a file: path against, so refuse those.
+  assert.strictEqual(pm.isRestorableSpec("file:C:/anything", entry, null), false, "file: with no staging root");
+}
