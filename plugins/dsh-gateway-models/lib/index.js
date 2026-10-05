@@ -42,6 +42,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { isAbsolute, resolve, sep } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
@@ -63,6 +64,11 @@ const SESSION_HEADER = 'x-opencode-session'
 // 的模型请求直接以 TypeError 失败。收紧到可见 ASCII —— 而这个头本来就只要求不透明。
 const HEADER_VALUE_RE = /^[\x21-\x7e]+$/u
 const UUID_TABLE_MAX = 4096
+
+/** Cap for an opt-in `debugFile` (see recordDebug): 8 MiB, then stop appending. */
+const DEBUG_FILE_MAX_BYTES = 8 * 1024 * 1024
+/** Files already reported as full, so the warning is emitted once per file. */
+const debugFileWarned = new Set()
 
 // Provider routes OpenCode(Go) requests are served under.
 const DEFAULT_PROVIDERS = ['opencode', 'opencode-go']
@@ -256,7 +262,28 @@ function targetsOpenCode(input, hosts) {
 }
 
 /** Fire-and-forget append of one debug record; failures only log a warning. */
-function recordDebug(ctx, file, entry) {
+export function recordDebug(ctx, file, entry) {
+  // Bounded on purpose. This runs once per matching LLM stream event, and a debug
+  // file that only ever grows is a slow disk leak in the engine process the GUI
+  // keeps open for days: `debugFile` is opt-in, but opting in must not mean "come
+  // back in a week to a multi-gigabyte file".
+  let size = 0
+  try {
+    size = statSync(file).size
+  } catch {
+    size = 0 // not created yet
+  }
+  if (size >= DEBUG_FILE_MAX_BYTES) {
+    if (!debugFileWarned.has(file)) {
+      debugFileWarned.add(file)
+      ctx.logger.warn(
+        '[gateway-models] debugFile %s reached %d MiB; no longer appending',
+        file,
+        Math.round(DEBUG_FILE_MAX_BYTES / (1024 * 1024)),
+      )
+    }
+    return
+  }
   appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8').catch((error) => {
     ctx.logger.warn('[gateway-models] debugFile write failed: %s', error?.message ?? String(error))
   })

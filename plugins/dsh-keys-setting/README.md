@@ -33,7 +33,7 @@
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.3/dsh-keys-setting-0.2.3.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.4/dsh-keys-setting-0.2.4.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
@@ -92,6 +92,14 @@ composer-keys:
 > **包名换过**（`dsh-composer-keys` → `dsh-keys-setting`，因为原名在 npm 上被别人占用），但
 > **行 id 与设置命名空间仍是 `composer-keys`**，这是刻意的：补丁层的禁用行、市场 `state.json` 的开关、
 > `settings.yaml` 里你保存的键位都记在那个名字下，改包名不该让你已有的设置失效。
+
+## 引擎版本要求
+
+**需要 DSH >= 0.2.0-rc.2。** 引擎 0.2.0 把 `settings` 服务换成了 `SettingsForms`
+（`get` / `section` / `register` 全部移除，改为 `describe` / `update` / `replace` /
+`mutate`），本插件按新 API 重写，因此在 0.1.x 上无法保存 —— 清单里因此**只声明 0.2.0-rc.2**，
+不再声称兼容 0.1.x。用 DSH Ready GUI 的话，它会随包附带本插件并把引擎保持在最新版，
+通常不需要你自己处理。
 
 ## 权限与边界（给会静态扫描的商城看的）
 

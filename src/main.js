@@ -253,6 +253,9 @@ const UI_STRINGS = {
     // 第三方插件：随包版本更新后自动重装（本次启动已生效，不需要重启）
     "plugin.updated.title": "内置插件已更新",
     "plugin.updated.msg": "{0}（本次启动已生效）",
+    // 第三方插件：随包副本比已装的新（还没换掉）—— 设置窗口里可以一键更新
+    "plugin.outdated.title": "内置插件有新版本",
+    "plugin.outdated.msg": "{0} —— 到设置窗口的「第三方插件」里点「更新」即可",
     // 引擎意外退出 / GUI 托管重启
     "engine.autoRestartGaveUp": "引擎多次意外退出（已尝试 {0} 次自动重启），请检查日志或重启 DSH Ready GUI",
     "engine.crash.title": "引擎意外退出",
@@ -400,6 +403,9 @@ const UI_STRINGS = {
     // bundled plugin auto-reinstalled because the shipped copy is newer (already live)
     "plugin.updated.title": "Bundled plugins updated",
     "plugin.updated.msg": "{0} (already live this launch)",
+    // bundled plugins: a newer shipped copy exists but has not been swapped in yet
+    "plugin.outdated.title": "Bundled plugin update available",
+    "plugin.outdated.msg": "{0} — open Settings → third-party plugins and press Update",
     // engine unexpected exit / GUI-managed restart
     "engine.autoRestartGaveUp": "Engine exited unexpectedly several times (auto-restarted {0}×) — check the logs or restart DSH Ready GUI",
     "engine.crash.title": "Engine exited unexpectedly",
@@ -970,7 +976,7 @@ function firstRunPayload() {
       id: entry.id,
       engineOk: (compat[entry.id] && compat[entry.id].ok) ?? true,
     })),
-    status: pluginCatalogStatus(effectiveHomePath()),
+    status: pluginStatusNow(),
   });
 }
 
@@ -998,7 +1004,7 @@ function settingsPayload() {
       engineOk: (compat[entry.id] && compat[entry.id].ok) ?? true,
     })),
     // 勾选框 = 安装状态实时镜像：插件状态在这里，设置窗口据此勾/不勾。
-    pluginStatus: pluginCatalogStatus(effectiveHomePath()),
+    pluginStatus: pluginStatusNow(),
     // 首次启动的「一键开启」卡片：offer=true 时设置窗口才显示；missing 只列该装还没装的。
     firstRun: firstRunPayload(),
   };
@@ -2050,7 +2056,7 @@ function stopProfileWatcher() {
  * 卸载/切换启用时写文件触发的重复刷新）。设置窗口收到后会重绘列表。
  */
 async function onProfileChanged(source = "profile") {
-  const status = pluginCatalogStatus(effectiveHomePath());
+  const status = pluginStatusNow();
   const fingerprint = statusFingerprint(status);
   if (fingerprint === lastPluginStatusFingerprint) return;
   lastPluginStatusFingerprint = fingerprint;
@@ -2213,6 +2219,15 @@ function showPluginUpdateNotice(ids) {
   showUpdateNotice(L("plugin.updated.title"), L("plugin.updated.msg", parts.join(lang === "en" ? ", " : "、")));
 }
 
+/**
+ * catalogStatus plus the staged-copy location, so callers that hand the result to the
+ * Settings window also carry each plugin's bundled version and pending-update flag.
+ * Callers that only need install/enable state are unaffected by the extra fields.
+ */
+function pluginStatusNow(dshHome = effectiveHomePath()) {
+  return pluginCatalogStatus(dshHome, { stagingRoot: pluginBundledPluginsDir() });
+}
+
 function showUpdateNotice(title, sub) {
   if (!win || win.isDestroyed()) return;
   if (noticeWin && !noticeWin.isDestroyed()) {
@@ -2292,6 +2307,121 @@ function showUpdateNotice(title, sub) {
  * 注：`webContents.loadURL`（我们自己的加载）不触发 will-navigate，因此这里只放行
  * `isAllowedNavigation` 不会挡住自身加载。
  */
+// ---------------------------------------------------------------------------
+// bundled plugin update checks
+//
+// The startup pass already swaps in a newer bundled copy before the engine boots —
+// but it runs ONCE per launch, only for what it can see at that moment, and a failure
+// is just a log line. So the GUI also watches for it: after every successful engine
+// start it checks once, then keeps checking on an interval, and when something is
+// behind it says so (corner notice) and the Settings window offers the update.
+//
+// What counts as "a newer version" is deliberately the SAME rule the startup pass
+// uses (`planBundledPluginUpdate`, surfaced as catalogStatus' `updateAvailable`): the
+// bundled copy is newer than the installed one, or the installed copy came from
+// somewhere else. That keeps the promise honest — the button performs exactly the
+// update the next launch would perform, and never installs from a third-party source,
+// which the startup repair would undo anyway.
+// ---------------------------------------------------------------------------
+
+/** Re-check interval once the engine is up (same order of magnitude as the app check). */
+const PLUGIN_UPDATE_RUNNING_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** Effective interval; tests/CI scale it with DSH_SHELL_TEST_PLUGIN_UPDATE_MS. */
+function pluginUpdateIntervalMs() {
+  const scaled = UNPACKAGED_TEST_HOOKS ? Number(process.env.DSH_SHELL_TEST_PLUGIN_UPDATE_MS) : Number.NaN;
+  if (Number.isFinite(scaled) && scaled > 0) return scaled;
+  return PLUGIN_UPDATE_RUNNING_INTERVAL_MS;
+}
+
+let pluginUpdateTimer = null;
+let pluginUpdateChecksStarted = false;
+/** The exact set already announced ("pkg@version,…"), so one situation is not re-announced. */
+let pluginUpdateAnnounced = null;
+
+/** Display label + version for one catalog entry, e.g. `模型余量 v0.4.3`. */
+function pluginVersionLabel(entry, version) {
+  const lang = resolveUiLang();
+  const name = lang === "en" ? entry.en ?? entry.pkg : entry.zh ?? entry.pkg;
+  return version ? `${name} v${version}` : name;
+}
+
+/** Catalog entries whose bundled copy is newer than what is installed. */
+function bundledPluginUpdates(status) {
+  const current =
+    status ?? pluginCatalogStatus(effectiveHomePath(), { stagingRoot: pluginBundledPluginsDir() });
+  return PLUGIN_CATALOG.filter((entry) => current[entry.id] && current[entry.id].updateAvailable).map((entry) => ({
+    id: entry.id,
+    pkg: entry.pkg,
+    from: current[entry.id].version,
+    to: current[entry.id].bundledVersion,
+  }));
+}
+
+/**
+ * Check for behind-hand bundled plugins; announce them once per distinct set.
+ * @returns the pending updates (empty when everything is current).
+ */
+function checkPluginUpdates() {
+  let pending = [];
+  try {
+    pending = bundledPluginUpdates();
+  } catch (error) {
+    err("bundled plugin update check failed:", error.message);
+    return [];
+  }
+  if (pending.length === 0) {
+    // Nothing behind: forget the last announcement so a later regression can speak again.
+    // Logged even when empty: without a line here there is no way to tell "the check ran
+    // and found nothing" from "the check never ran" — during support, and in the smoke
+    // test that asserts this interval actually fires.
+    pluginUpdateAnnounced = null;
+    log("bundled plugin update check: nothing pending");
+    return [];
+  }
+  const signature = pending
+    .map((p) => `${p.pkg}@${p.to ?? "?"}`)
+    .sort()
+    .join(",");
+  log("bundled plugin updates available:", signature);
+  if (pluginUpdateAnnounced === signature) return pending;
+  pluginUpdateAnnounced = signature;
+  if (noticeWin && !noticeWin.isDestroyed()) {
+    // Another notice (usually "the engine updated") is on screen — keep ours in the log,
+    // and the Settings window still shows the pending version right there.
+    log("skipping the plugin update notice: another notice is on screen");
+    return pending;
+  }
+  const lang = resolveUiLang();
+  const parts = pending.map((p) => {
+    const entry = PLUGIN_CATALOG.find((c) => c.id === p.id);
+    const name = entry ? pluginVersionLabel(entry, p.to) : p.pkg;
+    return p.from ? `${name} (v${p.from} → v${p.to})` : name;
+  });
+  showUpdateNotice(L("plugin.outdated.title"), L("plugin.outdated.msg", parts.join(lang === "en" ? ", " : "、")));
+  return pending;
+}
+
+/** Start watching after a successful engine start (idempotent). */
+function startPluginUpdateChecks() {
+  if (pluginUpdateChecksStarted) return;
+  pluginUpdateChecksStarted = true;
+  void checkPluginUpdates();
+  pluginUpdateTimer = setInterval(() => {
+    void checkPluginUpdates();
+  }, pluginUpdateIntervalMs());
+  if (typeof pluginUpdateTimer.unref === "function") pluginUpdateTimer.unref();
+}
+
+/** Clear the timer (quit / engine teardown). Resets the flag so it can start again. */
+function stopPluginUpdateChecks() {
+  if (pluginUpdateTimer !== null) {
+    clearInterval(pluginUpdateTimer);
+    pluginUpdateTimer = null;
+  }
+  pluginUpdateChecksStarted = false;
+}
+
 function installNavigationFence(target, isAllowedNavigation) {
   target.webContents.on("will-navigate", (event, url) => {
     if (isAllowedNavigation(url)) return;
@@ -3304,7 +3434,7 @@ async function startEngine(nodeExec) {
   } catch (error) {
     err("legacy plugin cleanup skipped:", error.message);
   }
-  const bootStatus = pluginCatalogStatus(effectiveHomePath());
+  const bootStatus = pluginStatusNow();
   const installedCatalogIds = PLUGIN_CATALOG.filter((entry) => bootStatus[entry.id] && bootStatus[entry.id].installed).map(
     (entry) => entry.id,
   );
@@ -3490,6 +3620,13 @@ async function startEngine(nodeExec) {
           err("plugin update notice failed:", error.message);
         }
       }
+      // 引擎就绪之后开始定期看「随包副本有没有比已装的新」：启动对账只在启动那一刻跑一次，
+      // 而且失败只进日志。这里把它变成用户看得见、并可在设置窗口一键处理的状态。
+      try {
+        startPluginUpdateChecks();
+      } catch (error) {
+        err("plugin update checks failed to start:", error.message);
+      }
       // 首次启动检测：内置插件一个都没装时，主动把设置窗口打开并给出「一键开启」。
       // 放在这里（而不是 app.whenReady）是因为「引擎已装」是能装插件的前提 ——
       // 而首次运行时引擎正是在这条流程里刚装上的。
@@ -3654,7 +3791,7 @@ async function runPluginInstallUninstall(entry, action) {
     if (action === "install") {
       result = await syncEnabledPlugins({ enabledIds: [entry.id], mode: "install", ...common });
     } else {
-      const status = pluginCatalogStatus(effectiveHomePath());
+      const status = pluginStatusNow();
       const installedIds = PLUGIN_CATALOG.filter((e) => status[e.id] && status[e.id].installed)
         .map((e) => e.id)
         .filter((id) => id !== entry.id);
@@ -3670,7 +3807,7 @@ async function runPluginInstallUninstall(entry, action) {
       changed: result.changed,
       error: ok ? null : (result.errors[0] ?? null),
       errors: result.errors,
-      status: pluginCatalogStatus(effectiveHomePath()),
+      status: pluginStatusNow(),
     };
   } catch (error) {
     err("plugin " + action + " failed:", error);
@@ -3681,7 +3818,7 @@ async function runPluginInstallUninstall(entry, action) {
       changed: false,
       error: String((error && error.message) || error),
       errors: [String((error && error.message) || error)],
-      status: pluginCatalogStatus(effectiveHomePath()),
+      status: pluginStatusNow(),
     };
   }
 }
@@ -3787,7 +3924,7 @@ async function runPluginSetEnabled(entry, enabled) {
         restart: market.json.restart === true,
         refresh: market.json.refresh === true,
         activation: state,
-        status: pluginCatalogStatus(dshHome),
+        status: pluginStatusNow(dshHome),
       };
     }
     if (market.available && market.status >= 400) {
@@ -3798,7 +3935,7 @@ async function runPluginSetEnabled(entry, enabled) {
         `market refused (HTTP ${market.status})`;
       err("market toggle refused:", entry.pkg, reason);
       sendSettingsProgress("failed: " + reason);
-      return { ok: false, changed: false, via: "market", error: String(reason), status: pluginCatalogStatus(dshHome) };
+      return { ok: false, changed: false, via: "market", error: String(reason), status: pluginStatusNow(dshHome) };
     }
 
     // ---- 回退：市场不可用（未安装 / 老版本 / 引擎没跑）----
@@ -3817,7 +3954,7 @@ async function runPluginSetEnabled(entry, enabled) {
       refresh: true,
       error: res.ok ? null : (res.reason ?? null),
       rowIds,
-      status: pluginCatalogStatus(dshHome),
+      status: pluginStatusNow(dshHome),
     };
   } catch (error) {
     err("plugin " + (enabled ? "enable" : "disable") + " failed:", error);
@@ -3826,7 +3963,7 @@ async function runPluginSetEnabled(entry, enabled) {
       ok: false,
       changed: false,
       error: String((error && error.message) || error),
-      status: pluginCatalogStatus(effectiveHomePath()),
+      status: pluginStatusNow(),
     };
   }
 }
@@ -3907,7 +4044,7 @@ async function enableRecommendedPlugins() {
     const offer = firstRunPayload();
     // 期望集合 = 该装的（missing）+ 已经装着的内置条目：后者一并传进去是为了让「随包版本
     // 更新」也顺带对账掉；install 模式只增不删，不会卸载任何东西。
-    const status = pluginCatalogStatus(effectiveHomePath());
+    const status = pluginStatusNow();
     const enabledIds = PLUGIN_CATALOG.filter(
       (entry) => entry.localSource && (offer.missing.includes(entry.id) || (status[entry.id] && status[entry.id].installed)),
     ).map((entry) => entry.id);
@@ -3938,7 +4075,7 @@ async function enableRecommendedPlugins() {
       skipped: result.skipped,
       errors: result.errors,
       restart: restarted,
-      status: pluginCatalogStatus(effectiveHomePath()),
+      status: pluginStatusNow(),
     };
   } catch (error) {
     err("first-run: enabling bundled plugins failed:", error);
@@ -4110,7 +4247,7 @@ function registerIpc() {
       } catch (error) {
         err("legacy plugin cleanup failed:", error);
       }
-      const status = pluginCatalogStatus(effectiveHomePath());
+      const status = pluginStatusNow();
       const installedIds = PLUGIN_CATALOG.filter((entry) => status[entry.id] && status[entry.id].installed).map(
         (entry) => entry.id,
       );
@@ -4136,7 +4273,7 @@ function registerIpc() {
       }
       broadcastSettings();
       sendSettingsProgress("repair done");
-      return { ...result, healed, enabledSync, legacy, status: pluginCatalogStatus(effectiveHomePath()) };
+      return { ...result, healed, enabledSync, legacy, status: pluginStatusNow() };
     } catch (error) {
       err("plugin sync failed:", error);
       sendSettingsProgress("failed: " + ((error && error.message) || error));
@@ -4287,6 +4424,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("before-quit", () => {
     quitting = true;
     stopAppUpdateChecks();
+    stopPluginUpdateChecks();
     stopProfileWatcher();
     // 自动退出定时器也要取消：它是测试/CI 钩子，但重启引擎后可能被重新武装，
     // 留着会在退出流程里再触发一次 app.quit()。

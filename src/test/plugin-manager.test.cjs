@@ -497,6 +497,84 @@ function checkBuiltInInstallSource() {
   );
 }
 
+/**
+ * catalogStatus must report, per entry, the version shipped in `plugins/` and whether
+ * the installed copy is behind it — that pair is what the Settings window renders as
+ * "可更新到 vX" and what its Update button acts on. It has to be the SAME rule the
+ * startup pass applies, otherwise the window would offer an update the next launch
+ * silently skips (or hide one it performs anyway).
+ */
+function checkCatalogStatusUpdateInfo() {
+  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pm-upd-stage-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-upd-"));
+  const dshHome = path.join(root, "home");
+  const profile = path.join(dshHome, "profiles", "web");
+  const entry = pm.CATALOG.find((e) => e.pkg === "dsh-keys-setting");
+  const bundledVersion = JSON.parse(
+    fs.readFileSync(path.join(pm.bundledSourceDir(entry), "package.json"), "utf8"),
+  ).version;
+  const install = (version) => {
+    fs.mkdirSync(path.join(profile, "node_modules", entry.pkg), { recursive: true });
+    writeJson(path.join(profile, "node_modules", entry.pkg, "package.json"), {
+      name: entry.pkg,
+      version,
+    });
+    writeJson(path.join(profile, "package.json"), {
+      name: "dsh-profile-web",
+      dsh: { profile: { bundles: [entry.pkg] } },
+      dependencies: { [entry.pkg]: pm.bundledStagedSpec(entry, stagingRoot) },
+    });
+    fs.writeFileSync(path.join(profile, "cordis.patch.yml"), "# patch layer\n[]\n");
+  };
+
+  try {
+    // 1. installed behind the shipped copy -> update available, both versions reported
+    install("0.0.1");
+    let st = pm.catalogStatus(dshHome, { stagingRoot })[entry.id];
+    assert.strictEqual(st.version, "0.0.1");
+    assert.strictEqual(st.bundledVersion, bundledVersion);
+    assert.strictEqual(st.updateAvailable, true, "behind -> update offered");
+
+    // 2. same version -> nothing to do (this is the normal state right after a launch)
+    install(bundledVersion);
+    st = pm.catalogStatus(dshHome, { stagingRoot })[entry.id];
+    assert.strictEqual(st.updateAvailable, false, "equal -> nothing offered");
+
+    // 3. installed AHEAD (an app rollback, or a hand-placed copy) -> never "downgrade"
+    install("99.0.0");
+    st = pm.catalogStatus(dshHome, { stagingRoot })[entry.id];
+    assert.strictEqual(st.updateAvailable, false, "ahead -> not offered");
+
+    // 4. unknown installed version (package.json unreadable) -> NOT offered. Reading a
+    //    version is how "newer" is decided, and the shared decision function refuses to
+    //    guess (`unknown-version`): nothing is claimed AND nothing is reinstalled, so the
+    //    window and the startup pass stay in agreement. A genuinely broken install is
+    //    healProfileBundles' business, not an "update".
+    install("0.0.1");
+    fs.writeFileSync(path.join(profile, "node_modules", entry.pkg, "package.json"), "{ broken");
+    st = pm.catalogStatus(dshHome, { stagingRoot })[entry.id];
+    assert.strictEqual(st.version, null);
+    assert.strictEqual(st.updateAvailable, false, "unreadable -> nothing claimed");
+
+    // 5. without a staging root the two new fields stay inert (nothing else changes)
+    st = pm.catalogStatus(dshHome)[entry.id];
+    assert.strictEqual(st.bundledVersion, null);
+    assert.strictEqual(st.updateAvailable, false);
+
+    // 6. a catalog entry with no shipped source (the marketplace plugin) never reports one
+    install(bundledVersion);
+    const market = pm.CATALOG.find((e) => e.pkg === "dshmarket");
+    const marketStatus = pm.catalogStatus(dshHome, { stagingRoot })[market.id];
+    assert.strictEqual(marketStatus.bundledVersion, null);
+    assert.strictEqual(marketStatus.updateAvailable, false);
+
+    console.log("ok - catalogStatus reports the shipped version and whether an update is pending");
+  } finally {
+    cleanup(root);
+    cleanup(stagingRoot);
+  }
+}
+
 run()
   .then(checkClientHalf)
   .then(checkRowIdScan)
@@ -505,6 +583,7 @@ run()
   .then(checkDisableRefusals)
   .then(checkAtomicPatchWrite)
   .then(checkBuiltInInstallSource)
+  .then(checkCatalogStatusUpdateInfo)
   .then(
     () => console.log("plugin-manager: all checks passed"),
     (e) => {

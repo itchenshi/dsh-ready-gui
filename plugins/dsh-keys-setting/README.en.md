@@ -33,7 +33,7 @@ Settings → General
   dsh plugin --profile web add github:itchenshi/dsh-keys-setting
 
   # Fallback: install the release tarball (use this if github.com is unreachable for you)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.3/dsh-keys-setting-0.2.3.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-keys-setting/releases/download/v0.2.4/dsh-keys-setting-0.2.4.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
@@ -98,6 +98,15 @@ The plugin row's switch (in the `cordis.patch.yml` row config):
 > on npm), but the **row id and settings namespace stay `composer-keys`** on purpose: the patch layer's
 > disabled row, the market's `state.json` switch and your saved key bindings in `settings.yaml` are all
 > recorded under that name, and a rename should not invalidate them.
+
+## Engine requirement
+
+**Requires DSH >= 0.2.0-rc.2.** Engine 0.2.0 replaced the `settings` service with
+`SettingsForms` (`get` / `section` / `register` are gone; `describe` / `update` /
+`replace` / `mutate` replace them). This plugin is written against the new API, so on
+0.1.x it cannot save. The manifest therefore **declares 0.2.0-rc.2 only** rather than
+claiming 0.1.x compatibility. DSH Ready GUI bundles this plugin and keeps the engine on
+the latest release, so there is usually nothing to do.
 
 ## Permissions and boundaries (for marketplaces that scan statically)
 

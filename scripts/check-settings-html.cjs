@@ -47,6 +47,29 @@ check("安装/启用两个状态都在渲染里（不会只剩一个）", () => 
   }
 });
 
+check("插件更新入口完整：版本提示、按钮、动作、忙碌锁", () => {
+  // The whole feature is one row-level button plus a hint. Losing any piece silently
+  // removes the user's only way to act on "a newer bundled copy exists".
+  const required = [
+    "st.updateAvailable", // the main process decides; the page must read it
+    "st.bundledVersion", // and show which version it would move to
+    "plg-update", // the button's class
+    "settings.plugins.updateAvailable", // zh + en strings
+    "settings.plugins.update",
+    "settings.plugins.updating",
+    "runPluginSync(", // the shared action (same one as 修复 / 重试)
+    'closest(".plg-update")', // its click wiring
+  ];
+  for (const token of required) {
+    if (!html.includes(token)) throw new Error("missing " + token);
+  }
+  // Busy lock: while a plugin operation runs, every control must be disabled —
+  // including this one, or two pnpm runs can touch the same profile at once.
+  if (!/querySelectorAll\("\.plg-check, \.plg-enable, \.plg-update"\)/.test(html)) {
+    throw new Error("the busy lock does not cover .plg-update");
+  }
+});
+
 check("启用开关不在安装 <label> 内部（否则点击会连带切换安装）", () => {
   const start = html.indexOf("function renderPlugins");
   if (start < 0) throw new Error("renderPlugins not found");

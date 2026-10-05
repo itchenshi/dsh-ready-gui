@@ -385,6 +385,9 @@
         "settings.plugins.sync": "修复 / 重试",
         "settings.plugins.syncing": "修复中…",
         "settings.plugins.installed": "已安装 v{0}",
+        "settings.plugins.updateAvailable": "随包副本已是 v{0}，可更新",
+        "settings.plugins.update": "更新",
+        "settings.plugins.updating": "正在更新 {0}…",
         "settings.plugins.notInstalled": "未安装（勾选即装）",
         "settings.plugins.done": "完成：新装 {0}，卸载 {1}，失败 {2}",
         "settings.plugins.failed": "失败：{0}",
@@ -467,6 +470,9 @@
         "settings.plugins.sync": "Repair / retry",
         "settings.plugins.syncing": "Repairing…",
         "settings.plugins.installed": "Installed v{0}",
+        "settings.plugins.updateAvailable": "shipped copy is v{0} — update available",
+        "settings.plugins.update": "Update",
+        "settings.plugins.updating": "Updating {0}…",
         "settings.plugins.notInstalled": "Not installed (check to install)",
         "settings.plugins.done": "Done: {0} installed, {1} removed, {2} failed",
         "settings.plugins.failed": "Failed: {0}",
@@ -654,6 +660,24 @@
             : stateText(entry.id, s);
           // 市场已禁用、但补丁层还没落下 → 引擎仍会加载它（两端不一致）。
           const drift = Boolean(st && st.installed && st.marketDisabled && !st.patchDisabled);
+          // 随包副本比已装的新 → 显示目标版本 + 一个「更新」按钮。它走的是与「修复 / 重试」
+          // **同一个**主进程动作（settings:plugin-sync），所以进度条、busy 锁、「待重启」标注
+          // 都是现成的；判定也来自主进程（catalogStatus.updateAvailable），界面不自己猜。
+          const updateAvailable = Boolean(st && st.updateAvailable);
+          const updateHint = updateAvailable
+            ? '<span class="hint" style="margin:0;display:block;color:#e8b96b;">↑ ' +
+              esc(t("settings.plugins.updateAvailable", String(st.bundledVersion || "?"))) +
+              "</span>"
+            : "";
+          const updateRow = updateAvailable
+            ? '<button type="button" class="dsh-btn plg-update" data-id="' +
+              escAttr(entry.id) +
+              '"' +
+              (busy ? " disabled" : "") +
+              ' style="margin:2px 0 0 24px;">' +
+              esc(t("settings.plugins.update")) +
+              "</button>"
+            : "";
           // 启用开关：只在已安装时出现（没装就无所谓启用）。
           // 注意必须放在安装 <label> **外面**：HTML 里 label 会把它内部第一个
           // 可标注控件当成自己的目标，把启用勾选框嵌进去会让「点启用」顺带切换
@@ -702,8 +726,10 @@
                 esc(t("settings.plugins.driftHint")) +
                 "</span>"
               : "") +
+            updateHint +
             "</span></label>" +
             enableRow +
+            updateRow +
             "</div>"
           );
         })
@@ -749,7 +775,7 @@
       const frEnableBtn = document.getElementById("btnFirstRunEnable");
       const frLaterBtn = document.getElementById("btnFirstRunLater");
       if (window.__pluginBusy) {
-        if (list) list.querySelectorAll(".plg-check, .plg-enable").forEach((b) => { b.disabled = true; });
+        if (list) list.querySelectorAll(".plg-check, .plg-enable, .plg-update").forEach((b) => { b.disabled = true; });
         if (syncBtn) { window.__syncWasDisabled = syncBtn.disabled; syncBtn.disabled = true; }
         if (restartBtn) { window.__restartWasDisabled = restartBtn.disabled; restartBtn.disabled = true; }
         if (reloadBtn) { window.__reloadWasDisabled = reloadBtn.disabled; reloadBtn.disabled = true; }
@@ -1108,15 +1134,17 @@
           if (wasPending) markRestartNeeded(true); // 重启没发生：标注放回去
         }
       });
-      btnSyncPlugins.addEventListener("click", async () => {
-        if (btnSyncPlugins.disabled) return;
+      // 「修复 / 重试」与每个插件行里的「更新」是**同一件事**：以「当前已安装集合」为目标
+      // 再对账一遍，把比随包副本旧的换掉。抽成一个函数，两处调用，免得两份进度/消息/待重启
+      // 逻辑各写一遍而慢慢漂移。
+      async function runPluginSync(busyText) {
         const orig = syncLabel.textContent;
         syncLabel.textContent = t("settings.plugins.syncing");
         pluginMsg.textContent = "";
         markRestartNeeded(false);
         // busy 锁由 setPluginBusy 统一管理（它会先快照当前 disabled 再置 true，退出时还原）。
         // 这里**不要**自己先 `disabled = true`：那样快照到的就是 true，还原后按钮永远点不动。
-        setPluginBusy(true, t("settings.plugins.repairing"));
+        setPluginBusy(true, busyText || t("settings.plugins.repairing"));
         try {
           const res = await api.syncPlugins();
           const fresh = await api.get();
@@ -1151,7 +1179,21 @@
           // 这个按钮（它可能本就该是禁用的），硬写 false 会把快照结论推翻。
           btnSyncPlugins.disabled = window.__syncWasDisabled === true;
         }
+      }
+
+      btnSyncPlugins.addEventListener("click", async () => {
+        if (btnSyncPlugins.disabled) return;
+        await runPluginSync();
       });
+
+      // 插件行里的「更新」按钮（只有主进程报「随包副本更新」时才渲染出来）。
+      pluginList.addEventListener("click", async (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest(".plg-update") : null;
+        if (!btn || btn.disabled) return;
+        const id = btn.getAttribute("data-id");
+        await runPluginSync(t("settings.plugins.updating", catalogLabel(id)));
+      });
+
       const btnCheck = document.getElementById("btnCheckUpdate");
       const checkLabel = btnCheck.querySelector("span");
       btnCheck.addEventListener("click", async () => {

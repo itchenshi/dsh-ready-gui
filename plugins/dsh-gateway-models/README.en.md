@@ -82,7 +82,7 @@ explicitly in the row's `commandcodeProviders`.
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
   # Fallback: this release's tarball (for when the git protocol fails but HTTPS works)
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.2/dsh-gateway-models-0.2.2.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.3/dsh-gateway-models-0.2.3.tgz
   ```
 
   Both land the full repository contents (including `cordis.patch.yml`); no extra configuration
@@ -172,6 +172,15 @@ of needing to be deleted and re-added.
 | `mode` | `'uuid'` (default, safe) or `'session-id'` (explicit opt-in; sends the internal session ID) |
 | `debug` | `true` logs every streaming call that received the header |
 | `debugFile` | Path to append JSON lines to; **only** paths under `$DSH_HOME/logs` or the system temp directory take effect; the logged `session` is a one-way SHA-256 hash |
+
+## Engine requirement
+
+**Requires DSH >= 0.2.0-rc.2.** Engine 0.2.0 replaced the `settings` service with
+`SettingsForms` (`get` / `section` / `register` are gone; `describe` / `update` /
+`replace` / `mutate` replace them). This plugin is written against the new API, so on
+0.1.x it cannot save. The manifest therefore **declares 0.2.0-rc.2 only** rather than
+claiming 0.1.x compatibility. DSH Ready GUI bundles this plugin and keeps the engine on
+the latest release, so there is usually nothing to do.
 
 ## Permissions and boundaries (for marketplaces that scan statically)
 

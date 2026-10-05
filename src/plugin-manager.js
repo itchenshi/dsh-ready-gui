@@ -1365,7 +1365,16 @@ function pluginHasClientHalf(dshHome, entry) {
 }
 
 /** 每个候选目录项的已装 / 启用状态：bundles 登记 + 实存 + 补丁层/市场禁用。 */
-function catalogStatus(dshHome) {
+/**
+ * `@param options.stagingRoot` - the directory the bundled copies are staged into.
+ *   Supplying it lets each entry also report whether the SHIPPED copy is newer than
+ *   the installed one (the same decision the startup pass makes — see
+ *   `planBundledPluginUpdate`), so the settings window can offer exactly the update
+ *   that pass would perform. Without it those two fields stay null/false and nothing
+ *   else changes.
+ */
+function catalogStatus(dshHome, options = {}) {
+  const stagingRoot = typeof options.stagingRoot === "string" && options.stagingRoot !== "" ? options.stagingRoot : null;
   const modulesRoot = path.join(profileDir(dshHome), "node_modules");
   const bundles = new Set(installedBundles(dshHome));
   const marketDisabled = readMarketDisabled(dshHome);
@@ -1395,9 +1404,32 @@ function catalogStatus(dshHome) {
     const rowIds = packageRowIds(dshHome, bundleName);
     const byMarket = marketDisabled.has(bundleName);
     const byPatch = rowIds.length > 0 && rowIds.some((r) => patch.disables.has(r));
+
+    // 「随包那份是否更新」—— 与启动对账用同一个判定，避免界面说能更新、启动却不更新
+    // （或反过来）。目录外的条目（如 dshmarket）没有随包源，两个字段保持 null/false。
+    let bundledVersion = null;
+    let updateAvailable = false;
+    if (stagingRoot !== null && entry.localSource) {
+      try {
+        bundledVersion = readPackageVersion(bundledSourceDir(entry));
+      } catch {
+        bundledVersion = null;
+      }
+      const sameSource = isBundledStagedSpec(profileDependencySpec(dshHome, bundleName), entry, stagingRoot);
+      ({ wantsUpdate: updateAvailable } = planBundledPluginUpdate({
+        sameSource,
+        sourceVersion: bundledVersion,
+        installedVersion: version,
+      }));
+      // 没装着就不是「可更新」，而是「可安装」—— 那是安装勾选框的事。
+      if (!installed) updateAvailable = false;
+    }
+
     out[entry.id] = {
       installed,
       version,
+      bundledVersion,
+      updateAvailable,
       bundle: bundles.has(bundleName),
       present,
       enabled: !byMarket && !byPatch,

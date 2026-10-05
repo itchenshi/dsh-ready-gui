@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { CC_PROVIDER, V4_1_MODELS, catalogMemoValue, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, settingsEntry, updateEntry, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
+import { CC_PROVIDER, V4_1_MODELS, catalogMemoValue, commandCodeEntry, commandCodeRouteIds, fetchCommandCodeCatalog, headerValueFor, isCommandCodeRoute, isV41, patchFetch, planCommandCodeUpdate, planRouteUpdate, redactSessionId, recordDebug, settingsEntry, updateEntry, withStore, withV41Defaults, withV41ModelsFirst } from '../lib/index.js'
 
 let passed = 0
 function check(label, fn) {
@@ -586,6 +586,32 @@ await checkAsync('settingsEntry reads the resolved/user layers out of describe()
   }
   await updateEntry(service, { providers: { 'opencode-go': { models: [] } } })
   assert.deepEqual(writes, [{ ns: 'llm-pi-ai', patch: { providers: { 'opencode-go': { models: [] } } }, revision: 11 }])
+})
+
+await checkAsync('recordDebug stops appending once the debug file hits its cap', async () => {
+  const os = await import('node:os')
+  const fsp = await import('node:fs/promises')
+  const path = await import('node:path')
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gw-debug-'))
+  const file = path.join(dir, 'debug.jsonl')
+
+  const warnings = []
+  const ctx = { logger: { warn: (...a) => warnings.push(a.join(' ')) } }
+
+  // Under the cap: appended.
+  recordDebug(ctx, file, { ts: 'a' })
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal((await fsp.readFile(file, 'utf8')).trim().split('\n').length, 1)
+
+  // Over the cap: nothing more is written, and the warning is emitted once per file.
+  await fsp.writeFile(file, 'x'.repeat(8 * 1024 * 1024 + 1))
+  recordDebug(ctx, file, { ts: 'b' })
+  recordDebug(ctx, file, { ts: 'c' })
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal((await fsp.stat(file)).size, 8 * 1024 * 1024 + 1, 'the file must not grow past the cap')
+  assert.equal(warnings.filter((w) => w.includes('no longer appending')).length, 1, 'warned exactly once')
+
+  await fsp.rm(dir, { recursive: true, force: true })
 })
 
 await Promise.resolve()

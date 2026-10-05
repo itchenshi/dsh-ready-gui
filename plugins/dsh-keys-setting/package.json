@@ -1,6 +1,6 @@
 {
   "name": "dsh-keys-setting",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "DeepSeek Harness plugin: choose whether Enter, Shift+Enter and Ctrl/Cmd+Enter send the message or insert a line break, from the Settings window's General page.",
   "type": "module",
   "main": "lib/index.js",
@@ -52,9 +52,8 @@
   "dsh": {
     "compatibility": {
       "node": ">=20",
-      "dsh": ">=0.1.5-rc.2",
+      "dsh": ">=0.2.0-rc.2",
       "dshReleases": {
-        "0.1.5-rc.2": "compatible",
         "0.2.0-rc.2": "compatible"
       }
     },

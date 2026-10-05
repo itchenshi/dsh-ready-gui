@@ -72,7 +72,7 @@ Command Code 不在引擎自带的 pi-ai 目录里（随包 40 个 provider，�
   dsh plugin --profile web add github:itchenshi/dsh-gateway-models
 
   # 备选：本 Release 的 tarball（git 协议走不通、但 HTTPS 能通时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.2/dsh-gateway-models-0.2.2.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gateway-models/releases/download/v0.2.3/dsh-gateway-models-0.2.3.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。
@@ -176,6 +176,14 @@ OpenCode 的中继会把携带相同 `x-opencode-session` 的请求固定到同�
 | `mode` | `'uuid'`（默认，安全）或 `'session-id'`（显式可选，会发送内部会话 ID） |
 | `debug` | `true` 时记录每个收到头的流式调用 |
 | `debugFile` | 追加 JSON 日志的路径；**仅** `$DSH_HOME/logs` 或系统临时目录下的路径生效；日志里的 `session` 是 SHA-256 单向散列 |
+
+## 引擎版本要求
+
+**需要 DSH >= 0.2.0-rc.2。** 引擎 0.2.0 把 `settings` 服务换成了 `SettingsForms`
+（`get` / `section` / `register` 全部移除，改为 `describe` / `update` / `replace` /
+`mutate`），本插件按新 API 重写，因此在 0.1.x 上无法保存 —— 清单里因此**只声明 0.2.0-rc.2**，
+不再声称兼容 0.1.x。用 DSH Ready GUI 的话，它会随包附带本插件并把引擎保持在最新版，
+通常不需要你自己处理。
 
 ## 权限与边界（给会静态扫描的商城看的）
 
