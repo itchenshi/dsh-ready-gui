@@ -52,6 +52,7 @@ const { firstRunOffer } = require("./first-run");
 const { acceptableEngineUrl, sameOrigin } = require("./engine-url");
 const { preferredOrder, fetchLatestRelease, likelyMainland } = require("./update-sources");
 const { defaultDshHome, hasHomeData, moveHomeData } = require("./home-migrate");
+const { createRecoveryPolicy, PAGE_UP_TIMEOUT_MS, HEALTHY_AFTER_MS } = require("./renderer-recovery.js");
 const { migrateLegacyUserData } = require("./userdata-migrate");
 const { ensureEnginePatches } = require("./engine-patch");
 const {
@@ -260,6 +261,10 @@ const UI_STRINGS = {
     "engine.autoRestartGaveUp": "引擎多次意外退出（已尝试 {0} 次自动重启），请检查日志或重启 DSH Ready GUI",
     "engine.crash.title": "引擎意外退出",
     "engine.crash.msg": "dsh 多次意外退出（退出码 {0}），已停止自动重启。可在设置窗口点「重启引擎」手动重试。",
+    // 主窗口渲染进程崩溃 / 页面加载失败（多为第三方插件页面半边或显存问题）
+    "window.crashed.title": "页面无法正常显示",
+    "window.crashed.msg": "界面进程反复崩溃，已停止自动重载。",
+    "window.crashed.detail": "常见原因是某个第三方插件的页面部分出错。可在设置窗口的「第三方插件」里逐个停用（或点「重启引擎」）后重试；若仍然崩溃，请把日志发给我。",
     // 启动失败诊断
     "diag.title": "DeepSeek Harness 启动失败",
     "diag.savedLog": "启动错误日志已保存：\n{0}",
@@ -410,6 +415,10 @@ const UI_STRINGS = {
     "engine.autoRestartGaveUp": "Engine exited unexpectedly several times (auto-restarted {0}×) — check the logs or restart DSH Ready GUI",
     "engine.crash.title": "Engine exited unexpectedly",
     "engine.crash.msg": "dsh exited unexpectedly (code {0}); auto-restart was stopped. Use “Restart Engine” in the settings window to retry.",
+    // main-window renderer crash / page load failure (usually a plugin page half)
+    "window.crashed.title": "The page cannot be displayed",
+    "window.crashed.msg": "The interface process kept crashing, so automatic reloading stopped.",
+    "window.crashed.detail": "The usual cause is one plugin's page half. Try disabling them one by one in Settings → third-party plugins (or press “Restart Engine”) and retry; if it still crashes, send me the log.",
     // startup-failure diagnosis
     "diag.title": "DeepSeek Harness failed to start",
     "diag.savedLog": "Startup error log saved:\n{0}",
@@ -2625,6 +2634,96 @@ function createWindow() {
   win.on("closed", () => {
     win = null;
   });
+
+  // ---------------------------------------------------------------------------
+  // Renderer survival
+  //
+  // The window renders the harness page, which also runs every installed plugin's page
+  // half. A renderer that dies (a plugin throwing hard, an OOM, a GPU reset) leaves a
+  // blank window: Electron reports nothing to the user, this process keeps running, and
+  // the app just looks frozen — the same "silent failure" shape as the engine-side bugs
+  // this file guards against elsewhere. Same for a failed main-frame load.
+  //
+  // Recovery is bounded by src/renderer-recovery.js (pure policy, unit-tested): a few
+  // CONSECUTIVE reloads are allowed, the counter resets only once the page has stayed up,
+  // and a reload that never comes up counts as a failure too. See that module for why the
+  // bound is consecutive rather than rate-based.
+  const recovery = createRecoveryPolicy({ maxReloads: 2, healthyAfterMs: HEALTHY_AFTER_MS });
+  let reloadWatchdog = null;
+  const clearReloadWatchdog = () => {
+    if (reloadWatchdog !== null) {
+      clearTimeout(reloadWatchdog);
+      reloadWatchdog = null;
+    }
+  };
+  /** The page came up: stop the load watchdog and start the "it stayed up" clock. */
+  const markServedOk = () => {
+    clearReloadWatchdog();
+    recovery.noteServedOk(Date.now());
+    const healthyTimer = setTimeout(() => {
+      if (recovery.resetIfHealthy(Date.now())) log("renderer stable; resetting the crash counter");
+    }, HEALTHY_AFTER_MS);
+    if (typeof healthyTimer.unref === "function") healthyTimer.unref();
+  };
+  const giveUpOnRenderer = (why) => {
+    err(`giving up after ${recovery.attempts - 1} consecutive reloads (${why})`);
+    clearReloadWatchdog();
+    dialog
+      .showMessageBox(win ?? undefined, {
+        type: "error",
+        title: L("window.crashed.title"),
+        message: L("window.crashed.msg"),
+        detail: L("window.crashed.detail"),
+        buttons: [L("common.ok")],
+      })
+      .catch(() => {});
+    // Leave a readable status page instead of a blank one.
+    if (win && !win.isDestroyed()) {
+      win.loadFile(path.join(__dirname, "status.html"), { query: { theme: themeQuery(), lang: resolveUiLang() } }).catch(() => {});
+    }
+  };
+  const reloadEnginePage = (why) => {
+    if (quitting) return;
+    if (!engineStarted || !lastEngineUrl) {
+      log(`not reloading after ${why}: the engine is not up yet`);
+      return;
+    }
+    const { action, attempt } = recovery.noteFailure();
+    if (action === "give-up") {
+      giveUpOnRenderer(why);
+      return;
+    }
+    log(`reloading the engine page after ${why} (attempt ${attempt}/2)`);
+    if (!win || win.isDestroyed()) return;
+    win.loadURL(lastEngineUrl).catch((error) => err("reload after " + why + " failed:", error.message));
+    // A reload that never comes up (a hang rather than a crash) must count as a failed
+    // attempt too — otherwise the counter never advances and the user is left staring at
+    // a blank window, which is exactly what this handler exists to prevent.
+    clearReloadWatchdog();
+    reloadWatchdog = setTimeout(() => {
+      reloadWatchdog = null;
+      reloadEnginePage("the page did not come up in time");
+    }, PAGE_UP_TIMEOUT_MS);
+    if (typeof reloadWatchdog.unref === "function") reloadWatchdog.unref();
+  };
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    err("main window renderer gone:", details?.reason ?? "unknown", "exitCode:", details?.exitCode ?? "?");
+    reloadEnginePage(`renderer gone (${details?.reason ?? "unknown"})`);
+  });
+  // The page loaded: start the "it stayed up" clock that resets the crash counter.
+  win.webContents.on("did-finish-load", markServedOk);
+  // `unresponsive` is reported for a long block (a big sync, a slow plugin). It often
+  // recovers on its own, so it is logged but not acted on — reloading there would throw
+  // away work that was about to finish.
+  win.webContents.on("unresponsive", () => err("main window is not responding"));
+  win.webContents.on("responsive", () => log("main window is responding again"));
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // ERR_ABORTED (-3) is a cancelled load (a navigation we replaced), not a failure.
+    if (!isMainFrame || errorCode === -3) return;
+    err("main frame failed to load:", errorCode, errorDescription, redactToken(String(validatedURL ?? "")));
+    reloadEnginePage(`load failed (${errorDescription || errorCode})`);
+  });
   return win;
 }
 
@@ -3626,6 +3725,23 @@ async function startEngine(nodeExec) {
         startPluginUpdateChecks();
       } catch (error) {
         err("plugin update checks failed to start:", error.message);
+      }
+      // 测试钩子（仅未打包构建）：每次页面加载完成后 N 毫秒强制让渲染进程崩溃一次，
+      // 用来验证崩溃恢复与「连续重载上限」。按「每次加载一次」而不是定时循环，是为了
+      // 让测试确定性地走过 崩溃→重载→再崩溃 这条链（页面在这里可能加载很慢）。
+      // 只在未打包构建里生效 —— 它会真的杀掉页面渲染进程。
+      if (UNPACKAGED_TEST_HOOKS && Number(process.env.DSH_SHELL_TEST_CRASH_RENDERER_MS) > 0) {
+        const delayMs = Math.max(500, Number(process.env.DSH_SHELL_TEST_CRASH_RENDERER_MS));
+        log("test hook: crashing the renderer on every page load, after", delayMs, "ms");
+        win.webContents.on("did-finish-load", () => {
+          setTimeout(() => {
+            try {
+              if (win && !win.isDestroyed()) win.webContents.forcefullyCrashRenderer();
+            } catch (error) {
+              err("test crash hook failed:", error.message);
+            }
+          }, delayMs);
+        });
       }
       // 首次启动检测：内置插件一个都没装时，主动把设置窗口打开并给出「一键开启」。
       // 放在这里（而不是 app.whenReady）是因为「引擎已装」是能装插件的前提 ——
