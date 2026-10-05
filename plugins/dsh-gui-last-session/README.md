@@ -21,7 +21,7 @@
   dsh plugin --profile web add github:itchenshi/dsh-gui-last-session
 
   # 备选：从本仓库 Release 的 tarball 装（网络受限连不上 github.com 时用这条）
-  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.5/dsh-gui-last-session-0.1.5.tgz
+  dsh plugin --profile web add https://github.com/itchenshi/dsh-gui-last-session/releases/download/v0.1.6/dsh-gui-last-session-0.1.6.tgz
   ```
 
   两条命令装到的都是这个仓库的完整内容（含 `cordis.patch.yml`），装完不需要额外配置。

@@ -32,7 +32,7 @@ assert.equal(typeof registration.factory, 'function', 'factory must be a functio
 const clientExports = registration.factory((specifier) => {
   throw new Error(`unexpected external require: ${specifier}`)
 })
-const { installLastSession } = clientExports
+const { installLastSession, resolveSessionOpener } = clientExports
 
 // The browser-side cordis runner builds the fiber's inject list from the
 // bundle's exported `inject` (SERVICE names). Without it, `ctx.sessions` in
@@ -253,6 +253,61 @@ await check('skips subagent rows; an explicit `current` still wins when present'
   await new Promise((r) => setTimeout(r, 20))
   assert.deepEqual(storedB, ['session-main1'])
   hB.dispose()
+})
+
+await check('resolveSessionOpener: the workspace API wins, sessions.open is the fallback', () => {
+  // Engine 0.2.0 REMOVED sessions.open; the UI's entry point is uiWorkspace.openSession.
+  // Using the removed method meant "reopen" silently failed for 30s on every launch.
+  const calls = []
+  const uiWorkspace = { openSession: (id) => calls.push(`ui:${id}`) }
+  const sessions = { open: (id) => calls.push(`svc:${id}`) }
+
+  const modern = resolveSessionOpener({ uiWorkspace, sessions })
+  modern('session-aaaa1111')
+  assert.deepEqual(calls, ['ui:session-aaaa1111'], 'prefers the workspace API')
+
+  const legacy = resolveSessionOpener({ uiWorkspace: undefined, sessions })
+  legacy('session-bbbb2222')
+  assert.deepEqual(calls, ['ui:session-aaaa1111', 'svc:session-bbbb2222'], 'falls back on older engines')
+
+  // Neither -> no opener (the caller then says so instead of retrying something impossible).
+  assert.strictEqual(resolveSessionOpener({ uiWorkspace: {}, sessions: {} }), null)
+  assert.strictEqual(resolveSessionOpener({}), null)
+  assert.strictEqual(resolveSessionOpener({ uiWorkspace: null, sessions: null }), null)
+})
+
+await check('reopen uses the injected opener, and gives up at once when there is none', async () => {
+  const target = 'session-cccc3333'
+  const state = { byId: { [target]: { id: target, blank: false, updatedAt: 1 } } }
+  const io = { fetchLast: async () => target, storeLast: async () => {} }
+  const sessionsStub = () => ({ list: { getSnapshot: () => state, subscribe: () => () => {} } })
+
+  // With an opener the target is opened.
+  const opened = []
+  const withOpener = installLastSession(sessionsStub(), {
+    io,
+    open: (id) => opened.push(id),
+    wait: () => Promise.resolve(),
+    attempts: 3,
+    armFallbackMs: 5,
+  })
+  await withOpener.reopen()
+  assert.deepEqual(opened, [target], 'the injected opener was used')
+  withOpener.dispose()
+
+  // Without one it must not poll for 30s before giving up.
+  const noOpener = installLastSession(sessionsStub(), {
+    io,
+    open: null,
+    wait: () => new Promise((r) => setTimeout(r, 1000)),
+    attempts: 200,
+    interval: 1000,
+    armFallbackMs: 5,
+  })
+  const started = Date.now()
+  await noOpener.reopen()
+  assert.ok(Date.now() - started < 500, 'no opener -> no pointless polling')
+  noOpener.dispose()
 })
 
 await check('records a session the host says has been prompted (blank bit still conservative)', async () => {

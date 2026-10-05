@@ -93,13 +93,41 @@ window.__ModuleLoader__.load({
     const sleep = (ms) => new Promise((resolveDone) => setTimeout(resolveDone, ms))
 
     /**
-     * Wait until `id` is present in the list snapshot, then select it.
-     * @returns true when the session was selected.
+     * How should a session be opened on this engine?
+     *
+     * Engine 0.2.0 **removed** the `sessions.open(id)` method the client half used to call
+     * (the service now exposes retain/using/create/fork/scope/… and nothing named `open`),
+     * and the UI's own entry point became `ctx.uiWorkspace.openSession(id)`. Calling the
+     * old method therefore threw on every attempt, the wait loop retried it for the full
+     * ~30s and then gave up — which is why starting the app opened a NEW session while the
+     * pointer was recorded correctly all along.
+     *
+     * Both are supported here: the workspace API when the host has it, the old method
+     * otherwise (older engines, and any host that still exposes it).
+     *
+     * @returns a function that opens a session id, or null when neither exists (the caller
+     *   then says so instead of retrying something impossible).
+     */
+    function resolveSessionOpener({ uiWorkspace, sessions }) {
+      if (uiWorkspace && typeof uiWorkspace.openSession === 'function') {
+        return (id) => uiWorkspace.openSession(String(id))
+      }
+      if (sessions && typeof sessions.open === 'function') {
+        return (id) => sessions.open(String(id))
+      }
+      return null
+    }
+
+    /**
+     * Wait until `id` is present in the list snapshot, then open it.
+     * @returns true when the session was opened.
      */
     async function openWhenReady(sessions, id, opts = {}) {
       const wait = opts.wait ?? sleep
       const attempts = opts.attempts ?? WAIT_ATTEMPTS
       const interval = opts.interval ?? WAIT_INTERVAL_MS
+      const open = opts.open ?? (typeof sessions?.open === 'function' ? (sid) => sessions.open(sid) : null)
+      if (open === null) return false
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         let state
         try {
@@ -111,7 +139,7 @@ window.__ModuleLoader__.load({
         }
         if (state && state.byId && Object.prototype.hasOwnProperty.call(state.byId, id)) {
           try {
-            sessions.open(id)
+            open(id)
             return true
           } catch {
             // The contract says unknown ids fail loud; a race here just retries.
@@ -265,7 +293,12 @@ window.__ModuleLoader__.load({
         }
         if (!isSessionId(id)) return settle()
         try {
-          await openWhenReady(sessions, id, { wait, attempts: opts.attempts, interval: opts.interval })
+          await openWhenReady(sessions, id, {
+            wait,
+            attempts: opts.attempts,
+            interval: opts.interval,
+            open: opts.open,
+          })
         } finally {
           settle()
         }
@@ -329,7 +362,15 @@ window.__ModuleLoader__.load({
         ctx.logger?.warn?.('[gui-last-session] sessions service unavailable; auto-restore disabled')
         return
       }
+      // Engine 0.2.0 has no `sessions.open`; the UI entry point is `uiWorkspace.openSession`.
+      const open = resolveSessionOpener({ uiWorkspace: ctx.get?.('uiWorkspace'), sessions })
+      if (open === null) {
+        // Say it once, clearly. Retrying a call that cannot exist is how the old version
+        // burned 30s per launch and then silently did nothing.
+        ctx.logger?.warn?.('[gui-last-session] this engine exposes no way to open a session; auto-restore disabled')
+      }
       const handle = installLastSession(sessions, {
+        open,
         // One line per pointer move (a session switch), so support can tell "it never
         // recorded" from "it recorded and something else went wrong".
         io: { onRecord: (id) => ctx.logger?.info?.(`[gui-last-session] remembered ${id}`) },
@@ -347,6 +388,7 @@ window.__ModuleLoader__.load({
       // Exported for tests / advanced consumers.
       installLastSession,
       isSessionId,
+      resolveSessionOpener,
     }
   },
 })
