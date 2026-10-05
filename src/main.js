@@ -45,6 +45,8 @@ const {
   APPEARANCE_MODES,
   parseEngineSettings,
   applyEngineSettings,
+  parseProfilePatch,
+  applyProfilePatch,
   engineThemeForAppearance,
 } = require("./settings-ui");
 const { statusFingerprint } = require("./plugin-state");
@@ -148,9 +150,9 @@ const CLOSE_ACTIONS = {
  * UI 语言设置：跟随系统 / 中文 / English。
  * 缺省 "system"：优先跟随引擎设置文件里的语言（引擎页面即用它），否则按
  * Electron 的系统语言解析为 zh|en；同时把结果同步到引擎的
- * <DSH_HOME>/settings.yaml 的 locale.preference（引擎热发布该文件，内置页面跟随）。
+ * 引擎侧偏好（0.2.0：profile 补丁层；老引擎：<DSH_HOME>/settings.yaml）的 locale.preference。
  * 外观（appearance）同理：engine=跟随引擎主题（默认），system/light/dark 显式
- * 选择并写回 ui-theme.preference；主进程 watch settings.yaml 热跟随两侧改动。
+ * 选择并写回 ui-theme.preference；主进程 watch 该文件热跟随两侧改动。
  */
 const UI_LOCALES = { system: "跟随系统", zh: "中文", en: "English" };
 
@@ -1798,25 +1800,56 @@ function themeQuery() {
   return windowThemeDark ? "dark" : "light";
 }
 
-// 最近一次从 <DSH_HOME>/settings.yaml 读到的引擎 UI 配置（主题/语言），供
+// 最近一次读到的引擎 UI 配置（主题/语言）：0.2.0 起来自 profile 补丁层
 // “跟随引擎”模式与设置文件变更时热跟随。
 let engineThemePref = "system";
 let engineLocalePref = null;
 
 /**
- * 启动/切目录时读取引擎设置文件里的主题与语言，作为“跟随引擎”的初始值。
- * 文件不存在或不可读时保留默认值（主题 system、语言跟随系统/引擎）。
+ * The engine's profile overlay, where 0.2.0 keeps the appearance/locale preferences
+ * (settings.yaml was retired: the engine imports it and keeps the live values here).
+ */
+function profilePatchFile() {
+  return path.join(effectiveHomePath(), "profiles", "web", "cordis.patch.yml");
+}
+
+/**
+ * 读取引擎侧的界面偏好（主题 / 语言）。
+ *
+ * 0.2.0 起它们住在 profile 的补丁层（`profiles/web/cordis.patch.yml` 的 ui-theme / locale
+ * 行），旧的 `<DSH_HOME>/settings.yaml` 已被引擎一次性导入后退休。只读 settings.yaml 的后果
+ * 就是界面**永远用默认主题启动**（「跟随引擎」什么也没读到），而且从设置窗口改主题也不生效。
+ *
+ * @returns {{theme: string|null, locale: string|null, source: string|null}}
+ */
+async function readEngineUiPrefsFromDisk() {
+  const patchFile = profilePatchFile();
+  try {
+    const parsed = parseProfilePatch(await fsp.readFile(patchFile, "utf8"));
+    if (parsed.theme !== null || parsed.locale !== null) {
+      return { theme: parsed.theme, locale: parsed.locale, source: patchFile };
+    }
+  } catch {
+    /* no patch layer (older engine) — fall through to settings.yaml */
+  }
+  const settingsFile = path.join(effectiveHomePath(), "settings.yaml");
+  try {
+    const parsed = parseEngineSettings(await fsp.readFile(settingsFile, "utf8"));
+    return { theme: parsed.theme, locale: parsed.locale, source: settingsFile };
+  } catch {
+    return { theme: null, locale: null, source: null };
+  }
+}
+
+/**
+ * 启动/切目录时读取引擎侧的主题与语言，作为“跟随引擎”的初始值。
+ * 两边都读不到时保留默认值（主题 system、语言跟随系统）。
  */
 async function readEngineUiPrefs() {
-  const file = path.join(effectiveHomePath(), "settings.yaml");
-  try {
-    const { theme, locale } = parseEngineSettings(await fsp.readFile(file, "utf8"));
-    engineThemePref = theme ?? "system";
-    engineLocalePref = locale ?? null;
-    log("engine UI prefs:", { theme: engineThemePref, locale: engineLocalePref });
-  } catch (error) {
-    log("harness settings.yaml unreadable, keeping defaults:", error.message);
-  }
+  const { theme, locale, source } = await readEngineUiPrefsFromDisk();
+  engineThemePref = theme ?? "system";
+  engineLocalePref = locale ?? null;
+  log("engine UI prefs:", { theme: engineThemePref, locale: engineLocalePref, source: source ?? "(none)" });
 }
 
 function applyHarnessTheme(preference) {
@@ -1880,7 +1913,7 @@ function notifyChildWindowsTheme() {
 }
 
 // ---------------------------------------------------------------------------
-// 引擎 UI 设置热跟随（watch <DSH_HOME>/settings.yaml）
+// 引擎 UI 设置热跟随（watch profile 补丁层；老引擎退回 settings.yaml）
 // ---------------------------------------------------------------------------
 
 let engineSettingsWatcher = null;
@@ -1894,11 +1927,18 @@ let engineSettingsWatchRetryTimer = null;
 function startEngineSettingsWatcher() {
   stopEngineSettingsWatcher();
   const home = effectiveHomePath();
-  const file = path.join(home, "settings.yaml");
+  // 0.2.0 keeps the prefs in the profile overlay; settings.yaml only exists on older
+  // engines. Watching the retired path meant a burst of "cannot watch" errors and no
+  // live theme updates at all.
+  const patchFile = profilePatchFile();
+  const legacyFile = path.join(home, "settings.yaml");
+  const file = fs.existsSync(patchFile) ? patchFile : legacyFile;
+  const watchedDir = path.dirname(file);
+  const watchedName = path.basename(file);
   try {
-    engineSettingsWatcher = fs.watch(home, { persistent: false }, (eventType, filename) => {
+    engineSettingsWatcher = fs.watch(watchedDir, { persistent: false }, (eventType, filename) => {
       const name = String(filename || "");
-      if (name && name !== "settings.yaml") return;
+      if (name && name !== watchedName) return;
       if (eventType === "rename" && !fs.existsSync(file)) return; // 删除/替换噪音
       if (engineSettingsWatchTimer) clearTimeout(engineSettingsWatchTimer);
       engineSettingsWatchTimer = setTimeout(() => {
@@ -2087,6 +2127,10 @@ function stopProfileWatcher() {
  * 卸载/切换启用时写文件触发的重复刷新）。设置窗口收到后会重绘列表。
  */
 async function onProfileChanged(source = "profile") {
+  // Appearance/locale live in this same overlay (0.2.0), and a theme change alone does not
+  // alter the plugin fingerprint — so this must run BEFORE the early return below, or
+  // switching the theme inside the Harness page would never reach the shell.
+  await onEngineSettingsChanged().catch((error) => err("engine UI prefs refresh failed:", error.message));
   const status = pluginStatusNow();
   const fingerprint = statusFingerprint(status);
   if (fingerprint === lastPluginStatusFingerprint) return;
@@ -2096,17 +2140,14 @@ async function onProfileChanged(source = "profile") {
 }
 
 /**
- * settings.yaml 变化时：主题/语言跟随引擎侧改动。GUI 自己写回的值会因“值相等”
- * 被跳过，不会产生循环；语言只在 GUI 处于“跟随系统”模式时采纳，且只改 GUI
- * 侧解析（不写回 yaml）。
+ * 引擎侧主题/语言变化时跟随（0.2.0 起来自 profile 补丁层，老引擎来自 settings.yaml）。
+ * GUI 自己写回的值会因“值相等”被跳过，不会产生循环；语言只在 GUI 处于“跟随系统”
+ * 模式时采纳，且只改 GUI 侧解析（不写回）。
  */
 async function onEngineSettingsChanged() {
-  let parsed;
-  try {
-    parsed = parseEngineSettings(await fsp.readFile(path.join(effectiveHomePath(), "settings.yaml"), "utf8"));
-  } catch {
-    return; // 写入中/被替换，等下一次事件
-  }
+  const { theme, locale, source } = await readEngineUiPrefsFromDisk();
+  if (source === null) return; // 写入中/两边都没有，等下一次事件
+  const parsed = { theme, locale };
   const nextTheme = parsed.theme ?? engineThemePref;
   if (nextTheme !== engineThemePref) {
     log("engine theme changed:", engineThemePref, "->", nextTheme);
@@ -2162,12 +2203,43 @@ function L(key, ...args) {
 }
 
 /**
- * 把 GUI 的语言/外观选择写入引擎设置文件 <DSH_HOME>/settings.yaml 的
- * locale.preference / ui-theme.preference。引擎的 dsh-settings-file 会 watch
- * 该文件并热发布，内置 Harness UI 立即跟随。system 语言模式写入解析后的结果，
- * 保持 GUI 与引擎一致。文件不存在或不可写时静默跳过（非致命）。
+ * 把 GUI 的语言/外观选择写入引擎侧。
+ *
+ * 引擎 0.2.0 起偏好住在 profile 补丁层（`profiles/web/cordis.patch.yml` 的 ui-theme / locale
+ * 行的 config.preference），`<DSH_HOME>/settings.yaml` 已被引擎导入后退休 —— 继续写那个文件
+ * 等于什么都没发生（而且会在别人的目录里留下一个没人读的文件）。所以：补丁层存在就写它，
+ * 否则退回旧文件（老引擎）。
+ *
+ * 引擎侧监听该文件并热发布，内置 Harness UI 立即跟随。文件不存在或不可写时静默跳过（非致命）。
  */
 async function syncEngineUI(patch) {
+  const patchFile = profilePatchFile();
+  if (fs.existsSync(patchFile)) {
+    let doc;
+    let theme = null;
+    let locale = null;
+    try {
+      ({ doc, theme, locale } = parseProfilePatch(await fsp.readFile(patchFile, "utf8")));
+    } catch (error) {
+      err("engine profile patch layer unreadable; not writing prefs:", error.message);
+      return;
+    }
+    const changes = {};
+    if (patch.locale !== undefined && patch.locale !== null && patch.locale !== locale) changes.locale = patch.locale;
+    if (patch.theme !== undefined && patch.theme !== null && patch.theme !== theme) changes.theme = patch.theme;
+    if (Object.keys(changes).length === 0) {
+      log("engine UI settings already up to date");
+      return;
+    }
+    try {
+      await fsp.writeFile(patchFile, applyProfilePatch(doc, changes), "utf8");
+      log("engine UI settings synced:", patchFile, "->", JSON.stringify(changes));
+    } catch (error) {
+      err("engine profile patch layer write failed:", error.message);
+    }
+    return;
+  }
+
   const home = effectiveHomePath();
   const file = path.join(home, "settings.yaml");
   await fsp.mkdir(home, { recursive: true }).catch(() => {});
@@ -4549,7 +4621,7 @@ async function handOffLastSessionToPlugin() {
     buildMenu();
     createTray();
     createWindow();
-    // 热跟随 <DSH_HOME>/settings.yaml：引擎页面里换主题/语言，外壳立即跟上。
+    // 热跟随引擎侧偏好：引擎页面里换主题/语言，外壳立即跟上。
     startEngineSettingsWatcher();
     // 热跟随 <DSH_HOME>/profiles/web/package.json：插件市场那边禁用/卸载插件后，
     // 设置窗口的第三方插件勾选状态要跟着刷新。

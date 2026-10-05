@@ -99,11 +99,107 @@ function engineThemeForAppearance(mode) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Engine 0.2.0: the same two preferences, but in the profile's patch layer
+// ---------------------------------------------------------------------------
+//
+// 0.2.0 retired <DSH_HOME>/settings.yaml — the engine imports it once, leaves
+// `settings.yaml.imported` behind and keeps the live values in the profile's overlay
+// instead:
+//
+//     - id: ui-theme
+//       name: "@deepseek-ai/dsh-client-ui-theme"
+//       config:
+//         preference: dark
+//     - id: locale
+//       name: "@deepseek-ai/dsh-client-locale"
+//       config:
+//         preference: zh
+//
+// Reading only settings.yaml is why the shell kept its default theme at startup ("follow
+// the engine" silently found nothing), and why changing the theme from the shell had no
+// effect. Both files are supported: the patch layer when present, settings.yaml otherwise.
+
+/** Row ids used by the engine's profile overlay. */
+const PATCH_ROW_THEME = "ui-theme";
+const PATCH_ROW_LOCALE = "locale";
+
+/**
+ * Parse a profile patch layer (an array of plugin rows) into validated prefs.
+ * Unreadable/invalid input yields null prefs; never throws.
+ */
+function parseProfilePatch(text) {
+  let doc = null;
+  try {
+    doc = YAML.parseDocument(String(text ?? ""));
+  } catch {
+    doc = null;
+  }
+  const parseErrors = Array.isArray(doc?.errors) ? doc.errors : [];
+  let parsed = null;
+  if (doc !== null && parseErrors.length === 0) {
+    try {
+      parsed = doc.toJS();
+    } catch {
+      parsed = null;
+    }
+  }
+  const rowConfig = (rowId) => {
+    if (!Array.isArray(parsed)) return null;
+    for (const row of parsed) {
+      if (row && typeof row === "object" && row.id === rowId) {
+        return row.config && typeof row.config === "object" ? row.config : null;
+      }
+    }
+    return null;
+  };
+  const theme = rowConfig(PATCH_ROW_THEME)?.preference;
+  const locale = rowConfig(PATCH_ROW_LOCALE)?.preference;
+  return {
+    doc,
+    theme: ENGINE_THEMES.includes(theme) ? theme : null,
+    locale: ENGINE_LOCALES.includes(locale) ? locale : null,
+    errors: parseErrors.map((error) => String((error && error.message) || error)),
+  };
+}
+
+/**
+ * Set `config.preference` on the ui-theme / locale rows of a patch document and return the
+ * serialized text. Comments and every other row are preserved. Invalid values throw.
+ */
+function applyProfilePatch(doc, { theme, locale } = {}) {
+  const rows = doc?.contents;
+  const findRow = (rowId) => {
+    if (!YAML.isSeq(rows)) return null;
+    for (const item of rows.items) {
+      const value = item?.toJSON ? item.toJSON() : null;
+      if (value && typeof value === "object" && value.id === rowId) return item;
+    }
+    return null;
+  };
+  const write = (rowId, key, value, allowed, label) => {
+    if (value === undefined || value === null) return;
+    if (!allowed.includes(value)) throw new Error(`invalid engine ${label}: ${value}`);
+    const row = findRow(rowId);
+    // Only touch rows that are actually there: inventing one would change the engine's
+    // plugin graph from the shell, which is not ours to do.
+    if (row === null) return;
+    row.setIn(["config", key], value);
+  };
+  write(PATCH_ROW_THEME, "preference", theme, ENGINE_THEMES, "theme");
+  write(PATCH_ROW_LOCALE, "preference", locale, ENGINE_LOCALES, "locale");
+  return doc.toString();
+}
+
 module.exports = {
   APPEARANCE_MODES,
   ENGINE_THEMES,
   ENGINE_LOCALES,
+  PATCH_ROW_THEME,
+  PATCH_ROW_LOCALE,
   parseEngineSettings,
   applyEngineSettings,
+  parseProfilePatch,
+  applyProfilePatch,
   engineThemeForAppearance,
 };

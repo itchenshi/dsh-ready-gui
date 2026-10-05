@@ -13,6 +13,8 @@ const {
   ENGINE_LOCALES,
   parseEngineSettings,
   applyEngineSettings,
+  parseProfilePatch,
+  applyProfilePatch,
   engineThemeForAppearance,
 } = require("../settings-ui");
 
@@ -134,6 +136,61 @@ ok("appearance modes cover the settings popup", () => {
   assert.strictEqual(Object.keys(APPEARANCE_MODES).length, 4);
   assert.deepStrictEqual(ENGINE_THEMES, ["light", "dark", "system"]);
   assert.deepStrictEqual(ENGINE_LOCALES, ["zh", "en"]);
+});
+
+// 11. engine 0.2.0 puts the same prefs in the profile patch layer, not settings.yaml
+const PATCH = [
+  "# generated overlay",
+  "- id: model",
+  "  name: '@deepseek-ai/dsh-model'",
+  "  config:",
+  "    provider: deepseek-official",
+  "- id: ui-theme",
+  "  name: '@deepseek-ai/dsh-client-ui-theme'",
+  "  config:",
+  "    preference: dark",
+  "- id: locale",
+  "  name: '@deepseek-ai/dsh-client-locale'",
+  "  config:",
+  "    preference: zh",
+  "",
+].join("\n");
+
+ok("parseProfilePatch reads the theme/locale rows (the 0.2.0 location)", () => {
+  const r = parseProfilePatch(PATCH);
+  assert.strictEqual(r.theme, "dark");
+  assert.strictEqual(r.locale, "zh");
+  assert.deepStrictEqual(r.errors, []);
+});
+
+ok("parseProfilePatch tolerates junk without throwing", () => {
+  for (const input of [undefined, "", "not: [valid", "- 3\n- 4\n", "a: b\n"]) {
+    const r = parseProfilePatch(input);
+    assert.strictEqual(r.theme, null);
+    assert.strictEqual(r.locale, null);
+  }
+  // A value the engine would not accept must not be trusted either.
+  const bad = parseProfilePatch("- id: ui-theme\n  config:\n    preference: neon\n");
+  assert.strictEqual(bad.theme, null, "unknown theme value is ignored, not passed through");
+});
+
+ok("applyProfilePatch rewrites only the pref, keeping every other row and comment", () => {
+  const { doc } = parseProfilePatch(PATCH);
+  const out = applyProfilePatch(doc, { theme: "light" });
+  assert.ok(out.includes("# generated overlay"), "comments survive");
+  assert.ok(out.includes("provider: deepseek-official"), "other plugin rows survive");
+  assert.strictEqual(parseProfilePatch(out).theme, "light");
+  assert.strictEqual(parseProfilePatch(out).locale, "zh", "untouched pref stays");
+  assert.strictEqual(out.split("\n").length, PATCH.split("\n").length, "no structural churn");
+  // An invalid value is refused rather than written into the engine's config.
+  assert.throws(() => applyProfilePatch(parseProfilePatch(PATCH).doc, { theme: "neon" }), /invalid engine theme/);
+});
+
+ok("applyProfilePatch leaves a missing row alone instead of inventing one", () => {
+  const { doc } = parseProfilePatch("- id: model\n  name: x\n");
+  const out = applyProfilePatch(doc, { theme: "dark", locale: "en" });
+  assert.ok(!out.includes("ui-theme"), "the shell must not add rows to the engine's plugin graph");
+  assert.ok(!out.includes("locale"));
 });
 
 console.log(`\n${passed} checks passed`);
