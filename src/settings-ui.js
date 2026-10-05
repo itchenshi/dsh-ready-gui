@@ -191,6 +191,80 @@ function applyProfilePatch(doc, { theme, locale } = {}) {
   return doc.toString();
 }
 
+/**
+ * Write the appearance/locale preference into the HOME-LEVEL user patch layer
+ * (`$DSH_HOME/cordis.patch.yml`), creating the file or the rows when absent.
+ *
+ * Why this layer rather than the profile's own `cordis.patch.yml`:
+ *
+ *  - the profile layer starts out as the shipped template (`[]`), and the ui-theme / locale
+ *    rows only exist because the **bundle** layer inserts them. A non-insert patch whose id
+ *    matches nothing is warned and skipped (see the engine's patch schema), so writing the
+ *    profile layer silently did nothing on any data directory whose overlay had not already
+ *    been populated by the engine's own UI;
+ *  - the home layer is the documented user-override layer: "Bundle, profile, home, and CLI
+ *    layers apply in that order" (dsh-app-boot patch schema), so a row here overrides the
+ *    bundle's value for every profile on this machine — which is exactly what a shell-level
+ *    preference is;
+ *  - `name` is deliberately omitted: a truthy name ASSERTS the existing plugin name rather
+ *    than renaming it, so including it would only add a way to break if the engine renames
+ *    the package. The id is what addresses the row.
+ *
+ * Caveat mirrored from the engine: "a patch config replaces the whole config". Both rows
+ * carry nothing but `preference` today (the engine's own settings UI writes exactly this
+ * shape), so wholesale replacement is equivalent here.
+ *
+ * @returns the serialized YAML text.
+ */
+function upsertUserPatchPreferences(text, { theme, locale } = {}) {
+  let doc = null;
+  try {
+    doc = YAML.parseDocument(String(text ?? ""));
+  } catch {
+    doc = null;
+  }
+  // A blank/unparseable/sequence-less file is replaced by a fresh empty list: this layer is
+  // ours to own, and refusing to write would leave the preference unset.
+  if (doc === null || (Array.isArray(doc.errors) && doc.errors.length > 0) || !YAML.isSeq(doc.contents)) {
+    const empty = YAML.parseDocument("[]\n");
+    if (text && String(text).trim() !== "" && String(text).trim() !== "[]") {
+      // Keep the old text from being silently destroyed: caller decides whether to proceed.
+      throw new Error("home patch layer is not an entry list; refusing to overwrite it");
+    }
+    doc = empty;
+  }
+  // The template is `[]`, i.e. a flow sequence — which makes every row render inline. This
+  // file is meant to be hand-editable, so render it as a block sequence.
+  if (doc.contents?.flow !== undefined) doc.contents.flow = false;
+  const findRow = (rowId) => {
+    for (const item of doc.contents.items) {
+      const value = item?.toJSON ? item.toJSON() : null;
+      if (value && typeof value === "object" && value.id === rowId) return item;
+    }
+    return null;
+  };
+  const upsert = (rowId, value, allowed, label) => {
+    if (value === undefined || value === null) return;
+    if (!allowed.includes(value)) throw new Error(`invalid engine ${label}: ${value}`);
+    const existing = findRow(rowId);
+    if (existing !== null) {
+      existing.setIn(["config", "preference"], value);
+      return;
+    }
+    // A brand-new row: `id` is required for a non-insert patch, `config` is what we set.
+    const row = doc.createNode({ id: rowId, config: { preference: value } });
+    // Block style for readability: this file is meant to be hand-editable, and a flow row
+    // (`{ id: ui-theme, config: { preference: dark } }`) is valid but unpleasant to edit.
+    if (row?.flow !== undefined) row.flow = false;
+    const configNode = row?.get ? row.get("config", true) : null;
+    if (configNode && configNode.flow !== undefined) configNode.flow = false;
+    doc.contents.add(row);
+  };
+  upsert(PATCH_ROW_THEME, theme, ENGINE_THEMES, "theme");
+  upsert(PATCH_ROW_LOCALE, locale, ENGINE_LOCALES, "locale");
+  return doc.toString();
+}
+
 module.exports = {
   APPEARANCE_MODES,
   ENGINE_THEMES,
@@ -201,5 +275,6 @@ module.exports = {
   applyEngineSettings,
   parseProfilePatch,
   applyProfilePatch,
+  upsertUserPatchPreferences,
   engineThemeForAppearance,
 };

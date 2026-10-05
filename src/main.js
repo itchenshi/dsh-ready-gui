@@ -46,7 +46,7 @@ const {
   parseEngineSettings,
   applyEngineSettings,
   parseProfilePatch,
-  applyProfilePatch,
+  upsertUserPatchPreferences,
   engineThemeForAppearance,
 } = require("./settings-ui");
 const { statusFingerprint } = require("./plugin-state");
@@ -1856,31 +1856,50 @@ function profilePatchFile() {
 }
 
 /**
+ * The engine's HOME-LEVEL user patch layer: `$DSH_HOME/cordis.patch.yml`, applied over every
+ * profile's own layer. This is where the shell writes its appearance/locale preference.
+ */
+function homePatchFile() {
+  return path.join(effectiveHomePath(), "cordis.patch.yml");
+}
+
+/**
  * 读取引擎侧的界面偏好（主题 / 语言）。
  *
- * 0.2.0 起它们住在 profile 的补丁层（`profiles/web/cordis.patch.yml` 的 ui-theme / locale
- * 行），旧的 `<DSH_HOME>/settings.yaml` 已被引擎一次性导入后退休。只读 settings.yaml 的后果
- * 就是界面**永远用默认主题启动**（「跟随引擎」什么也没读到），而且从设置窗口改主题也不生效。
+ * 两层补丁按引擎的生效顺序读：先是**用户层** `$DSH_HOME/cordis.patch.yml`（覆盖每个 profile），
+ * 再是 profile 层 `profiles/web/cordis.patch.yml`，最后才是已被引擎导入退休的
+ * `<DSH_HOME>/settings.yaml`（老引擎）。逐键取第一个非空值 —— 用户层只写了主题时，语言仍应
+ * 从下一层来。
  *
  * @returns {{theme: string|null, locale: string|null, source: string|null}}
  */
 async function readEngineUiPrefsFromDisk() {
-  const patchFile = profilePatchFile();
-  try {
-    const parsed = parseProfilePatch(await fsp.readFile(patchFile, "utf8"));
-    if (parsed.theme !== null || parsed.locale !== null) {
-      return { theme: parsed.theme, locale: parsed.locale, source: patchFile };
+  let theme = null;
+  let locale = null;
+  const sources = [];
+  for (const file of [homePatchFile(), profilePatchFile()]) {
+    let parsed = null;
+    try {
+      parsed = parseProfilePatch(await fsp.readFile(file, "utf8"));
+    } catch {
+      continue; // no such layer yet
     }
-  } catch {
-    /* no patch layer (older engine) — fall through to settings.yaml */
+    if (theme === null && parsed.theme !== null) theme = parsed.theme;
+    if (locale === null && parsed.locale !== null) locale = parsed.locale;
+    if (parsed.theme !== null || parsed.locale !== null) sources.push(file);
   }
-  const settingsFile = path.join(effectiveHomePath(), "settings.yaml");
-  try {
-    const parsed = parseEngineSettings(await fsp.readFile(settingsFile, "utf8"));
-    return { theme: parsed.theme, locale: parsed.locale, source: settingsFile };
-  } catch {
-    return { theme: null, locale: null, source: null };
+  if (theme === null || locale === null) {
+    const settingsFile = path.join(effectiveHomePath(), "settings.yaml");
+    try {
+      const parsed = parseEngineSettings(await fsp.readFile(settingsFile, "utf8"));
+      if (theme === null && parsed.theme !== null) theme = parsed.theme;
+      if (locale === null && parsed.locale !== null) locale = parsed.locale;
+      if (parsed.theme !== null || parsed.locale !== null) sources.push(settingsFile);
+    } catch {
+      /* retired on 0.2.0; nothing to read */
+    }
   }
+  return { theme, locale, source: sources.length > 0 ? sources.join(" + ") : null };
 }
 
 /**
@@ -1974,7 +1993,12 @@ function startEngineSettingsWatcher() {
   // live theme updates at all.
   const patchFile = profilePatchFile();
   const legacyFile = path.join(home, "settings.yaml");
-  const file = fs.existsSync(patchFile) ? patchFile : legacyFile;
+  // Watch the file the shell WRITES (the home-level user layer) when 0.2.0-style layers are
+  // in play; the profile layer is already covered by the profile watcher, and settings.yaml
+  // only exists on older engines. Watching the retired path meant a burst of "cannot watch"
+  // errors and no live theme updates at all.
+  const userFile = homePatchFile();
+  const file = fs.existsSync(patchFile) || fs.existsSync(userFile) ? userFile : legacyFile;
   const watchedDir = path.dirname(file);
   const watchedName = path.basename(file);
   try {
@@ -2255,29 +2279,37 @@ function L(key, ...args) {
  * 引擎侧监听该文件并热发布，内置 Harness UI 立即跟随。文件不存在或不可写时静默跳过（非致命）。
  */
 async function syncEngineUI(patch) {
-  const patchFile = profilePatchFile();
-  if (fs.existsSync(patchFile)) {
-    let doc;
-    let theme = null;
-    let locale = null;
-    try {
-      ({ doc, theme, locale } = parseProfilePatch(await fsp.readFile(patchFile, "utf8")));
-    } catch (error) {
-      err("engine profile patch layer unreadable; not writing prefs:", error.message);
-      return;
-    }
+  // Write to the HOME-LEVEL user patch layer, which the engine applies over every profile's
+  // own layer ("Bundle, profile, home, and CLI layers apply in that order").
+  //
+  // Writing the profile layer instead was silently useless on any data directory whose
+  // overlay had not already been populated: the ui-theme / locale rows only exist there
+  // because the BUNDLE layer inserts them, the profile template is the pristine `[]`, and a
+  // non-insert patch whose id matches nothing is warned and skipped — so the write changed
+  // nothing while this function logged success. The home layer also matches what the value
+  // is: a machine-local preference belonging to the shell's user, not to one profile.
+  const userFile = homePatchFile();
+  if (fs.existsSync(userFile) || fs.existsSync(profilePatchFile())) {
+    const effective = await readEngineUiPrefsFromDisk();
     const changes = {};
-    if (patch.locale !== undefined && patch.locale !== null && patch.locale !== locale) changes.locale = patch.locale;
-    if (patch.theme !== undefined && patch.theme !== null && patch.theme !== theme) changes.theme = patch.theme;
+    if (patch.locale !== undefined && patch.locale !== null && patch.locale !== effective.locale) changes.locale = patch.locale;
+    if (patch.theme !== undefined && patch.theme !== null && patch.theme !== effective.theme) changes.theme = patch.theme;
     if (Object.keys(changes).length === 0) {
       log("engine UI settings already up to date");
       return;
     }
+    let text = "[]\n";
     try {
-      await fsp.writeFile(patchFile, applyProfilePatch(doc, changes), "utf8");
-      log("engine UI settings synced:", patchFile, "->", JSON.stringify(changes));
+      text = await fsp.readFile(userFile, "utf8");
+    } catch {
+      text = "[]\n"; // no user layer yet: start one
+    }
+    try {
+      await fsp.mkdir(path.dirname(userFile), { recursive: true });
+      await fsp.writeFile(userFile, upsertUserPatchPreferences(text, changes), "utf8");
+      log("engine UI settings synced:", userFile, "->", JSON.stringify(changes));
     } catch (error) {
-      err("engine profile patch layer write failed:", error.message);
+      err("engine UI settings write failed:", error.message);
     }
     return;
   }

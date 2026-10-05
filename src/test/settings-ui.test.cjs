@@ -15,6 +15,7 @@ const {
   applyEngineSettings,
   parseProfilePatch,
   applyProfilePatch,
+  upsertUserPatchPreferences,
   engineThemeForAppearance,
 } = require("../settings-ui");
 
@@ -191,6 +192,40 @@ ok("applyProfilePatch leaves a missing row alone instead of inventing one", () =
   const out = applyProfilePatch(doc, { theme: "dark", locale: "en" });
   assert.ok(!out.includes("ui-theme"), "the shell must not add rows to the engine's plugin graph");
   assert.ok(!out.includes("locale"));
+});
+
+// 12. the HOME-LEVEL user patch layer: where the shell WRITES the preference
+//     (`$DSH_HOME/cordis.patch.yml`). Writing the profile layer was silently useless whenever
+//     its overlay had not already been populated by the engine: the ui-theme/locale rows exist
+//     there only because the BUNDLE layer inserts them, the template is `[]`, and the engine
+//     warns-and-skips a non-insert patch whose id matches nothing.
+ok("upsertUserPatchPreferences creates the rows from an empty layer", () => {
+  const out = upsertUserPatchPreferences("[]\n", { theme: "dark", locale: "zh" });
+  const back = parseProfilePatch(out);
+  assert.strictEqual(back.theme, "dark");
+  assert.strictEqual(back.locale, "zh");
+  // Block style, like the engine's own persisted rows — this file is meant to be hand-edited.
+  assert.ok(out.includes("- id: ui-theme"), `block sequence expected, got:\n${out}`);
+  assert.ok(out.includes("preference: dark"));
+  assert.ok(!out.includes("{ id:"), "no flow-style rows");
+});
+
+ok("upsertUserPatchPreferences updates in place and keeps the rest", () => {
+  const first = upsertUserPatchPreferences("[]\n", { theme: "dark", locale: "zh" });
+  const second = upsertUserPatchPreferences(first, { theme: "light" });
+  assert.strictEqual(parseProfilePatch(second).theme, "light");
+  assert.strictEqual(parseProfilePatch(second).locale, "zh", "the untouched key survives");
+  assert.strictEqual(second.split("\n").length, first.split("\n").length, "no structural churn");
+  const withComment = upsertUserPatchPreferences(`# mine\n${first}`, { locale: "en" });
+  assert.ok(withComment.includes("# mine"), "hand-written comments survive");
+});
+
+ok("upsertUserPatchPreferences refuses to clobber a non-list layer, and bad values", () => {
+  // This layer belongs to the user: a mapping (or anything we did not write) must not be
+  // silently replaced just because the shell wants to store a theme.
+  assert.throws(() => upsertUserPatchPreferences("some: mapping\n", { theme: "dark" }), /not an entry list/);
+  assert.throws(() => upsertUserPatchPreferences("[]\n", { theme: "neon" }), /invalid engine theme/);
+  assert.throws(() => upsertUserPatchPreferences("[]\n", { locale: "fr" }), /invalid engine locale/);
 });
 
 console.log(`\n${passed} checks passed`);
