@@ -45,6 +45,12 @@ window.__ModuleLoader__.load({
     /** Where the host half stores the pointer. */
     const POINTER_PATH = '/gui-last-session'
 
+    /** Where the host half accepts one line of reopen diagnostics (it logs them). */
+    const REPORT_PATH = '/gui-last-session/report'
+
+    /** How long a failed reopen keeps retrying when the target shows up later. */
+    const REOPEN_RETRY_WINDOW_MS = 300000
+
     /** Poll cadence and ceiling while waiting for the session list to arrive. */
     const WAIT_INTERVAL_MS = 150
     const WAIT_ATTEMPTS = 200 // ~30s — covers a slow cold start
@@ -73,6 +79,25 @@ window.__ModuleLoader__.load({
         return isSessionId(id) ? id : null
       } catch {
         return null
+      }
+    }
+
+    /**
+     * Send one line of reopen diagnostics to the host half, which logs it.
+     *
+     * The recording side reaches the app log through the host's own log line; the reopen
+     * side had no such path, so its failures were invisible. Best-effort by design.
+     */
+    function reportToHost(text) {
+      try {
+        fetch(REPORT_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: String(text) }),
+          keepalive: true,
+        }).catch(() => {})
+      } catch {
+        /* diagnostics must never break the feature */
       }
     }
 
@@ -169,6 +194,9 @@ window.__ModuleLoader__.load({
         // the user reports the feature not working (which is exactly how this bug
         // reached a user). apply() wires it to ctx.logger.
         onRecord: opts.io?.onRecord ?? null,
+        // Reopen diagnostics: the host half logs them, which is how "it opened a new
+        // session" becomes answerable (no pointer / target never listed / no opener API).
+        onReport: opts.io?.onReport ?? reportToHost,
       }
       const wait = opts.wait ?? sleep
       const armFallbackMs = opts.armFallbackMs ?? ARM_FALLBACK_MS
@@ -177,6 +205,20 @@ window.__ModuleLoader__.load({
       let armed = false
       let settled = false
       let lastRecorded = ''
+      /** The id we are trying to reopen, while the attempt is still unfinished. */
+      let pendingId = null
+      /** Set to the id once it was opened (so retries stop), null while unopened. */
+      let reopenOutcome = null
+      /** Retries stop after this, so the plugin never yanks the user back much later. */
+      const retryDeadline = Date.now() + REOPEN_RETRY_WINDOW_MS
+      const report = (text) => {
+        try {
+          if (typeof io.onReport === 'function') io.onReport(text)
+          else reportToHost(text)
+        } catch {
+          /* diagnostics are best-effort */
+        }
+      }
 
       /** The session projection metadata for one row (see the note below on the two places). */
       const metadataFor = (state, id) =>
@@ -291,16 +333,72 @@ window.__ModuleLoader__.load({
         } catch {
           id = null
         }
-        if (!isSessionId(id)) return settle()
+        // Say what we found, every time. The recording side has a host-side log line, but
+        // the reopen side was completely silent — so "it opened a new session" could mean
+        // "no pointer", "the target never showed up", "no API to open it" or "the engine
+        // navigated away afterwards", and there was no way to tell them apart.
+        if (!isSessionId(id)) {
+          report('reopen: no usable pointer')
+          return settle()
+        }
+        report(`reopen: target ${id}`)
+        pendingId = id // retried by reopenPending() if it is not listable yet
+        const outcome = await (async () => {
+          try {
+            return await openWhenReady(sessions, id, {
+              wait,
+              attempts: opts.attempts,
+              interval: opts.interval,
+              open: opts.open,
+            })
+          } finally {
+            settle()
+          }
+        })()
+        reopenOutcome = outcome === true ? id : null
+        report(
+          outcome === true
+            ? `reopen: open() called for ${id}`
+            : `reopen: FAILED — the session never appeared in the list (${opts.attempts ?? WAIT_ATTEMPTS} attempts)`,
+        )
+        return outcome
+      }
+
+      /**
+       * Retry a failed reopen when the list later shows the target.
+       *
+       * The session list arrives over the network and is workspace-scoped, so the stored
+       * id may simply be missing during the first attempt — and the engine's own bootstrap
+       * navigation can also land after us. Retrying on the safety-net tick covers both,
+       * within a bounded window so the plugin never yanks the user back much later.
+       */
+      const reopenPending = () => {
+        if (reopenOutcome !== null || pendingId === null) return
+        if (Date.now() > retryDeadline) {
+          pendingId = null
+          report('reopen: giving up (the target never became listable)')
+          return
+        }
+        const state = (() => {
+          try {
+            return sessions.list.getSnapshot()
+          } catch {
+            return undefined
+          }
+        })()
+        if (!state?.byId || !Object.prototype.hasOwnProperty.call(state.byId, pendingId)) return
         try {
-          await openWhenReady(sessions, id, {
-            wait,
-            attempts: opts.attempts,
-            interval: opts.interval,
-            open: opts.open,
-          })
-        } finally {
-          settle()
+          if (typeof opts.open !== 'function') {
+            pendingId = null
+            report('reopen: no way to open a session on this engine')
+            return
+          }
+          opts.open(pendingId)
+          reopenOutcome = pendingId
+          pendingId = null
+          report(`reopen: retried successfully for ${reopenOutcome}`)
+        } catch (error) {
+          report(`reopen: retry failed — ${String((error && error.message) || error)}`)
         }
       }
 
@@ -320,7 +418,10 @@ window.__ModuleLoader__.load({
       // timer cannot miss a state change the way a single missed notification can, and
       // it costs one snapshot read: recordCurrent() returns immediately when the current
       // session is unchanged.
-      const recheck = setInterval(recordCurrent, recheckMs)
+      const recheck = setInterval(() => {
+        recordCurrent()
+        reopenPending()
+      }, recheckMs)
       // In Node (the unit tests import this bundle) an interval keeps the event loop
       // alive, so the suite would hang instead of exiting. `unref` is a no-op guard in
       // the browser, where setInterval returns a number.
@@ -362,18 +463,37 @@ window.__ModuleLoader__.load({
         ctx.logger?.warn?.('[gui-last-session] sessions service unavailable; auto-restore disabled')
         return
       }
-      // Engine 0.2.0 has no `sessions.open`; the UI entry point is `uiWorkspace.openSession`.
-      const open = resolveSessionOpener({ uiWorkspace: ctx.get?.('uiWorkspace'), sessions })
-      if (open === null) {
-        // Say it once, clearly. Retrying a call that cannot exist is how the old version
-        // burned 30s per launch and then silently did nothing.
-        ctx.logger?.warn?.('[gui-last-session] this engine exposes no way to open a session; auto-restore disabled')
+      // Engine 0.2.0 has no `sessions.open`; the UI entry point is
+      // `uiWorkspace.openSession(id)` ("select a Session and show its Conversation").
+      //
+      // Resolved LAZILY, at the moment we actually want to open something: `uiWorkspace` is
+      // provided by another client plugin and may not be mounted yet while this fiber is
+      // activating. Looking it up once here meant a null opener on a slow boot — the plugin
+      // would then disable itself and stay disabled for the whole session.
+      const open = (id) => {
+        const resolved =
+          resolveSessionOpener({ uiWorkspace: ctx.get?.('uiWorkspace'), sessions }) ??
+          resolveSessionOpener({ uiWorkspace: ctx.uiWorkspace, sessions })
+        if (resolved === null) {
+          throw new Error('this engine exposes no way to open a session')
+        }
+        resolved(id)
       }
       const handle = installLastSession(sessions, {
         open,
-        // One line per pointer move (a session switch), so support can tell "it never
-        // recorded" from "it recorded and something else went wrong".
-        io: { onRecord: (id) => ctx.logger?.info?.(`[gui-last-session] remembered ${id}`) },
+        io: {
+          // One line per pointer move (a session switch), so support can tell "it never
+          // recorded" from "it recorded and something else went wrong".
+          onRecord: (id) => ctx.logger?.info?.(`[gui-last-session] remembered ${id}`),
+          // Reopen diagnostics. Posted to the host half as well as logged locally: the
+          // browser console only reaches the app's own log when the shell runs with its
+          // page-debug flag, so relying on it alone would leave this invisible — which is
+          // exactly the gap that made "it opens a new session" undiagnosable.
+          onReport: (text) => {
+            ctx.logger?.info?.(`[gui-last-session] ${text}`)
+            reportToHost(text)
+          },
+        },
       })
       if (typeof ctx.effect === 'function') {
         ctx.effect(() => () => handle.dispose(), 'gui-last-session')

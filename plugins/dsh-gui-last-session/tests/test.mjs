@@ -310,6 +310,42 @@ await check('reopen uses the injected opener, and gives up at once when there is
   noOpener.dispose()
 })
 
+await check('a reopen whose target is not listed yet is retried when it appears', async () => {
+  // The list arrives over the network and is workspace-scoped, so the stored id is often
+  // missing on the first attempt; the engine's own bootstrap navigation can also land
+  // after us. Retrying on the safety-net tick is what turns "sometimes opens a new
+  // session" into a reliable restore.
+  const target = 'session-retry77'
+  const sessions = fakeSessions({ ids: [], byId: {} }) // target not listed yet
+  delete sessions.list.getSnapshot().current
+  const opened = []
+  const reports = []
+  const handle = installLastSession(sessions, {
+    io: { fetchLast: async () => target, storeLast: async () => {}, onReport: (t) => reports.push(t) },
+    open: (id) => opened.push(id),
+    armFallbackMs: 5,
+    recheckMs: 5,
+    wait: () => Promise.resolve(),
+    attempts: 2, // fail fast, then rely on the retry
+  })
+  await handle.reopen()
+  assert.deepEqual(opened, [], 'nothing to open while the session is not listed')
+  assert.ok(
+    reports.some((r) => r.includes('target ' + target)),
+    `the attempt must be reported, got: ${JSON.stringify(reports)}`,
+  )
+
+  // Now the session shows up in the list.
+  sessions._set({ ids: [target], byId: { [target]: { id: target, blank: false, updatedAt: 1 } } })
+  await new Promise((r) => setTimeout(r, 60))
+  assert.deepEqual(opened, [target], 'the retry opened it')
+  assert.ok(
+    reports.some((r) => r.includes('retried successfully')),
+    `the successful retry must be reported, got: ${JSON.stringify(reports)}`,
+  )
+  handle.dispose()
+})
+
 await check('records a session the host says has been prompted (blank bit still conservative)', async () => {
   // Engine 0.2.0's row `blank` is a presentation bit that the client keeps conservative
   // until the host's sessionListMetadata.blank === false arrives; `lastPromptAt` is set

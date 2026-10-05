@@ -175,6 +175,36 @@ export function apply(ctx, config = {}) {
 
   // The browser half is served by the engine; it reads/writes the pointer here.
   ctx.effect(() => {
+    // Diagnostics channel for the browser half's REOPEN path.
+    //
+    // Recording already logs on the host ("pointer -> id"), but restoring had no path into
+    // the app log: the browser console only reaches it when the shell enables its
+    // page-debug flag. So a failed restore was undiagnosable — "it opened a new session"
+    // could equally be no pointer, a session that never showed up in the list, or no
+    // open-a-session API on this engine. This route turns those into log lines.
+    const disposeReport = ctx.webServer.register({
+      kind: 'exact',
+      path: '/gui-last-session/report',
+      handler: async (req, res) => {
+        try {
+          if (rejectUntrusted(ctx, req, res)) return
+          if (req.method !== 'POST') {
+            res.setHeader('allow', 'POST')
+            return sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          }
+          const body = await readJsonBody(req)
+          const text = typeof body?.text === 'string' ? body.text.slice(0, 300) : null
+          if (text === null) return sendJson(res, 400, { ok: false, error: 'invalid report' })
+          // Strip control characters: this is browser-supplied text going into a log.
+          ctx.logger?.info?.('[gui-last-session] %s', text.replace(/[\u0000-\u001f\u007f]+/gu, ' '))
+          return sendJson(res, 200, { ok: true })
+        } catch (error) {
+          ctx.logger?.warn?.('[gui-last-session] report failed: %s', error?.message ?? String(error))
+          return sendJson(res, 500, { ok: false, error: 'internal error' })
+        }
+      },
+    })
+
     const dispose = ctx.webServer.register({
       kind: 'exact',
       path: '/gui-last-session',
@@ -213,6 +243,7 @@ export function apply(ctx, config = {}) {
     }
     return () => {
       if (typeof dispose === 'function') dispose()
+      if (typeof disposeReport === 'function') disposeReport()
     }
   }, 'gui-last-session.route')
 }
